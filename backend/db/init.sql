@@ -177,3 +177,24 @@ CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_user_id ON password_reset_t
 CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_token ON password_reset_tokens(token);
 CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_expires_at ON password_reset_tokens(expires_at);
 
+-- Create summaries table for pre-computed analytics
+CREATE TABLE IF NOT EXISTS summaries (
+    id SERIAL PRIMARY KEY,
+    granularity VARCHAR(20) NOT NULL, -- daily, weekly, monthly
+    period_start DATE NOT NULL,
+    period_end DATE NOT NULL,
+    platform VARCHAR(50),
+    metric_name VARCHAR(100) NOT NULL, -- reach_sum, impressions_avg, etc.
+    metric_value NUMERIC NOT NULL,
+    metadata TEXT, -- JSON stored as text
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Create indexes on summaries table
+CREATE INDEX IF NOT EXISTS idx_summaries_granularity ON summaries(granularity);
+CREATE INDEX IF NOT EXISTS idx_summaries_period ON summaries(period_start, period_end);
+CREATE INDEX IF NOT EXISTS idx_summaries_platform ON summaries(platform);
+CREATE INDEX IF NOT EXISTS idx_summaries_metric_name ON summaries(metric_name);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_summaries_unique ON summaries(granularity, period_start, platform, metric_name);
+

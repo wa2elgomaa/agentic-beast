@@ -75,12 +75,15 @@ def create_app() -> FastAPI:
             "environment": settings.environment,
         }
 
-    # TODO: Register API routers
-    # from app.api import auth, chat, health, ingestion, documents
+    # Register API routers
+    from app.api import chat, ingestion
+    app.include_router(chat.router, prefix="/api/v1", tags=["chat"])
+    app.include_router(ingestion.router, prefix="/api/v1", tags=["ingestion"])
+    
+    # TODO: Add other routers when implemented
+    # from app.api import auth, health, documents
     # app.include_router(auth.router, prefix="/api/v1", tags=["auth"])
-    # app.include_router(chat.router, prefix="/api/v1", tags=["chat"])
     # app.include_router(health.router, prefix="/api/v1", tags=["health"])
-    # app.include_router(ingestion.router, prefix="/api/v1", tags=["ingestion"])
     # app.include_router(documents.router, prefix="/api/v1", tags=["documents"])
 
     logger.info("FastAPI application created successfully")

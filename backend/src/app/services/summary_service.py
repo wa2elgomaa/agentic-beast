@@ -43,7 +43,7 @@ class SummaryService:
         await self.db.execute(delete_stmt)
 
         # Compute summaries for key metrics by platform
-        metrics = ["reach", "impressions", "likes", "comments", "shares", "video_views"]
+        metrics = ["total_reach", "total_impressions", "total_likes", "total_comments", "total_shares", "video_views"]
 
         summaries_created = 0
         for metric in metrics:
@@ -53,7 +53,7 @@ class SummaryService:
                 func.sum(getattr(Document, metric)).label("metric_sum"),
                 func.avg(getattr(Document, metric)).label("metric_avg"),
             ).where(
-                Document.report_date == target_date,
+                Document.published_date == target_date,
             ).group_by(
                 Document.platform,
             )
@@ -120,7 +120,7 @@ class SummaryService:
         await self.db.execute(delete_stmt)
 
         # Compute summaries
-        metrics = ["reach", "impressions", "likes", "comments", "shares", "video_views"]
+        metrics = ["total_reach", "total_impressions", "total_likes", "total_comments", "total_shares", "video_views"]
         summaries_created = 0
 
         for metric in metrics:
@@ -129,8 +129,8 @@ class SummaryService:
                 func.sum(getattr(Document, metric)).label("metric_sum"),
             ).where(
                 and_(
-                    Document.report_date >= week_start,
-                    Document.report_date <= week_end,
+                    Document.published_date >= week_start,
+                    Document.published_date <= week_end,
                 )
             ).group_by(
                 Document.platform,
@@ -184,7 +184,7 @@ class SummaryService:
         await self.db.execute(delete_stmt)
 
         # Compute summaries
-        metrics = ["reach", "impressions", "likes", "comments", "shares", "video_views"]
+        metrics = ["total_reach", "total_impressions", "total_likes", "total_comments", "total_shares", "video_views"]
         summaries_created = 0
 
         for metric in metrics:
@@ -193,8 +193,8 @@ class SummaryService:
                 func.sum(getattr(Document, metric)).label("metric_sum"),
             ).where(
                 and_(
-                    Document.report_date >= month_start,
-                    Document.report_date <= month_end,
+                    Document.published_date >= month_start,
+                    Document.published_date <= month_end,
                 )
             ).group_by(
                 Document.platform,
