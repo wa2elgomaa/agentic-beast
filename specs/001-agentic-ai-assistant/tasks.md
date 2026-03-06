@@ -185,15 +185,15 @@
 
 **Purpose**: Improvements that affect multiple user stories
 
-- [ ] T060 [P] Add error handling middleware in `backend/src/app/main.py` for consistent error response format (code, message, details) across all endpoints
-- [ ] T061 [P] Add rate limiting configuration for AI provider calls in `backend/src/app/providers/base.py` with configurable retry logic and exponential backoff
-- [ ] T062 [P] Create seed data script in `backend/scripts/seed_data.py` to populate tags table with sample tags (with embeddings) and create a default admin user for development
-- [ ] T062a [P] Create tag embedding migration script in `backend/scripts/backfill_tag_embeddings.py` that iterates all existing tags in the `tags` table, generates embeddings for name+description+variations using embedding_service, and updates the `embedding` column. Must be idempotent (skip tags that already have embeddings)
-- [ ] T063 [P] Add OpenAPI documentation enhancements in `backend/src/app/main.py` — ensure all endpoints have descriptions, example requests/responses, and proper tags
-- [ ] T064 [P] Implement Prometheus metrics exposition in `backend/src/app/metrics.py` with: request count/duration histograms, agent execution metrics (count, duration, success/failure), ingestion pipeline metrics (rows processed/failed, duration), and `/metrics` endpoint for Prometheus scraping
-- [ ] T065 [P] Add Prometheus and Grafana services to `backend/docker-compose.yml` with pre-configured datasource and a basic dashboard JSON for agent and ingestion metrics
-- [ ] T066 [P] Integrate Sentry SDK in `backend/src/app/main.py` with DSN from config, environment tagging, structlog breadcrumb integration, and sample rate configuration
-- [ ] T067 Run quickstart.md validation — execute all 8 verification scenarios (V1-V8) against running Docker Compose environment
+- [x] T060 [P] Add error handling middleware in `backend/src/app/main.py` for consistent error response format (code, message, details) across all endpoints
+- [x] T061 [P] Add rate limiting configuration for AI provider calls in `backend/src/app/providers/base.py` with configurable retry logic and exponential backoff
+- [x] T062 [P] Create seed data script in `backend/scripts/seed_data.py` to populate tags table with CSV tags (with embeddings) and create a default admin user for development
+- [x] T062a [P] Create tag embedding migration script in `backend/scripts/backfill_tag_embeddings.py` that iterates all existing tags in the `tags` table, generates embeddings for name+description+variations using embedding_service, and updates the `embedding` column. Must be idempotent (skip tags that already have embeddings)
+- [x] T063 [P] Add OpenAPI documentation enhancements in `backend/src/app/main.py` — ensure all endpoints have descriptions, example requests/responses, and proper tags
+- [x] T064 [P] Implement Prometheus metrics exposition in `backend/src/app/metrics.py` with: request count/duration histograms, agent execution metrics (count, duration, success/failure), ingestion pipeline metrics (rows processed/failed, duration), and `/metrics` endpoint for Prometheus scraping
+- [x] T065 [P] Add Prometheus and Grafana services to `backend/docker-compose.yml` with pre-configured datasource and a basic dashboard JSON for agent and ingestion metrics
+- [x] T066 [P] Integrate Sentry SDK in `backend/src/app/main.py` with DSN from config, environment tagging, structlog breadcrumb integration, and sample rate configuration
+- [x] T067 Run quickstart.md validation — execute all 8 verification scenarios (V1-V8) against running Docker Compose environment
 
 ---
 

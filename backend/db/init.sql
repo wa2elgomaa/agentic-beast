@@ -98,7 +98,9 @@ CREATE TABLE IF NOT EXISTS tags (
     description TEXT,
     variations JSONB,  -- Array of string variations/synonyms
     is_primary BOOLEAN NOT NULL DEFAULT FALSE,
-    embedding vector(384)  -- 384-dim for all-MiniLM-L6-v2
+    embedding vector(384),  -- 384-dim for all-MiniLM-L6-v2
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Create index on is_primary for faster queries

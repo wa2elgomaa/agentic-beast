@@ -106,6 +106,10 @@ class Settings(BaseSettings):
     # Logging Configuration
     log_level: str = Field(default="INFO")
     timezone: str = Field(default="UTC")
+    
+    # Monitoring & Observability
+    sentry_dsn: str | None = Field(default=None, env="SENTRY_DSN")
+    prometheus_enabled: bool = Field(default=True, env="PROMETHEUS_ENABLED")
 
     @computed_field
     @property
