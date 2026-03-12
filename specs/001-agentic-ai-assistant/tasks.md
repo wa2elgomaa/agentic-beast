@@ -38,29 +38,29 @@
 
 **Purpose**: Core infrastructure that MUST be complete before ANY user story can begin
 
-- [ ] T006 Implement Pydantic Settings configuration in `backend/src/app/config.py` with all environment variables, validation, and provider switching support
-- [ ] T007 Implement async SQLAlchemy session factory in `backend/src/app/db/session.py` with asyncpg engine, session maker, and dependency injection helper
-- [ ] T008 [P] Set up Alembic configuration in `backend/alembic/` with `alembic.ini`, async `env.py`, and initial migration from existing `db/init.sql` schema (documents, tags, users, conversations, messages, password_reset_tokens tables plus the new summaries table). Include PostgreSQL range partitioning on `documents` table by `report_date` column (monthly partitions) and auto-partition creation for new months
-- [ ] T009 [P] Implement structlog configuration in `backend/src/app/logging.py` with JSON output, correlation ID middleware, and request/response logging
-- [ ] T010 [P] Create SQLAlchemy models for all existing tables: `backend/src/app/models/document.py` (documents table), `backend/src/app/models/tag.py` (tags table), `backend/src/app/models/user.py` (users table), `backend/src/app/models/conversation.py` (conversations + messages tables), `backend/src/app/models/summary.py` (new summaries table)
-- [ ] T011 Implement FastAPI application factory in `backend/src/app/main.py` with CORS, router registration, structlog middleware, lifespan events for DB/Redis connections, and OpenAPI metadata
-- [ ] T012 [P] Implement Celery application configuration in `backend/src/app/tasks/celery_app.py` with Redis broker, result backend, task autodiscovery, and beat schedule for email monitoring
-- [ ] T013 [P] Implement embedding service in `backend/src/app/services/embedding_service.py` using sentence-transformers all-MiniLM-L6-v2 for local embedding generation with batch support
-- [ ] T014 [P] Implement `DataAdapter` abstract base class in `backend/src/app/adapters/base.py` with connect/disconnect/fetch_data/get_status methods and `AdapterStatus` model
-- [ ] T015 [P] Implement adapter registry in `backend/src/app/adapters/registry.py` with register/discover/get_adapter methods
-- [ ] T016 [P] Implement `AIProvider` abstract base class in `backend/src/app/providers/base.py` with complete/embed methods, `CompletionResponse` and `Message` models
-- [ ] T017 [P] Implement OpenAI provider in `backend/src/app/providers/openai_provider.py` implementing `AIProvider` with chat completion and embedding via OpenAI SDK
-- [ ] T018 [P] Implement Bedrock provider in `backend/src/app/providers/bedrock_provider.py` implementing `AIProvider` with chat completion via boto3 Bedrock runtime
-- [ ] T019 Implement AI provider factory in `backend/src/app/providers/__init__.py` that selects provider based on config (AI_PROVIDER env var)
-- [ ] T020 [P] Implement base agent interface in `backend/src/app/agents/base.py` with capability declaration, health status, Strands Agents SDK integration pattern, and Redis-based agent state management (store/retrieve agent execution state, session context, and health status via Redis using the configured Redis connection)
-- [ ] T021 Implement agent orchestrator in `backend/src/app/agents/orchestrator.py` with intent classification, agent routing, and Strands SDK agent coordination
-- [ ] T022 [P] Implement JWT authentication service in `backend/src/app/services/auth_service.py` with login (local bcrypt + AD LDAP bind), token generation, token validation
-- [ ] T023 [P] Implement auth API router in `backend/src/app/api/auth.py` with POST /auth/login endpoint and FastAPI dependency for JWT validation
-- [ ] T024 [P] Implement health check router in `backend/src/app/api/health.py` with GET /health endpoint checking PostgreSQL, Redis, Celery, and all agent statuses
-- [ ] T025 [P] Implement Pydantic request/response schemas for chat in `backend/src/app/schemas/chat.py` (ChatRequest, ChatResponse, ConversationListResponse, MessageListResponse)
-- [ ] T026 Implement chat service in `backend/src/app/services/chat_service.py` with conversation creation, message persistence, conversation history retrieval, and orchestrator invocation
-- [ ] T027 Implement chat API router in `backend/src/app/api/chat.py` with POST /chat, GET /conversations, GET /conversations/{id}/messages endpoints
-- [ ] T027a [P] Configure MongoDB connection in `backend/src/app/config.py` with MONGODB_URI setting and create MongoDB client factory in `backend/src/app/db/mongo_session.py` with motor async driver, database connection management
+- [x] T006 Implement Pydantic Settings configuration in `backend/src/app/config.py` with all environment variables, validation, and provider switching support
+- [x] T007 Implement async SQLAlchemy session factory in `backend/src/app/db/session.py` with asyncpg engine, session maker, and dependency injection helper
+- [x] T008 [P] Set up Alembic configuration in `backend/alembic/` with `alembic.ini`, async `env.py`, and initial migration from existing `db/init.sql` schema (documents, tags, users, conversations, messages, password_reset_tokens tables plus the new summaries table). Include PostgreSQL range partitioning on `documents` table by `report_date` column (monthly partitions) and auto-partition creation for new months
+- [x] T009 [P] Implement structlog configuration in `backend/src/app/logging.py` with JSON output, correlation ID middleware, and request/response logging
+- [x] T010 [P] Create SQLAlchemy models for all existing tables: `backend/src/app/models/document.py` (documents table), `backend/src/app/models/tag.py` (tags table), `backend/src/app/models/user.py` (users table), `backend/src/app/models/conversation.py` (conversations + messages tables), `backend/src/app/models/summary.py` (new summaries table)
+- [x] T011 Implement FastAPI application factory in `backend/src/app/main.py` with CORS, router registration, structlog middleware, lifespan events for DB/Redis connections, and OpenAPI metadata
+- [x] T012 [P] Implement Celery application configuration in `backend/src/app/tasks/celery_app.py` with Redis broker, result backend, task autodiscovery, and beat schedule for email monitoring
+- [x] T013 [P] Implement embedding service in `backend/src/app/services/embedding_service.py` using sentence-transformers all-MiniLM-L6-v2 for local embedding generation with batch support
+- [x] T014 [P] Implement `DataAdapter` abstract base class in `backend/src/app/adapters/base.py` with connect/disconnect/fetch_data/get_status methods and `AdapterStatus` model
+- [x] T015 [P] Implement adapter registry in `backend/src/app/adapters/registry.py` with register/discover/get_adapter methods
+- [x] T016 [P] Implement `AIProvider` abstract base class in `backend/src/app/providers/base.py` with complete/embed methods, `CompletionResponse` and `Message` models
+- [x] T017 [P] Implement OpenAI provider in `backend/src/app/providers/openai_provider.py` implementing `AIProvider` with chat completion and embedding via OpenAI SDK
+- [x] T018 [P] Implement Bedrock provider in `backend/src/app/providers/bedrock_provider.py` implementing `AIProvider` with chat completion via boto3 Bedrock runtime
+- [x] T019 Implement AI provider factory in `backend/src/app/providers/__init__.py` that selects provider based on config (AI_PROVIDER env var)
+- [x] T020 [P] Implement base agent interface in `backend/src/app/agents/base.py` with capability declaration, health status, Strands Agents SDK integration pattern, and Redis-based agent state management (store/retrieve agent execution state, session context, and health status via Redis using the configured Redis connection)
+- [x] T021 Implement agent orchestrator in `backend/src/app/agents/orchestrator.py` with intent classification, agent routing, and Strands SDK agent coordination
+- [x] T022 [P] Implement JWT authentication service in `backend/src/app/services/auth_service.py` with login (local bcrypt + AD LDAP bind), token generation, token validation
+- [x] T023 [P] Implement auth API router in `backend/src/app/api/auth.py` with POST /auth/login endpoint and FastAPI dependency for JWT validation
+- [x] T024 [P] Implement health check router in `backend/src/app/api/health.py` with GET /health endpoint checking PostgreSQL, Redis, Celery, and all agent statuses
+- [x] T025 [P] Implement Pydantic request/response schemas for chat in `backend/src/app/schemas/chat.py` (ChatRequest, ChatResponse, ConversationListResponse, MessageListResponse)
+- [x] T026 Implement chat service in `backend/src/app/services/chat_service.py` with conversation creation, message persistence, conversation history retrieval, and orchestrator invocation
+- [x] T027 Implement chat API router in `backend/src/app/api/chat.py` with POST /chat, GET /conversations, GET /conversations/{id}/messages endpoints
+- [x] T027a [P] Configure MongoDB connection in `backend/src/app/config.py` with MONGODB_URI setting and create MongoDB client factory in `backend/src/app/db/mongo_session.py` with motor async driver, database connection management
 - [ ] T027b [P] Add Active Directory integration testing task in `backend/tests/integration/test_auth_ad.py` with LDAP bind verification, user attribute mapping validation, fallback to local auth testing
 
 **Checkpoint**: Foundation ready — database connected, auth working, chat endpoint accepting messages and routing to orchestrator, all agent/adapter/provider interfaces defined

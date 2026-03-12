@@ -37,7 +37,7 @@ def init_sentry() -> None:
             
             # Integrations
             integrations=[
-                FastApiIntegration(auto_enabling=True),
+                FastApiIntegration(),
                 SqlalchemyIntegration(),
                 AsyncioIntegration(),
                 RedisIntegration(),

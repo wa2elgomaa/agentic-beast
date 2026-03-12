@@ -49,4 +49,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 EXPOSE 8000 9090
 
 # Default command
-CMD ["uvicorn", "src.app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+ENV PYTHONPATH=/app/src
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

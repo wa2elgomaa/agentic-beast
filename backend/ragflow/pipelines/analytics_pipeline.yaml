@@ -1,0 +1,125 @@
+pipeline: analytics
+version: "1.1"
+
+config:
+  excel_dir: "data/excels"            # directory containing many .xlsx/.xls files
+  excel_pattern: "*.xlsx"             # glob pattern to match files (can be *.xls, *.xlsm, etc.)
+  processed_dir: "data/processed"
+  materialized_dir: "data/materialized"
+  metadata_path: "data/metadata.json"
+  embeddings:
+    model: "sentence-transformers/all-MiniLM-L6-v2"
+    batch_size: 64
+  vector_db:
+    type: "chroma"
+    persist_directory: "data/vector_db"
+  spaCy_model: "en_core_web_sm"
+  fuzzy_threshold: 80
+  incremental_ingest: true            # if true, only new/changed files are processed
+
+jobs:
+  - id: ingest_analytics
+    name: "Daily Analytics Ingestion (multi-file)"
+    schedule: "0 2 * * *"   # run daily at 02:00
+    description: "Ingest multiple Excel files from a directory, canonicalize schema, compute materialized views, generate embeddings and upsert to vector DB (incremental supported)"
+    steps:
+      - id: read_and_save
+        name: "Read Excel files and save combined raw.parquet (supports incremental)"
+        type: python_script
+        script: scripts/ingest_analytics.py
+        args:
+          - "--mode"
+          - "read"
+          - "--excel-dir"
+          - "${config.excel_dir}"
+          - "--pattern"
+          - "${config.excel_pattern}"
+          - "--out"
+          - "${config.processed_dir}"
+          - "--incremental"
+          - "${config.incremental_ingest}"
+      - id: canonicalize
+        name: "Canonicalize columns and normalize types"
+        type: python_script
+        script: scripts/ingest_analytics.py
+        args:
+          - "--mode"
+          - "canonicalize"
+          - "--in"
+          - "${config.processed_dir}"
+          - "--out"
+          - "${config.processed_dir}"
+      - id: materialize
+        name: "Compute materialized views (daily/monthly aggregates)"
+        type: python_script
+        script: scripts/ingest_analytics.py
+        args:
+          - "--mode"
+          - "materialize"
+          - "--in"
+          - "${config.processed_dir}"
+          - "--out"
+          - "${config.materialized_dir}"
+      - id: embed_and_upsert
+        name: "Generate embeddings for textual fields and upsert to vector DB"
+        type: python_script
+        script: scripts/ingest_analytics.py
+        args:
+          - "--mode"
+          - "embed_upsert"
+          - "--in"
+          - "${config.processed_dir}"
+          - "--vector-db"
+          - "${config.vector_db.type}"
+          - "--persist"
+          - "${config.vector_db.persist_directory}"
+          - "--model"
+          - "${config.embeddings.model}"
+          - "--batch"
+          - "${config.embeddings.batch_size}"
+      - id: update_metadata
+        name: "Update metadata/catalog"
+        type: python_script
+        script: scripts/ingest_analytics.py
+        args:
+          - "--mode"
+          - "update_metadata"
+          - "--in"
+          - "${config.processed_dir}"
+          - "--out"
+          - "${config.metadata_path}"
+
+  - id: one_off_create_dataset
+    name: "One-off: create dataset (manual trigger) for multi-file input"
+    trigger: manual
+    steps:
+      - id: run_all
+        name: "Run full pipeline (read->canonicalize->materialize->embed_upsert->metadata)"
+        type: python_script
+        script: scripts/ingest_analytics.py
+        args:
+          - "--mode"
+          - "full"
+          - "--excel-dir"
+          - "${config.excel_dir}"
+          - "--pattern"
+          - "${config.excel_pattern}"
+          - "--out"
+          - "${config.processed_dir}"
+          - "--materialized"
+          - "${config.materialized_dir}"
+          - "--vector-db"
+          - "${config.vector_db.type}"
+          - "--persist"
+          - "${config.vector_db.persist_directory}"
+          - "--model"
+          - "${config.embeddings.model}"
+          - "--batch"
+          - "${config.embeddings.batch_size}"
+          - "--metadata"
+          - "${config.metadata_path}"
+
+notes:
+  - "This YAML assumes RagFlow can execute local Python scripts. Adapt 'type' and executor settings to your RagFlow installation if different."
+  - "The pipeline now supports ingesting multiple Excel files from a directory and runs incremental ingest if enabled."
+  - "Set excel_dir to the directory where all your daily/weekly Excel reports are deposited (e.g., downloads from GmailAdapter)."

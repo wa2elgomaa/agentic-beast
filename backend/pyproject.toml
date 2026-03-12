@@ -38,6 +38,7 @@ dependencies = [
     "pandas>=2.1.0",
     "openpyxl>=3.1.0",
     "PyPDF2>=3.0.0",
+    "spacy>=3.8.11",
 
     # AI & LLMs
     "openai>=1.3.0",

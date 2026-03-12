@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from fastapi import status
 
 from app.config import settings
-from app.db.session import close_db, init_db
+from app.db.session import close_db, init_db, AsyncSessionLocal
 from app.logging import configure_logging, get_logger
 from app.middleware.metrics import PrometheusMiddleware, get_metrics
 from app.monitoring.sentry import init_sentry
@@ -32,8 +32,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         await init_db()
         logger.info("Database connection established")
     except Exception as e:
-        logger.error("Failed to initialize database", error=str(e))
-        raise
+        logger.warning("Database not available at startup — continuing without DB", error=str(e))
+
+    from app.agents.init import initialize_adapters, initialize_agents
+    await initialize_adapters()
+    try:
+        async with AsyncSessionLocal() as session:
+            await initialize_agents(session)
+    except Exception as e:
+        logger.warning("Agents could not be initialized at startup", error=str(e))
 
     yield
 
@@ -250,8 +257,8 @@ def create_app() -> FastAPI:
     
     # TODO: Add other routers when implemented
     # from app.api import auth, health, documents
-    # app.include_router(auth.router, prefix="/api/v1", tags=["auth"])
     # app.include_router(health.router, prefix="/api/v1", tags=["health"])
+    # app.include_router(auth.router, prefix="/api/v1", tags=["auth"])
     # app.include_router(documents.router, prefix="/api/v1", tags=["documents"])
 
     logger.info("FastAPI application created successfully")

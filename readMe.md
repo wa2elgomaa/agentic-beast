@@ -6,6 +6,10 @@ docker-compose up -d  # PostgreSQL, Redis, MongoDB, Prometheus, Grafana
 alembic upgrade head
 
 # Start app
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip setuptools wheel
+pip install -e .
 uvicorn src.app.main:app --reload
 
 # Start Celery worker & beat
