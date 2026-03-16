@@ -4,7 +4,7 @@ from typing import Dict, Optional
 import json
 from agents import CodeInterpreterTool, Agent, ModelSettings, TResponseInputItem, Runner, RunConfig, trace
 from sqlalchemy.ext.asyncio import AsyncSession
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from app.agents.base import BaseAgent
 from app.config import settings
 from app.logging import get_logger
@@ -28,6 +28,29 @@ class AnalyticsAgentSchema__ResultDataItem(BaseModel):
   title: str
   published_at: Optional[str] = None
   views: str
+
+  @field_validator("content", mode="before")
+  @classmethod
+  def validate_content(cls, value: object) -> str:
+    return _sanitize_output_text(value, max_len=480)
+
+  @field_validator("title", mode="before")
+  @classmethod
+  def validate_title(cls, value: object) -> str:
+    return _sanitize_output_text(value, max_len=240)
+
+
+def _sanitize_output_text(value: object, max_len: int) -> str:
+  if value is None:
+    return ""
+
+  normalized = str(value).replace("\r", " ").replace("\n", " ")
+  normalized = "".join(ch for ch in normalized if ch.isprintable() or ch.isspace())
+  normalized = " ".join(normalized.split())
+
+  if len(normalized) <= max_len:
+    return normalized
+  return normalized[:max_len].rstrip()
 
 
 class AnalyticsAgentSchema(BaseModel):

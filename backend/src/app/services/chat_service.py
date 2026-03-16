@@ -316,11 +316,16 @@ class ChatService:
                 conversation_id=str(conversation.id),
                 error=str(e),
             )
-            # Create fallback response
             assistant_message = await self.add_message(
                 conversation.id,
                 role="assistant",
-                content="An error occurred while processing your request. Please try again.",
+                content=json.dumps({
+                    "error": "processing_error",
+                    "message": (
+                        "Something went wrong while processing your request. "
+                        "Please try again."
+                    ),
+                }),
             )
 
         # Update conversation's updated_at timestamp

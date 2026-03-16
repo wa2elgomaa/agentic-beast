@@ -18,6 +18,13 @@ export default function SingleResultCard({ result, metadata }: SingleResultCardP
         return num.toLocaleString()
     }
 
+    const formatLabel = (key: string): string => {
+        return key
+            .replace(/_/g, ' ')
+            .replace(/([a-z])([A-Z])/g, '$1 $2')
+            .replace(/\b\w/g, char => char.toUpperCase())
+    }
+
     const formatDate = (dateStr: string | null | undefined): string => {
         if (!dateStr) return ''
         try {
@@ -108,16 +115,30 @@ export default function SingleResultCard({ result, metadata }: SingleResultCardP
 
             {/* Content */}
             <div className="px-6 py-5">
-                {result.content && result.content.trim() && (
+                {
+                    Object.entries(result).map(([key, value], idx) => (
+                        (typeof value === 'string' && value.trim() && key !== 'title') ? (
+                            <div key={idx} className={`rounded-xl p-4 border hover:shadow-md transition-shadow mb-4`}>
+                                <div className="flex items-center gap-2 mb-2">
+                                    <span className="text-xs text-gray-600 font-medium">{formatLabel(key)}</span>
+                                </div>
+                                <div className={`text-2xl font-bold`}>
+                                    {value}
+                                </div>
+                            </div>
+                        ) : null
+                    ))
+                }
+                {/* {result.content && result.content.trim() && (
                     <div className="mb-5 p-4 bg-white rounded-lg border border-gray-200 shadow-sm">
                         <p className="text-gray-700 text-sm leading-relaxed">
                             {result.content}
                         </p>
                     </div>
-                )}
+                )} */}
 
                 {/* Metrics Grid */}
-                {metrics.length > 0 && (
+                {/* {metrics.length > 0 && (
                     <div className="mb-5">
                         <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Performance Metrics</h4>
                         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
@@ -137,10 +158,10 @@ export default function SingleResultCard({ result, metadata }: SingleResultCardP
                             })}
                         </div>
                     </div>
-                )}
+                )} */}
 
                 {/* Additional Metrics */}
-                {(result.total_interactions != null || result.total_reach != null || result.reach_engagement_rate != null) && (
+                {/* {(result.total_interactions != null || result.total_reach != null || result.reach_engagement_rate != null) && (
                     <div className="mb-5">
                         <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Additional Insights</h4>
                         <div className="flex gap-3 flex-wrap">
@@ -173,10 +194,10 @@ export default function SingleResultCard({ result, metadata }: SingleResultCardP
                             )}
                         </div>
                     </div>
-                )}
+                )} */}
 
                 {/* Video-specific metrics */}
-                {isVideo && (result.video_length_sec != null || result.completion_rate != null || result.avg_video_view_time_sec != null) && (
+                {/* {isVideo && (result.video_length_sec != null || result.completion_rate != null || result.avg_video_view_time_sec != null) && (
                     <div className="mb-5">
                         <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Video Analytics</h4>
                         <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
@@ -206,7 +227,7 @@ export default function SingleResultCard({ result, metadata }: SingleResultCardP
                             )}
                         </div>
                     </div>
-                )}
+                )} */}
 
                 {/* Meta Information */}
                 <div className="flex flex-wrap gap-4 pt-4 border-t border-gray-200">

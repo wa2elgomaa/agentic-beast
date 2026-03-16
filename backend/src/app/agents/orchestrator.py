@@ -1,6 +1,6 @@
 """Agent orchestrator for routing and agent coordination."""
 
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 import json
 from app.config import settings
 from agents import Agent, Runner, set_default_openai_key
@@ -37,7 +37,7 @@ class AgentOrchestrator:
         """Initialize the orchestrator."""
         set_default_openai_key(settings.openai_api_key)
 
-    async def execute(self, context: Dict) -> str:
+    async def execute(self, context: Dict) -> str | Dict[str, Any]:
         """Execute routing for a given context.
 
         The context may include either an explicit `intent` or a `message`.
@@ -72,16 +72,29 @@ class AgentOrchestrator:
             )
             if isinstance(result.final_output, str):
                 return result.final_output
-            return result.final_output.json()
+            if hasattr(result.final_output, "model_dump"):
+                return result.final_output.model_dump(mode="json")
+            return result.final_output
 
         except ValueError as e:
             logger.warning("Intent classification failed; stopping routing", error=str(e))
-            return POLITE_REJECTION
+            return {
+                "error": "classification_error",
+                "message": (
+                    "I'm not sure how to handle that request. "
+                    "Could you try rephrasing it?"
+                ),
+            }
 
         except Exception as e:
             logger.error("Agent execution failed", error=str(e))
-            # Fall back to a safe generic reply to avoid exposing internal errors
-            return json.dumps({"error": "An error occurred while processing your request.", "details": str(e)})
+            return {
+                "error": "agent_error",
+                "message": (
+                    "Something went wrong while processing your request. "
+                    "Please try again, or rephrase your question."
+                ),
+            }
 
 # Global orchestrator instance
 _orchestrator: Optional[AgentOrchestrator] = None

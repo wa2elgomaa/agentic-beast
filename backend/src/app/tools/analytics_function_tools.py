@@ -86,6 +86,27 @@ def _numeric(df: pd.DataFrame, col: str) -> pd.Series:
     return pd.to_numeric(df[col], errors="coerce")
 
 
+def _sanitize_text(text: object) -> str:
+    """Normalize arbitrary text to a single printable line for JSON payloads."""
+    if text is None:
+        return ""
+
+    cleaned = str(text).replace("\r", " ").replace("\n", " ")
+    # Strip control characters that can break downstream parsing/rendering.
+    cleaned = "".join(ch for ch in cleaned if ch.isprintable() or ch.isspace())
+    return " ".join(cleaned.split())
+
+
+def _safe_truncate(text: object, max_len: int) -> str:
+    """Truncate normalized text without cutting surrogate/control sequences."""
+    sanitized = _sanitize_text(text)
+    if len(sanitized) <= max_len:
+        return sanitized
+    if max_len <= 3:
+        return sanitized[:max_len]
+    return sanitized[: max_len - 3].rstrip() + "..."
+
+
 # ---------------------------------------------------------------------------
 # Tool: list_available_data
 # ---------------------------------------------------------------------------
@@ -360,14 +381,15 @@ def _get_top_content_impl(
                 break
         results.append({
             "rank": rank,
-            "platform": str(row.get("platform", "")),
-            "content_type": str(row.get("content_type", "")),
+            "platform": _safe_truncate(row.get("platform", ""), 64),
+            "content_type": _safe_truncate(row.get("content_type", ""), 64),
             "published_at": str(row.get("published_at", ""))[:19],
             metric_norm: float(row["_metric_val"]) if pd.notna(row["_metric_val"]) else 0,
-            "title": str(row.get("title", ""))[:500],
-            "content": str(row.get("content", ""))[:2000],
-            "content_snippet": snippet,
-            "post_detail_url": str(row.get("post_detail_url", "")),
+            "title": _safe_truncate(row.get("title", ""), 240),
+            # Keep content compact so the agent can always return valid schema JSON.
+            "content": _safe_truncate(row.get("content", ""), 480),
+            "content_snippet": _safe_truncate(snippet, 150),
+            "post_detail_url": _safe_truncate(row.get("post_detail_url", ""), 500),
         })
 
     return json.dumps({
