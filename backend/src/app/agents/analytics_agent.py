@@ -26,6 +26,7 @@ class AnalyticsAgentSchema__ResultDataItem(BaseModel):
   platform: str
   content: str
   title: str
+  published_at: Optional[str] = None
   views: str
 
 
@@ -83,6 +84,7 @@ analytics_agent = Agent(
         {
           "label": "string",
           "value": "number/string",
+          "published_at": "string (ISO datetime) (optional)",
           "platform": "string (optional)"
         }
       ],

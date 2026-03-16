@@ -54,6 +54,19 @@ class Settings(BaseSettings):
     ldap_bind_dn: str = Field(default="cn=admin,dc=example,dc=com")
     ldap_bind_password: str = Field(default="")
 
+    # Password Reset
+    password_reset_token_ttl_minutes: int = Field(default=60)
+    frontend_url: str = Field(default="http://localhost:3000")
+
+    # SMTP Configuration
+    smtp_server: str = Field(default="smtp.gmail.com")
+    smtp_port: int = Field(default=587)
+    smtp_username: str = Field(default="")
+    smtp_password: str = Field(default="")
+    smtp_from_email: str = Field(default="noreply@example.com")
+    smtp_from_name: str = Field(default="Agentic Beast")
+    smtp_use_tls: bool = Field(default=True)
+
     # Gmail Configuration
     gmail_credentials_path: str = Field(default="./credentials.json")
     gmail_inbox_query: str = Field(default="has:attachment is:unread")
@@ -73,6 +86,10 @@ class Settings(BaseSettings):
     openai_embedding_model: str = Field(default="text-embedding-3-small")
     openai_agent_id: str = Field(default="")  # OpenAI Agent ID (e.g. asst_xxxxx)
     openai_workflow_id: str = Field(default="")
+
+    # Agent Session Encryption (OpenAI Agents SDK EncryptedSession)
+    agent_session_encryption_key: str = Field(default="")
+    agent_session_ttl_seconds: int = Field(default=86400)
 
     # AWS Bedrock Configuration
     aws_region: str = Field(default="us-east-1")

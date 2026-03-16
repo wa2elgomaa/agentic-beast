@@ -6,10 +6,11 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.users import get_current_user
 from app.db.session import get_db_session
 from app.logging import get_logger
+from app.models.user import User
 from app.schemas.ingestion import IngestStatusResponse, IngestTriggerRequest, IngestTriggerResponse
-from app.services.ingestion_service import get_ingestion_service
 from app.tasks.celery_app import celery_app
 from app.tasks.excel_ingest import process_excel_file
 
@@ -22,6 +23,7 @@ router = APIRouter(prefix="/ingest", tags=["ingestion"])
 async def trigger_ingestion(
     request: IngestTriggerRequest,
     db: Annotated[AsyncSession, Depends(get_db_session)],
+    _current_user: Annotated[User, Depends(get_current_user)],
 ):
     """Trigger data ingestion from configured sources.
 
@@ -59,7 +61,10 @@ async def trigger_ingestion(
 
 
 @router.get("/status/{task_id}", response_model=IngestStatusResponse)
-async def get_ingestion_status(task_id: UUID):
+async def get_ingestion_status(
+    task_id: UUID,
+    _current_user: Annotated[User, Depends(get_current_user)],
+):
     """Get status of an ingestion task.
 
     Args:
@@ -109,7 +114,9 @@ async def get_ingestion_status(task_id: UUID):
 
 
 @router.post("/manual", response_model=IngestTriggerResponse, status_code=status.HTTP_202_ACCEPTED)
-async def upload_excel(file: UploadFile = File(...)):
+async def upload_excel(
+    file: UploadFile = File(...),
+):
     """Upload and process Excel file manually.
 
     Args:
@@ -119,7 +126,7 @@ async def upload_excel(file: UploadFile = File(...)):
         Task ID and status.
     """
     try:
-        if not file.filename.lower().endswith(".xlsx"):
+        if file.filename is not None and not file.filename.lower().endswith(".xlsx"):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="File must be an Excel (.xlsx) file",

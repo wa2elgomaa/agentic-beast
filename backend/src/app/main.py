@@ -103,9 +103,10 @@ def create_app() -> FastAPI:
                 "description": "Analytics query endpoints and metrics"
             }
         ],
-        openapi_url="/api/openapi.json" if settings.api_debug else None,
-        docs_url="/docs" if settings.api_debug else None,
-        redoc_url="/redoc" if settings.api_debug else None
+        # Keep API docs always enabled for backend route discovery.
+        openapi_url="/api/openapi.json",
+        docs_url="/swagger",
+        redoc_url="/redoc",
     )
 
     # Add CORS middleware
@@ -243,9 +244,11 @@ def create_app() -> FastAPI:
         return get_metrics()
 
     # Register API routers
-    from app.api import chat, ingestion
+    from app.api import auth, chat, ingestion, users
+    app.include_router(auth.router, prefix="/api/v1", tags=["auth"])
     app.include_router(chat.router, prefix="/api/v1", tags=["chat"])
     app.include_router(ingestion.router, prefix="/api/v1", tags=["ingestion"])
+    app.include_router(users.router, prefix="/api/v1", tags=["auth"])
     
     # TODO: Add other routers when implemented
     # from app.api import auth, health, documents

@@ -1,11 +1,11 @@
 """Chat service for conversation management and message routing."""
 
-import uuid
 import json
+import uuid
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.orchestrator import get_orchestrator
@@ -113,7 +113,11 @@ class ChatService:
         )
         return message
 
-    async def get_conversation(self, conversation_id: uuid.UUID) -> Optional[Conversation]:
+    async def get_conversation(
+        self,
+        conversation_id: uuid.UUID,
+        user_id: Optional[uuid.UUID] = None,
+    ) -> Optional[Conversation]:
         """Retrieve a conversation by ID.
 
         Args:
@@ -123,6 +127,8 @@ class ChatService:
             Conversation object or None if not found.
         """
         query = select(Conversation).where(Conversation.id == conversation_id)
+        if user_id is not None:
+            query = query.where(Conversation.user_id == user_id)
         result = await self.db_session.execute(query)
         return result.scalar_one_or_none()
 
@@ -130,6 +136,7 @@ class ChatService:
         self,
         limit: int = 100,
         offset: int = 0,
+        user_id: Optional[uuid.UUID] = None,
     ) -> List[Conversation]:
         """List all conversations.
 
@@ -140,12 +147,11 @@ class ChatService:
         Returns:
             List of Conversation objects.
         """
-        query = (
-            select(Conversation)
-            .order_by(Conversation.updated_at.desc())
-            .limit(limit)
-            .offset(offset)
-        )
+        query = select(Conversation)
+        if user_id is not None:
+            query = query.where(Conversation.user_id == user_id)
+
+        query = query.order_by(Conversation.updated_at.desc()).limit(limit).offset(offset)
         result = await self.db_session.execute(query)
         return result.scalars().all()
 
@@ -156,6 +162,12 @@ class ChatService:
             Total number of conversations.
         """
         query = select(func.count(Conversation.id))
+        result = await self.db_session.execute(query)
+        return result.scalar() or 0
+
+    async def get_conversation_message_count(self, conversation_id: uuid.UUID) -> int:
+        """Get total messages in a conversation."""
+        query = select(func.count(Message.id)).where(Message.conversation_id == conversation_id)
         result = await self.db_session.execute(query)
         return result.scalar() or 0
 
@@ -184,6 +196,55 @@ class ChatService:
         )
         result = await self.db_session.execute(query)
         return result.scalars().all()
+
+    async def update_conversation_title(
+        self,
+        conversation_id: uuid.UUID,
+        title: str,
+        user_id: Optional[uuid.UUID] = None,
+    ) -> Optional[Conversation]:
+        """Update a conversation title."""
+        conversation = await self.get_conversation(conversation_id, user_id=user_id)
+        if conversation is None:
+            return None
+
+        conversation.title = title
+        conversation.updated_at = datetime.now()
+        self.db_session.add(conversation)
+        await self.db_session.flush()
+        return conversation
+
+    async def delete_conversation(
+        self,
+        conversation_id: uuid.UUID,
+        user_id: Optional[uuid.UUID] = None,
+    ) -> bool:
+        """Delete conversation and all messages via cascade."""
+        conversation = await self.get_conversation(conversation_id, user_id=user_id)
+        if conversation is None:
+            return False
+
+        result = await self.db_session.execute(
+            delete(Conversation).where(Conversation.id == conversation_id)
+        )
+        await self.db_session.flush()
+        return (result.rowcount or 0) > 0
+
+    async def get_conversation_context(
+        self,
+        conversation_id: uuid.UUID,
+        limit: int = 10,
+    ) -> List[Dict[str, str]]:
+        """Return the latest messages formatted for LLM context."""
+        query = (
+            select(Message)
+            .where(Message.conversation_id == conversation_id)
+            .order_by(Message.sequence_number.desc())
+            .limit(limit)
+        )
+        result = await self.db_session.execute(query)
+        messages = list(reversed(result.scalars().all()))
+        return [{"role": msg.role, "content": msg.content} for msg in messages]
 
 
     async def handle_user_message(
@@ -285,6 +346,8 @@ class ChatService:
         Returns:
             MessageResponse Pydantic model.
         """
+        normalized_content = self._normalize_message_content(message.content)
+
         metadata = None
         if message.operation or message.operation_data:
             metadata = ChatMessageMetadata(
@@ -297,7 +360,43 @@ class ChatService:
         return MessageResponse(
             id=message.id,
             role=message.role,
-            content=message.content,
+            content=normalized_content,
             metadata=metadata,
             created_at=message.created_at,
         )
+
+    def _normalize_message_content(self, content: Any) -> Any:
+        """Convert escaped JSON strings into native JSON objects for API responses."""
+        if not isinstance(content, str):
+            return content
+
+        trimmed = content.strip()
+        if not trimmed:
+            return content
+
+        candidates = [trimmed]
+        if (
+            (trimmed.startswith('"{') and trimmed.endswith('}"'))
+            or (trimmed.startswith('"[') and trimmed.endswith(']"'))
+        ):
+            candidates.append(trimmed[1:-1])
+
+        for candidate in candidates:
+            try:
+                parsed = json.loads(candidate)
+
+                # Handle double-encoded JSON payloads.
+                if isinstance(parsed, str):
+                    try:
+                        nested = json.loads(parsed)
+                        if isinstance(nested, (dict, list)):
+                            return nested
+                    except Exception:
+                        continue
+
+                if isinstance(parsed, (dict, list)):
+                    return parsed
+            except Exception:
+                continue
+
+        return content

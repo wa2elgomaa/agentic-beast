@@ -67,6 +67,26 @@ class ConversationDetailResponse(BaseModel):
     updated_at: datetime
 
 
+class ConversationTitleUpdateRequest(BaseModel):
+    """Rename a conversation."""
+
+    title: str = Field(..., min_length=1, max_length=255)
+
+
+class ConversationContextItem(BaseModel):
+    """Single context item for LLM history."""
+
+    role: str
+    content: str
+
+
+class ConversationContextResponse(BaseModel):
+    """Conversation context payload."""
+
+    context: List[ConversationContextItem]
+    count: int
+
+
 class ErrorResponse(BaseModel):
     """Error response."""
 

@@ -7,6 +7,7 @@ from agents import Agent, Runner, set_default_openai_key
 from app.logging import get_logger
 from app.tools.classify_tool import handle_intent, classify_intent_tool
 from app.agents.analytics_agent import analytics_agent as analytics_openai_agent
+from app.db.agent_session import get_agent_sqlalchemy_session
 from app.agents.ingestion_agent import ingestion_openai_agent
 
 logger = get_logger(__name__)
@@ -52,7 +53,7 @@ class AgentOrchestrator:
 
         try:
             # Run classification first and wait for its result before routing.
-            intent = await handle_intent(message)
+            intent = await handle_intent(message, context=context)
             print(f"Orchestrator classified intent: '{message}' -> '{intent}'")
             # "tagging",
             # "document_qa",
@@ -64,7 +65,11 @@ class AgentOrchestrator:
                 logger.warning("Unsupported intent after classification", intent=intent)
                 return POLITE_REJECTION
 
-            result = await Runner.run(target_agent, message)
+            result = await Runner.run(
+                target_agent,
+                message,
+                session=get_agent_sqlalchemy_session(target_agent.name, context=context),
+            )
             if isinstance(result.final_output, str):
                 return result.final_output
             return result.final_output.json()

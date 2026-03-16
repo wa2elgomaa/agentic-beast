@@ -15,6 +15,7 @@ Dependency graph (no cycles):
 import spacy
 from spacy.matcher import Matcher
 
+from app.db.agent_session import get_agent_sqlalchemy_session
 from app.logging import get_logger
 
 logger = get_logger(__name__)
@@ -105,7 +106,7 @@ class IntentClassifier:
         return intent_label
 
     @staticmethod
-    async def complex(message: str) -> str:
+    async def complex(message: str, context: dict | None = None) -> str:
         """Classify intent using the Agent SDK (gpt-4o-mini).
 
         Used as fallback when spaCy pattern matching returns 'unknown'.
@@ -116,7 +117,11 @@ class IntentClassifier:
         from agents import Runner  # noqa: PLC0415
 
         try:
-            result = await Runner.run(classify_agent, message)
+            result = await Runner.run(
+                classify_agent,
+                message,
+                session=get_agent_sqlalchemy_session("IntentClassifier", context=context),
+            )
             intent = result.final_output.strip().lower()
 
             if intent not in IntentClassifier.VALID_INTENTS:
@@ -131,7 +136,7 @@ class IntentClassifier:
             return "unknown"
 
     @staticmethod
-    async def classify(message: str) -> str:
+    async def classify(message: str, context: dict | None = None) -> str:
         """Classify intent: spaCy first, Agent SDK fallback if result is 'unknown'.
 
         Args:
@@ -143,7 +148,7 @@ class IntentClassifier:
         intent = await IntentClassifier.simple(message.lower())
         logger.debug(f"spaCy returned '{intent}', escalating to agent classifier")
         if intent == "unknown":
-            intent = await IntentClassifier.complex(message)
+            intent = await IntentClassifier.complex(message, context=context)
 
         logger.debug("Final intent is", intent=intent)
         return intent

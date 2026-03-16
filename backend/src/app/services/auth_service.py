@@ -3,20 +3,24 @@
 from datetime import datetime, timedelta
 from typing import Optional
 
+import bcrypt
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 
 from app.config import settings
 from app.logging import get_logger
 
 logger = get_logger(__name__)
 
-# Password hashing context
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
 
 class AuthService:
     """Authentication service for local and LDAP authentication."""
+
+    @staticmethod
+    def _ensure_bcrypt_limit(password: str) -> bytes:
+        password_bytes = password.encode("utf-8")
+        if len(password_bytes) > 72:
+            raise ValueError("password cannot be longer than 72 bytes, truncate manually if necessary (e.g. my_password[:72])")
+        return password_bytes
 
     def verify_password(self, plain_password: str, hashed_password: str) -> bool:
         """Verify a plain password against its hash.
@@ -28,7 +32,8 @@ class AuthService:
         Returns:
             True if password matches, False otherwise.
         """
-        return pwd_context.verify(plain_password, hashed_password)
+        password_bytes = self._ensure_bcrypt_limit(plain_password)
+        return bcrypt.checkpw(password_bytes, hashed_password.encode("utf-8"))
 
     def get_password_hash(self, password: str) -> str:
         """Hash a password.
@@ -39,7 +44,9 @@ class AuthService:
         Returns:
             Hashed password.
         """
-        return pwd_context.hash(password)
+        password_bytes = self._ensure_bcrypt_limit(password)
+        hashed = bcrypt.hashpw(password_bytes, bcrypt.gensalt())
+        return hashed.decode("utf-8")
 
     def create_access_token(self, user_id: str, username: str, expires_delta: Optional[timedelta] = None) -> str:
         """Create a JWT access token.
@@ -100,11 +107,17 @@ class AuthService:
         Returns:
             User info dict, or None if authentication fails.
         """
+        ldap_module = None
         try:
-            import ldap
+            import ldap as ldap_module  # type: ignore[import-not-found]
+        except ImportError:
+            logger.error("LDAP package is not installed; LDAP auth unavailable")
+            return None
+
+        try:
 
             # Connect to LDAP server
-            conn = ldap.initialize(settings.ldap_server)
+            conn = ldap_module.initialize(settings.ldap_server)
             user_dn = f"uid={username},{settings.ldap_base_dn}"
 
             # Try to bind as the user
@@ -116,7 +129,7 @@ class AuthService:
                 "auth_method": "ldap",
             }
 
-        except ldap.INVALID_CREDENTIALS:
+        except ldap_module.INVALID_CREDENTIALS:
             logger.warning("LDAP authentication failed - invalid credentials", username=username)
             return None
         except Exception as e:
