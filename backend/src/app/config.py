@@ -71,6 +71,8 @@ class Settings(BaseSettings):
     openai_api_key: str = Field(default="")
     openai_model: str = Field(default="gpt-4")
     openai_embedding_model: str = Field(default="text-embedding-3-small")
+    openai_agent_id: str = Field(default="")  # OpenAI Agent ID (e.g. asst_xxxxx)
+    openai_workflow_id: str = Field(default="")
 
     # AWS Bedrock Configuration
     aws_region: str = Field(default="us-east-1")
@@ -109,7 +111,6 @@ class Settings(BaseSettings):
     timezone: str = Field(default="UTC")
     
     # Monitoring & Observability
-    sentry_dsn: str | None = Field(default=None, env="SENTRY_DSN")
     prometheus_enabled: bool = Field(default=True, env="PROMETHEUS_ENABLED")
 
     @computed_field

@@ -27,7 +27,7 @@ class MessageResponse(BaseModel):
 
     id: UUID
     role: str  # user, assistant
-    content: str
+    content: Any
     metadata: Optional[ChatMessageMetadata] = None
     created_at: datetime
 

@@ -34,14 +34,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     except Exception as e:
         logger.warning("Database not available at startup — continuing without DB", error=str(e))
 
-    from app.agents.init import initialize_adapters, initialize_agents
-    await initialize_adapters()
-    try:
-        async with AsyncSessionLocal() as session:
-            await initialize_agents(session)
-    except Exception as e:
-        logger.warning("Agents could not be initialized at startup", error=str(e))
-
     yield
 
     # Shutdown

@@ -130,10 +130,11 @@ class BaseAgent(ABC):
             logger.error("Failed to save health status", agent_name=self.name, error=str(e))
 
     @abstractmethod
-    async def execute(self, user_message: str, **kwargs) -> str:
+    async def execute(self, intent: str, user_message: str, **kwargs) -> str:
         """Execute agent logic.
 
         Args:
+            intent: Classified user intent.
             user_message: Input message from user.
 
         Returns:

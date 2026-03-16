@@ -1,6 +1,7 @@
 """Chat service for conversation management and message routing."""
 
 import uuid
+import json
 from datetime import datetime
 from typing import Dict, List, Optional
 
@@ -11,7 +12,6 @@ from app.agents.orchestrator import get_orchestrator
 from app.logging import get_logger
 from app.models.conversation import Conversation, Message
 from app.schemas.chat import ChatMessageMetadata, MessageResponse
-from app.tools.intent_classifier import IntentClassifier
 
 logger = get_logger(__name__)
 
@@ -26,7 +26,6 @@ class ChatService:
             db_session: SQLAlchemy async session.
         """
         self.db_session = db_session
-        self.classifier = IntentClassifier()
         self.orchestrator = get_orchestrator()
 
     async def create_conversation(
@@ -220,12 +219,10 @@ class ChatService:
         )
         await self.db_session.flush()
 
-        # Classify intent from message
-        intent = await self.classifier.classify(message_content)
         logger.info(
             "User message received and classified",
             conversation_id=str(conversation.id),
-            intent=intent,
+            # intent=intent,
             message_preview=message_content[:100],
         )
 
@@ -239,15 +236,17 @@ class ChatService:
 
         # Route to agent via orchestrator
         try:
-            agent_response = await self.orchestrator.route_to_agent(intent, context)
-            operation = intent if intent != "general" else None
+            result = await self.orchestrator.execute(context)
 
+            if not isinstance(result, str):
+                store_content = json.dumps(result)
+            else:
+                store_content = result
             # Add assistant message to conversation
             assistant_message = await self.add_message(
                 conversation.id,
                 role="assistant",
-                content=agent_response,
-                operation=operation,
+                content=store_content,
                 operation_data=None,  # Can be populated by agents
             )
         except Exception as e:
@@ -255,7 +254,6 @@ class ChatService:
                 "Error routing message to agent",
                 conversation_id=str(conversation.id),
                 error=str(e),
-                intent=intent,
             )
             # Create fallback response
             assistant_message = await self.add_message(

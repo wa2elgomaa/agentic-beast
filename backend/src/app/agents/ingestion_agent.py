@@ -8,6 +8,15 @@ from app.agents.base import AgentCapability, BaseAgent
 from app.logging import get_logger
 from app.services.ingestion_service import get_ingestion_service
 from app.tasks.celery_app import celery_app
+from agents import Agent
+
+ingestion_openai_agent = Agent(
+    name="Ingestion Agent",
+    instructions="""
+    Handles ingestion-related tasks such as triggering imports and checking status.
+    When handed off, respond with structured JSON describing the action taken.
+    """,
+)
 
 logger = get_logger(__name__)
 
