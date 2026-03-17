@@ -1,5 +1,6 @@
 'use client'
 
+import { formatNumber } from '@/lib/api'
 import { TrendingUp, Eye, MessageCircle, Heart, Share2, Calendar, User, ExternalLink, Video, FileText, Clock, Copy } from 'lucide-react'
 import { useState } from 'react'
 
@@ -11,12 +12,6 @@ interface SingleResultCardProps {
 export default function SingleResultCard({ result, metadata }: SingleResultCardProps) {
     const [copied, setCopied] = useState(false)
 
-    const formatNumber = (num: number | null | undefined): string => {
-        if (num == null) return '0'
-        if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M'
-        if (num >= 1000) return (num / 1000).toFixed(1) + 'K'
-        return num.toLocaleString()
-    }
 
     const formatLabel = (key: string): string => {
         return key
@@ -123,7 +118,7 @@ export default function SingleResultCard({ result, metadata }: SingleResultCardP
                                     <span className="text-xs text-gray-600 font-medium">{formatLabel(key)}</span>
                                 </div>
                                 <div className={`text-2xl font-bold`}>
-                                    {value}
+                                    {isNaN(Number(value)) ? value : formatNumber(value) }
                                 </div>
                             </div>
                         ) : null

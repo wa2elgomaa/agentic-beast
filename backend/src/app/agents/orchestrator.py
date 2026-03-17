@@ -59,7 +59,9 @@ class AgentOrchestrator:
             # "document_qa",
             if intent == "ingestion":
                 target_agent = ingestion_openai_agent
-            elif intent in {"query_metrics", "analytics", "publishing_insights"}:
+            elif intent in {"analytics", "publishing_insights"}:
+                target_agent = analytics_openai_agent
+            elif intent in {"query_metrics"}:
                 target_agent = analytics_openai_agent
             else:
                 logger.warning("Unsupported intent after classification", intent=intent)

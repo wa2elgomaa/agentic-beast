@@ -4,6 +4,7 @@ import { OrchestratorResponse } from '@/types'
 import { FileCode, Clock, Copy, BarChart3 } from 'lucide-react'
 import { useState } from 'react'
 import SingleResultCard from './SingleResultCard'
+import { formatNumber } from '@/lib/api'
 
 interface QueryDocumentsViewProps {
     data: OrchestratorResponse['data']
@@ -185,12 +186,12 @@ export default function QueryDocumentsView({ data, metadata }: QueryDocumentsVie
                                                             {key === 'content' || (String(value).length > 100) ? (
                                                                 <div className="p-3 bg-white/80 backdrop-blur rounded-lg border border-gray-200 shadow-sm">
                                                                     <div className="text-xs font-semibold text-gray-600 mb-1 uppercase">{formatLabel(key)}</div>
-                                                                    <p className="text-sm text-gray-800 leading-relaxed">{String(value)}</p>
+                                                                    <p className="text-sm text-gray-800 leading-relaxed">{isNaN(Number(value)) ? value : formatNumber(value) as any}</p>
                                                                 </div>
                                                             ) : (
                                                                 <div className="p-2 bg-white/50 rounded">
                                                                     <span className="text-xs font-semibold text-gray-600 uppercase">{formatLabel(key)}: </span>
-                                                                    <span className="text-sm text-gray-800 font-medium">{String(value)}</span>
+                                                                    <span className="text-sm text-gray-800 font-medium">{isNaN(Number(value)) ? value : (formatNumber(value) as any)}</span>
                                                                 </div>
                                                             )}
                                                         </div>
@@ -270,7 +271,7 @@ export default function QueryDocumentsView({ data, metadata }: QueryDocumentsVie
                                                             {formatLabel(key)}:
                                                         </span>
                                                         <span className="text-gray-600 break-all">
-                                                            {typeof value === 'object' ? JSON.stringify(value) : String(value)}
+                                                            {typeof value === 'object' ? JSON.stringify(value) : formatNumber(value) as any}
                                                         </span>
                                                     </div>
                                                 ))}
