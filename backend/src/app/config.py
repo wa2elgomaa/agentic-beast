@@ -1,17 +1,22 @@
 """Application configuration using Pydantic V2 Settings."""
 
 import logging
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+BASE_DIR = Path(__file__).resolve().parents[2]
+ENV_FILE = BASE_DIR / ".env"
+
+
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=str(ENV_FILE),
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
@@ -69,6 +74,9 @@ class Settings(BaseSettings):
 
     # Gmail Configuration
     gmail_credentials_path: str = Field(default="./credentials.json")
+    gmail_oauth_client_id: str = Field(default="")
+    gmail_oauth_client_secret: str = Field(default="")
+    gmail_oauth_token_uri: str = Field(default="https://oauth2.googleapis.com/token")
     gmail_inbox_query: str = Field(default="has:attachment is:unread")
     gmail_email_monitor_interval_seconds: int = Field(default=300)
 
@@ -129,6 +137,15 @@ class Settings(BaseSettings):
     
     # Monitoring & Observability
     prometheus_enabled: bool = Field(default=True, env="PROMETHEUS_ENABLED")
+
+    # AWS S3 Configuration (for file uploads)
+    s3_bucket: str = Field(default="agentic-beast-ingestion")
+    s3_prefix: str = Field(default="uploads")
+    s3_endpoint_url: str = Field(default="")  # Optional: for localstack or S3-compatible services
+
+    # APScheduler Configuration
+    apscheduler_enabled: bool = Field(default=True)
+    apscheduler_timezone: str = Field(default="UTC")
 
     @computed_field
     @property

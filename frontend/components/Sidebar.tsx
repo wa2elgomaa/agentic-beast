@@ -1,6 +1,6 @@
 'use client'
 
-import { MessageSquare, Plus, Trash2, TrendingUp, Menu, X, Clock, LogOut, Edit2, Check, XIcon } from 'lucide-react'
+import { MessageSquare, Plus, Trash2, TrendingUp, Menu, X, Clock, LogOut, Edit2, Check, XIcon, Settings } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import LogoIcon from './Logo'
 import { Conversation } from '@/types'
@@ -273,6 +273,23 @@ export default function Sidebar({
                     </div>
                   </div>
                 )}
+
+                {/* Admin Section */}
+                {user?.is_admin && (
+                  <div className="mt-6 pt-4 border-t border-gray-200">
+                    <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3 flex items-center gap-2">
+                      <Settings size={14} />
+                      Admin
+                    </h3>
+                    <a
+                      href="/admin/ingestion"
+                      className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-orange-50 transition-colors text-sm text-gray-700 hover:text-orange-700 hover:font-medium"
+                    >
+                      <TrendingUp size={16} className="text-orange-600" />
+                      <span>Data Ingestion</span>
+                    </a>
+                  </div>
+                )}
               </div>
 
               {/* Footer */}
@@ -281,6 +298,7 @@ export default function Sidebar({
                   <div className="px-4 py-2 text-xs text-gray-600 border-b border-gray-200 pb-3 mb-2">
                     <div className="font-medium text-gray-900">{user.username}</div>
                     <div className="text-gray-500 truncate">{user.email}</div>
+                    {user.is_admin && <div className="text-orange-600 font-medium text-xs mt-1">Admin</div>}
                   </div>
                 )}
                 <button

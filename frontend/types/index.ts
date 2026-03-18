@@ -242,3 +242,134 @@ export interface DashboardStats {
   totalEngagement: number
   avgCompletion: number
 }
+
+// ============================================================================
+// Ingestion Module Types
+// ============================================================================
+
+export type AdaptorType = 'gmail' | 'webhook' | 'manual'
+export type ScheduleType = 'none' | 'once' | 'recurring'
+export type TaskStatus = 'active' | 'paused' | 'disabled'
+export type RunStatus = 'pending' | 'running' | 'completed' | 'failed' | 'partial' | 'canceled'
+
+export interface IngestionTask {
+  id: string
+  name: string
+  adaptor_type: AdaptorType
+  adaptor_config: Record<string, any>
+  schedule_type: ScheduleType
+  cron_expression?: string
+  run_at?: string
+  status: TaskStatus
+  created_by: string
+  created_at: string
+  updated_at: string
+}
+
+export interface IngestionTaskRun {
+  id: string
+  task_id: string
+  started_at?: string
+  completed_at?: string
+  status: RunStatus
+  rows_inserted: number
+  rows_updated: number
+  rows_failed: number
+  error_message?: string
+  run_metadata?: Record<string, any>
+  created_at: string
+}
+
+export interface SchemaMappingTemplate {
+  id: string
+  name: string
+  description?: string
+  source_columns: string[]
+  field_mappings: Record<string, string>
+  created_by: string
+  created_at: string
+  updated_at: string
+}
+
+export interface TaskSchemaMapping {
+  id: string
+  task_id: string
+  template_id?: string
+  source_columns: string[]
+  field_mappings: Record<string, string>
+  created_at: string
+  updated_at: string
+}
+
+export interface UploadedFile {
+  id: string
+  task_id?: string
+  run_id?: string
+  original_filename: string
+  s3_key: string
+  file_size: number
+  content_type: string
+  status: string
+  created_at: string
+}
+
+export interface SchemaDetectResponse {
+  source_columns: string[]
+  auto_mapped: Record<string, string>
+  unmatched: string[]
+}
+
+export interface IngestionTaskCreateInput {
+  name: string
+  adaptor_type: AdaptorType
+  adaptor_config: Record<string, any>
+  schedule_type: ScheduleType
+  cron_expression?: string
+  run_at?: string
+  status: TaskStatus
+}
+
+export interface IngestionTaskUpdateInput {
+  name?: string
+  adaptor_config?: Record<string, any>
+  schedule_type?: ScheduleType
+  cron_expression?: string
+  run_at?: string
+  status?: TaskStatus
+}
+
+export interface SchemaMappingUpdateInput {
+  source_columns: string[]
+  field_mappings: Record<string, string>
+  template_id?: string
+}
+
+export interface SaveAsTemplateInput {
+  name: string
+  description?: string
+}
+
+export interface WebhookPayload {
+  [key: string]: any
+}
+
+export interface GmailAuthUrlRequest {
+  redirect_uri: string
+}
+
+export interface GmailAuthUrlResponse {
+  auth_url: string
+  state: string
+}
+
+export interface GmailExchangeCodeRequest {
+  code: string
+  state: string
+  redirect_uri: string
+}
+
+export interface GmailExchangeCodeResponse {
+  task_id: string
+  connected_email: string
+  message: string
+}

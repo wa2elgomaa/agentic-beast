@@ -50,7 +50,7 @@ def _load_all_data() -> pd.DataFrame:
     frames: list[pd.DataFrame] = []
     for path in files:
         try:
-            df = pd.read_excel(path, sheet_name="Content", header=0)
+            df = pd.read_excel(path, sheet_name="API", header=0)
             # Normalise column names: lowercase, spaces → underscores
             df.columns = [c.strip().lower().replace(" ", "_").replace("(", "").replace(")", "") for c in df.columns]
             # Suppress fragmentation warning — 133-col frames trigger it harmlessly

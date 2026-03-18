@@ -14,6 +14,7 @@ from app.db.session import close_db, init_db, AsyncSessionLocal
 from app.logging import configure_logging, get_logger
 from app.middleware.metrics import PrometheusMiddleware, get_metrics
 from app.monitoring.sentry import init_sentry
+from app.services.scheduler_service import SchedulerService
 
 # Configure logging on startup
 configure_logging()
@@ -34,10 +35,27 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     except Exception as e:
         logger.warning("Database not available at startup — continuing without DB", error=str(e))
 
+    # Start APScheduler if enabled
+    if settings.apscheduler_enabled:
+        try:
+            await SchedulerService.start()
+            logger.info("APScheduler started")
+        except Exception as e:
+            logger.error("Failed to start APScheduler", error=str(e))
+
     yield
 
     # Shutdown
     logger.info("Shutting down Agentic Beast API")
+    
+    # Shutdown scheduler
+    if settings.apscheduler_enabled:
+        try:
+            await SchedulerService.shutdown()
+            logger.info("APScheduler shut down")
+        except Exception as e:
+            logger.error("Error shutting down APScheduler", error=str(e))
+    
     try:
         await close_db()
         logger.info("Database connection closed")
@@ -244,11 +262,13 @@ def create_app() -> FastAPI:
         return get_metrics()
 
     # Register API routers
-    from app.api import auth, chat, ingestion, users
+    from app.api import auth, chat, ingestion, users, admin_ingestion, webhooks
     app.include_router(auth.router, prefix="/api/v1", tags=["auth"])
     app.include_router(chat.router, prefix="/api/v1", tags=["chat"])
     app.include_router(ingestion.router, prefix="/api/v1", tags=["ingestion"])
     app.include_router(users.router, prefix="/api/v1", tags=["auth"])
+    app.include_router(admin_ingestion.router, tags=["admin-ingestion"])
+    app.include_router(webhooks.router, tags=["webhooks"])
     
     # TODO: Add other routers when implemented
     # from app.api import auth, health, documents

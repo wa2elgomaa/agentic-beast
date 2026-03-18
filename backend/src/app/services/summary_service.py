@@ -3,7 +3,7 @@
 from datetime import date, datetime, timedelta
 from typing import List, Optional
 
-from sqlalchemy import and_, delete, func, select
+from sqlalchemy import and_, delete, func, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.logging import get_logger
@@ -15,9 +15,33 @@ logger = get_logger(__name__)
 class SummaryService:
     """Service for managing analytics summaries."""
 
+    SUMMARY_INSERT_BATCH_SIZE = 200
+
     def __init__(self, db_session: AsyncSession):
         """Initialize summary service."""
         self.db = db_session
+
+    @staticmethod
+    def _normalize_platform(value: Optional[str]) -> Optional[str]:
+        """Normalize platform dimension values to fit DB column constraints."""
+        if value is None:
+            return None
+
+        normalized = str(value).strip()
+        if not normalized:
+            return None
+
+        # summaries.platform is VARCHAR(50); avoid oversized values (e.g. URLs).
+        return normalized[:50]
+
+    async def _insert_summary_rows(self, rows: List[dict]) -> None:
+        """Insert summary rows in bounded batches to avoid oversized SQL statements."""
+        if not rows:
+            return
+
+        for start in range(0, len(rows), self.SUMMARY_INSERT_BATCH_SIZE):
+            batch = rows[start : start + self.SUMMARY_INSERT_BATCH_SIZE]
+            await self.db.execute(insert(Summary), batch)
 
     async def compute_daily_summaries(self, target_date: Optional[date] = None) -> int:
         """Compute daily summaries for a specific date.
@@ -45,7 +69,7 @@ class SummaryService:
         # Compute summaries for key metrics by platform
         metrics = ["total_reach", "total_impressions", "total_likes", "total_comments", "total_shares", "video_views"]
 
-        summaries_created = 0
+        summary_rows: List[dict] = []
         for metric in metrics:
             # Query sum for the day
             stmt = select(
@@ -63,29 +87,30 @@ class SummaryService:
 
             for platform, metric_sum, metric_avg in rows:
                 if metric_sum is not None and metric_sum > 0:
-                    # Create SUM summary
-                    summary = Summary(
-                        granularity="daily",
-                        period_start=target_date,
-                        period_end=target_date,
-                        platform=platform,
-                        metric_name=f"{metric}_sum",
-                        metric_value=float(metric_sum),
+                    normalized_platform = self._normalize_platform(platform)
+                    summary_rows.append(
+                        {
+                            "granularity": "daily",
+                            "period_start": target_date,
+                            "period_end": target_date,
+                            "platform": normalized_platform,
+                            "metric_name": f"{metric}_sum",
+                            "metric_value": float(metric_sum),
+                        }
                     )
-                    self.db.add(summary)
-                    summaries_created += 1
+                    summary_rows.append(
+                        {
+                            "granularity": "daily",
+                            "period_start": target_date,
+                            "period_end": target_date,
+                            "platform": normalized_platform,
+                            "metric_name": f"{metric}_avg",
+                            "metric_value": float(metric_avg) if metric_avg else 0.0,
+                        }
+                    )
 
-                    # Create AVG summary
-                    summary_avg = Summary(
-                        granularity="daily",
-                        period_start=target_date,
-                        period_end=target_date,
-                        platform=platform,
-                        metric_name=f"{metric}_avg",
-                        metric_value=float(metric_avg) if metric_avg else 0.0,
-                    )
-                    self.db.add(summary_avg)
-                    summaries_created += 1
+        await self._insert_summary_rows(summary_rows)
+        summaries_created = len(summary_rows)
 
         await self.db.commit()
         logger.info("Daily summaries computed", count=summaries_created, date=target_date)
@@ -121,7 +146,7 @@ class SummaryService:
 
         # Compute summaries
         metrics = ["total_reach", "total_impressions", "total_likes", "total_comments", "total_shares", "video_views"]
-        summaries_created = 0
+        summary_rows: List[dict] = []
 
         for metric in metrics:
             stmt = select(
@@ -141,16 +166,19 @@ class SummaryService:
 
             for platform, metric_sum in rows:
                 if metric_sum is not None and metric_sum > 0:
-                    summary = Summary(
-                        granularity="weekly",
-                        period_start=week_start,
-                        period_end=week_end,
-                        platform=platform,
-                        metric_name=f"{metric}_sum",
-                        metric_value=float(metric_sum),
+                    summary_rows.append(
+                        {
+                            "granularity": "weekly",
+                            "period_start": week_start,
+                            "period_end": week_end,
+                            "platform": self._normalize_platform(platform),
+                            "metric_name": f"{metric}_sum",
+                            "metric_value": float(metric_sum),
+                        }
                     )
-                    self.db.add(summary)
-                    summaries_created += 1
+
+        await self._insert_summary_rows(summary_rows)
+        summaries_created = len(summary_rows)
 
         await self.db.commit()
         logger.info("Weekly summaries computed", count=summaries_created)
@@ -185,7 +213,7 @@ class SummaryService:
 
         # Compute summaries
         metrics = ["total_reach", "total_impressions", "total_likes", "total_comments", "total_shares", "video_views"]
-        summaries_created = 0
+        summary_rows: List[dict] = []
 
         for metric in metrics:
             stmt = select(
@@ -205,16 +233,19 @@ class SummaryService:
 
             for platform, metric_sum in rows:
                 if metric_sum is not None and metric_sum > 0:
-                    summary = Summary(
-                        granularity="monthly",
-                        period_start=month_start,
-                        period_end=month_end,
-                        platform=platform,
-                        metric_name=f"{metric}_sum",
-                        metric_value=float(metric_sum),
+                    summary_rows.append(
+                        {
+                            "granularity": "monthly",
+                            "period_start": month_start,
+                            "period_end": month_end,
+                            "platform": self._normalize_platform(platform),
+                            "metric_name": f"{metric}_sum",
+                            "metric_value": float(metric_sum),
+                        }
                     )
-                    self.db.add(summary)
-                    summaries_created += 1
+
+        await self._insert_summary_rows(summary_rows)
+        summaries_created = len(summary_rows)
 
         await self.db.commit()
         logger.info("Monthly summaries computed", count=summaries_created)

@@ -3,7 +3,7 @@
 from app.db.session import AsyncSessionLocal
 from app.logging import get_logger
 from app.services.ingestion_service import get_ingestion_service
-from app.tasks.celery_app import celery_app
+from app.tasks.celery_app import celery_app, run_async_in_worker
 
 logger = get_logger(__name__)
 
@@ -16,7 +16,6 @@ def process_excel_file(self, file_data: bytes, filename: str):
         file_data: Raw file bytes (base64 encoded).
         filename: Original filename.
     """
-    import asyncio
     import base64
 
     async def run_ingest():
@@ -55,5 +54,4 @@ def process_excel_file(self, file_data: bytes, filename: str):
                 await session.rollback()
                 return {"status": "error", "filename": filename, "error": str(e)}
 
-    loop = asyncio.get_event_loop()
-    return loop.run_until_complete(run_ingest())
+    return run_async_in_worker(run_ingest())

@@ -3,7 +3,7 @@
 from app.db.session import AsyncSessionLocal
 from app.logging import get_logger
 from app.services.summary_service import get_summary_service
-from app.tasks.celery_app import celery_app
+from app.tasks.celery_app import celery_app, run_async_in_worker
 
 logger = get_logger(__name__)
 
@@ -14,8 +14,6 @@ def recompute_daily_summaries(self):
 
     This task is triggered after successful data ingestion.
     """
-    import asyncio
-
     async def run_compute():
         async with AsyncSessionLocal() as session:
             try:
@@ -34,5 +32,4 @@ def recompute_daily_summaries(self):
                 await session.rollback()
                 return {"status": "error", "error": str(e)}
 
-    loop = asyncio.get_event_loop()
-    return loop.run_until_complete(run_compute())
+    return run_async_in_worker(run_compute())
