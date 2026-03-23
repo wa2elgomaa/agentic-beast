@@ -39,6 +39,7 @@ ALIAS_TABLE = {
     "reactions": "total_reactions",
     "published_date": "published_date",
     "reported_at": "reported_at",
+    "reported_time": "reported_time",
     "title": "title",
     "description": "description",
     "content": "text",

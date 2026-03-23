@@ -7,7 +7,7 @@ from sqlalchemy import and_, delete, func, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.logging import get_logger
-from app.models import Document, Summary
+from app.models import Document, Summary, TimeOfDayMetric
 
 logger = get_logger(__name__)
 
@@ -77,7 +77,10 @@ class SummaryService:
                 func.sum(getattr(Document, metric)).label("metric_sum"),
                 func.avg(getattr(Document, metric)).label("metric_avg"),
             ).where(
-                Document.published_date == target_date,
+                and_(
+                    Document.published_date == target_date,
+                    Document.is_current == True,
+                )
             ).group_by(
                 Document.platform,
             )
@@ -156,6 +159,7 @@ class SummaryService:
                 and_(
                     Document.published_date >= week_start,
                     Document.published_date <= week_end,
+                    Document.is_current == True,
                 )
             ).group_by(
                 Document.platform,
@@ -223,6 +227,7 @@ class SummaryService:
                 and_(
                     Document.published_date >= month_start,
                     Document.published_date <= month_end,
+                    Document.is_current == True,
                 )
             ).group_by(
                 Document.platform,
@@ -250,6 +255,91 @@ class SummaryService:
         await self.db.commit()
         logger.info("Monthly summaries computed", count=summaries_created)
         return summaries_created
+
+    async def compute_time_of_day_summaries(self) -> int:
+        """Compute time-of-day metrics for publishing recommendations.
+
+        Aggregates metrics by hour-of-day across all documents,
+        allowing queries like: "What hour performs best for this platform?"
+
+        Returns:
+            Number of time-of-day metrics created.
+        """
+        logger.info("Computing time-of-day summaries")
+
+        # Delete existing time-of-day metrics
+        delete_stmt = delete(TimeOfDayMetric)
+        await self.db.execute(delete_stmt)
+
+        from sqlalchemy import func
+        from datetime import time
+
+        # Compute metrics by hour-of-day and platform
+        metrics = ["total_reach", "total_impressions", "video_views", "completion_rate"]
+        time_of_day_rows: List[dict] = []
+
+        for metric in metrics:
+            # Query by hour-of-day and platform
+            stmt = select(
+                func.extract("hour", Document.reported_at).label("hour"),
+                Document.platform,
+                func.count(Document.id).label("sample_count"),
+                func.avg(getattr(Document, metric)).label("metric_avg"),
+                func.sum(getattr(Document, metric)).label("metric_sum"),
+            ).where(
+                Document.is_current == True,
+            ).group_by(
+                func.extract("hour", Document.reported_at),
+                Document.platform,
+            )
+
+            result = await self.db.execute(stmt)
+            rows = result.fetchall()
+
+            for hour, platform, sample_count, metric_avg, metric_sum in rows:
+                if hour is None or sample_count is None or sample_count == 0:
+                    continue
+
+                hour_int = int(hour)
+                normalized_platform = self._normalize_platform(platform)
+
+                # Create both sum and average metrics
+                if metric_sum is not None and metric_sum > 0:
+                    time_of_day_rows.append(
+                        {
+                            "hour_of_day": hour_int,
+                            "day_of_week": None,  # Aggregate all days
+                            "metric_name": f"{metric}_sum",
+                            "metric_value": float(metric_sum),
+                            "sample_count": int(sample_count),
+                            "platform": normalized_platform,
+                        }
+                    )
+
+                if metric_avg is not None:
+                    time_of_day_rows.append(
+                        {
+                            "hour_of_day": hour_int,
+                            "day_of_week": None,
+                            "metric_name": f"{metric}_avg",
+                            "metric_value": float(metric_avg),
+                            "sample_count": int(sample_count),
+                            "platform": normalized_platform,
+                        }
+                    )
+
+        # Batch insert time-of-day metrics
+        if time_of_day_rows:
+            batch_size = 200
+            for i in range(0, len(time_of_day_rows), batch_size):
+                batch = time_of_day_rows[i : i + batch_size]
+                stmt = insert(TimeOfDayMetric).values(batch)
+                await self.db.execute(stmt)
+
+        metrics_created = len(time_of_day_rows)
+        await self.db.commit()
+        logger.info("Time-of-day summaries computed", count=metrics_created)
+        return metrics_created
 
 
 def get_summary_service(db_session: AsyncSession) -> SummaryService:

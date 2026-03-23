@@ -1,9 +1,9 @@
 """SQLAlchemy models for the documents table."""
 
-from datetime import date, datetime
+from datetime import date, datetime, time
 from typing import Optional
 
-from sqlalchemy import Boolean, Date, Integer, Numeric, String, Text, TIMESTAMP
+from sqlalchemy import Boolean, Date, Integer, Numeric, String, Text, Time, TIMESTAMP
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.sql import func
@@ -31,6 +31,7 @@ class Document(Base):
     # Profile & Post Information  
     published_date: Mapped[Optional[date]] = mapped_column(Date)
     reported_at: Mapped[Optional[date]] = mapped_column(Date)
+    reported_time: Mapped[Optional[time]] = mapped_column(Time)
     profile_name: Mapped[Optional[str]] = mapped_column(Text)
     profile_url: Mapped[Optional[str]] = mapped_column(Text)
     profile_id: Mapped[Optional[str]] = mapped_column(Text)
@@ -86,6 +87,7 @@ class Document(Base):
     label_groups: Mapped[Optional[str]] = mapped_column(Text)
 
     # Timestamps
+    is_current: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP, nullable=False, server_default=func.current_timestamp())
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP, nullable=False, server_default=func.current_timestamp(), onupdate=func.current_timestamp())
 

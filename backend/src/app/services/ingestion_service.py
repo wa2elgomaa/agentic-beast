@@ -1,8 +1,10 @@
 """Service for orchestrating data ingestion pipeline."""
 
-from datetime import date, datetime
+from datetime import date, datetime, time
 from typing import List, Optional
 from uuid import UUID
+import hashlib
+import json
 
 import httpx
 from sqlalchemy import and_, insert, select, update
@@ -11,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.adapters.gmail_adapter import GmailAdapter
 from app.config import settings
 from app.logging import get_logger
-from app.models import Document, IngestionTask, IngestionTaskRun, RunStatus
+from app.models import Document, IngestionTask, IngestionTaskRun, ProcessedEmail, RunStatus
 from app.processors.excel_processor import ExcelProcessor
 from app.schemas.ingestion import IngestResult, RowError
 from app.services.embedding_service import get_embedding_service
@@ -56,6 +58,86 @@ class IngestionService:
         return value
 
     @staticmethod
+    def _coerce_reported_time(reported_time_value: Optional[object]) -> Optional[time]:
+        """Extract time-of-day from various source formats.
+
+        Tries:
+        1. If value is already a time object → return as-is
+        2. If value is a datetime object → extract .time()
+        3. If value is a string → try parsing as HH:MM:SS format
+        4. Otherwise (None, etc.) → return None
+
+        Args:
+            reported_time_value: Raw value from source data
+
+        Returns:
+            time object or None
+        """
+        if reported_time_value is None:
+            return None
+
+        # Already a time object
+        if isinstance(reported_time_value, time):
+            return reported_time_value
+
+        # Extract from datetime
+        if isinstance(reported_time_value, datetime):
+            return reported_time_value.time()
+
+        # Try parsing string
+        if isinstance(reported_time_value, str):
+            reported_time_value = reported_time_value.strip()
+            if not reported_time_value:
+                return None
+            try:
+                # Try HH:MM:SS or HH:MM format
+                parts = reported_time_value.split(":")
+                if len(parts) >= 2:
+                    hour = int(parts[0])
+                    minute = int(parts[1])
+                    second = int(parts[2]) if len(parts) > 2 else 0
+                    return time(hour, minute, second)
+            except (ValueError, IndexError):
+                pass
+
+        return None
+
+    @staticmethod
+    def _metric_fingerprint(row_data: dict) -> str:
+        """Compute hash of key metrics to detect changes.
+
+        Only includes metrics that are meaningful for change detection,
+        ignoring derived fields like is_current, timestamps, etc.
+
+        Args:
+            row_data: Document row data dict
+
+        Returns:
+            SHA256 hex digest of key metrics
+        """
+        # Key metrics that indicate a real change in data
+        key_metrics = [
+            "video_views",
+            "total_video_view_time_sec",
+            "avg_video_view_time_sec",
+            "completion_rate",
+            "total_interactions",
+            "total_reach",
+            "organic_reach",
+            "paid_reach",
+            "total_impressions",
+            "organic_impressions",
+            "paid_impressions",
+            "total_reactions",
+            "total_comments",
+            "total_shares",
+        ]
+
+        metrics_dict = {k: row_data.get(k) for k in key_metrics}
+        metrics_json = json.dumps(metrics_dict, sort_keys=True, default=str)
+        return hashlib.sha256(metrics_json.encode()).hexdigest()
+
+    @staticmethod
     def _document_column_names() -> set[str]:
         """Set of Document column names that can be supplied on insert/update."""
         return {
@@ -98,10 +180,23 @@ class IngestionService:
             ]
             text_value = " ".join(part for part in text_parts if part).strip() or f"Row {source_row.get('row_number', 0)}"
 
+        # Populate reported_time: try source field first, fallback to reported_at, then to ingestion time
+        reported_time_value = None
+        if "reported_time" in mapped_data and mapped_data["reported_time"]:
+            # Already mapped from source
+            reported_time_value = self._coerce_reported_time(mapped_data["reported_time"])
+        elif "reported_at" in source_row and source_row["reported_at"]:
+            # Try to extract time from reported_at
+            reported_time_value = self._coerce_reported_time(source_row["reported_at"])
+        if not reported_time_value:
+            # Fallback to current ingestion time
+            reported_time_value = datetime.now().time()
+
         payload = {
             "sheet_name": source_row.get("sheet_name", "Sheet1"),
             "row_number": source_row.get("row_number", 0),
             "text": str(text_value),
+            "reported_time": reported_time_value,
             "doc_metadata": {"source_row": source_metadata},
         }
         payload.update(mapped_data)
@@ -137,6 +232,40 @@ class IngestionService:
         run_metadata = run.run_metadata or {}
         return run.status == RunStatus.CANCELED or bool(run_metadata.get("cancel_requested"))
 
+    async def _is_email_processed(self, message_id: str) -> bool:
+        """Return True if this Gmail message_id has already been ingested."""
+        stmt = select(ProcessedEmail).where(ProcessedEmail.message_id == message_id)
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none() is not None
+
+    async def _record_processed_email(
+        self,
+        message_id: str,
+        subject: Optional[str] = None,
+        sender: Optional[str] = None,
+        task_id: Optional[UUID] = None,
+        rows_inserted: int = 0,
+        rows_skipped: int = 0,
+        rows_failed: int = 0,
+    ) -> None:
+        """Persist a ProcessedEmail record. Silently ignores duplicate inserts."""
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        stmt = (
+            pg_insert(ProcessedEmail)
+            .values(
+                message_id=message_id,
+                task_id=task_id,
+                subject=subject,
+                sender=sender,
+                rows_inserted=rows_inserted,
+                rows_skipped=rows_skipped,
+                rows_failed=rows_failed,
+            )
+            .on_conflict_do_nothing(index_elements=["message_id"])
+        )
+        await self.db.execute(stmt)
+
     async def ingest_from_gmail(self) -> IngestResult:
         """Fetch and ingest data from Gmail attachments.
 
@@ -160,7 +289,23 @@ class IngestionService:
 
             # Process each email
             for email in emails:
-                logger.info("Processing email", subject=email["subject"])
+                email_message_id = email.get("message_id", "")
+                email_subject = email.get("subject", "")
+                email_sender = email.get("from", "")
+
+                # Skip already-processed emails
+                if email_message_id and await self._is_email_processed(email_message_id):
+                    logger.info(
+                        "Skipping already-processed email",
+                        message_id=email_message_id,
+                        subject=email_subject,
+                    )
+                    continue
+
+                logger.info("Processing email", subject=email_subject)
+                email_inserted = 0
+                email_skipped = 0
+                email_failed = 0
 
                 # Process attachments
                 for attachment in email.get("attachments", []):
@@ -183,8 +328,12 @@ class IngestionService:
                             result = await self._upsert_document(row_data)
                             if result == "inserted":
                                 rows_inserted += 1
-                            elif result == "updated":
+                                email_inserted += 1
+                            elif result == "skipped":
+                                email_skipped += 1
+                            else:
                                 rows_updated += 1
+                                email_inserted += 1
 
                         except Exception as e:
                             logger.error("Error upserting document", error=str(e))
@@ -195,18 +344,28 @@ class IngestionService:
                                 )
                             )
                             rows_failed += 1
+                            email_failed += 1
 
-                    # Mark email as processed
-                    try:
-                        gmail_service = gmail_adapter.service
-                        if gmail_service is not None:
-                            await gmail_service.users().messages().modify(
-                                userId="me",
-                                id=email["message_id"],
-                                body={"removeLabelIds": ["UNREAD"]},
-                            ).execute()
-                    except Exception as e:
-                        logger.warning("Could not mark email as processed", error=str(e))
+                # Record email as processed in DB and remove UNREAD label
+                if email_message_id:
+                    await self._record_processed_email(
+                        message_id=email_message_id,
+                        subject=email_subject,
+                        sender=email_sender,
+                        rows_inserted=email_inserted,
+                        rows_skipped=email_skipped,
+                        rows_failed=email_failed,
+                    )
+                try:
+                    gmail_service = gmail_adapter.service
+                    if gmail_service is not None:
+                        await gmail_service.users().messages().modify(
+                            userId="me",
+                            id=email_message_id,
+                            body={"removeLabelIds": ["UNREAD"]},
+                        ).execute()
+                except Exception as e:
+                    logger.warning("Could not mark email as processed", error=str(e))
 
             await gmail_adapter.disconnect()
 
@@ -306,19 +465,27 @@ class IngestionService:
         )
 
     async def _upsert_document(self, row_data: dict) -> str:
-        """Upsert a document record.
+        """Insert or append document record with full history tracking.
+
+        Implements append-only history: instead of updating, creates new row
+        if metrics have changed. Marks old record as stale (is_current=FALSE).
 
         Args:
             row_data: Row data dict.
 
         Returns:
-            'inserted', 'updated', or 'skipped'.
+            'inserted' (new record), 'appended' (metrics changed), or 'skipped' (no change).
         """
-        # Check if record exists (by sheet_name and row_number)
+        # Ensure is_current defaults to FALSE if not set
+        if "is_current" not in row_data:
+            row_data["is_current"] = True
+
+        # Check if record exists (by sheet_name and row_number, latest version only)
         stmt = select(Document).where(
             and_(
                 Document.sheet_name == row_data.get("sheet_name"),
                 Document.row_number == row_data.get("row_number"),
+                Document.is_current == True,
             )
         )
         result = await self.db.execute(stmt)
@@ -335,18 +502,47 @@ class IngestionService:
             except Exception as e:
                 logger.warning("Could not generate embedding", error=str(e))
 
+        # Compute metric fingerprint
+        new_fingerprint = self._metric_fingerprint(row_data)
+
         if existing:
-            # Update existing record
+            # Extract metrics from existing record to compute its fingerprint
+            existing_data = {
+                column.name: getattr(existing, column.name)
+                for column in Document.__table__.columns
+            }
+            old_fingerprint = self._metric_fingerprint(existing_data)
+
+            # Check if metrics have changed
+            if new_fingerprint == old_fingerprint:
+                # No change detected; skip insert to avoid spurious duplicates
+                logger.debug(
+                    "Document metrics unchanged, skipping new version",
+                    row_number=row_data.get("row_number"),
+                    fingerprint=new_fingerprint,
+                )
+                return "skipped"
+
+            # Metrics changed: mark old record as stale and insert new version
+            logger.debug(
+                "Document metrics changed, appending new version",
+                row_number=row_data.get("row_number"),
+                old_fingerprint=old_fingerprint,
+                new_fingerprint=new_fingerprint,
+            )
             stmt = (
                 update(Document)
                 .where(Document.id == existing.id)
-                .values(**row_data)
+                .values(is_current=False)
             )
             await self.db.execute(stmt)
-            logger.debug("Document updated", row_number=row_data.get("row_number"))
-            return "updated"
+
+            # Insert new version with is_current=TRUE
+            stmt = insert(Document).values(**row_data)
+            await self.db.execute(stmt)
+            return "appended"
         else:
-            # Insert new record
+            # New record: insert with is_current=TRUE
             stmt = insert(Document).values(**row_data)
             await self.db.execute(stmt)
             logger.debug("Document inserted", row_number=row_data.get("row_number"))
@@ -525,7 +721,23 @@ class IngestionService:
                 if await self._is_run_stop_requested(run_id):
                     raise IngestionCanceledError(rows_inserted, rows_updated, rows_failed)
 
-                logger.info("Processing Gmail email", subject=email.get("subject"))
+                email_message_id = email.get("message_id", "")
+                email_subject = email.get("subject", "")
+                email_sender = email.get("from", "")
+
+                # Skip already-processed emails
+                if email_message_id and await self._is_email_processed(email_message_id):
+                    logger.info(
+                        "Skipping already-processed email",
+                        message_id=email_message_id,
+                        subject=email_subject,
+                    )
+                    continue
+
+                logger.info("Processing Gmail email", subject=email_subject)
+                email_inserted = 0
+                email_skipped = 0
+                email_failed = 0
 
                 if gmail_source_type == "download_link":
                     file_items = await self._download_files_from_links(
@@ -573,8 +785,12 @@ class IngestionService:
                             result = await self._upsert_document(document_row)
                             if result == "inserted":
                                 rows_inserted += 1
-                            elif result == "updated":
+                                email_inserted += 1
+                            elif result == "skipped":
+                                email_skipped += 1
+                            else:
                                 rows_updated += 1
+                                email_inserted += 1
 
                         except Exception as e:
                             logger.error("Error upserting document from Gmail", error=str(e))
@@ -582,14 +798,25 @@ class IngestionService:
                                 RowError(row_number=row_data.get("row_number", 0), error=f"Database error: {str(e)}")
                             )
                             rows_failed += 1
+                            email_failed += 1
 
-                # Mark email as processed
+                # Record email as processed in DB and remove UNREAD label
+                if email_message_id:
+                    await self._record_processed_email(
+                        message_id=email_message_id,
+                        subject=email_subject,
+                        sender=email_sender,
+                        task_id=task.id,
+                        rows_inserted=email_inserted,
+                        rows_skipped=email_skipped,
+                        rows_failed=email_failed,
+                    )
                 try:
                     gmail_service = gmail_adapter.service
                     if gmail_service is not None:
                         await gmail_service.users().messages().modify(
                             userId="me",
-                            id=email["message_id"],
+                            id=email_message_id,
                             body={"removeLabelIds": ["UNREAD"]},
                         ).execute()
                 except Exception as e:

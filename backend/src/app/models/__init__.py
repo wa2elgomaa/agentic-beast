@@ -3,7 +3,8 @@
 from .conversation import Conversation, Message
 from .document import Base, Document
 from .password_reset import PasswordResetToken
-from .summary import Summary
+from .processed_email import ProcessedEmail
+from .summary import Summary, TimeOfDayMetric
 from .tag import Tag
 from .user import User
 from .agent import IntentSchema
@@ -25,7 +26,9 @@ __all__ = [
 	"Document",
 	"Message",
 	"PasswordResetToken",
+	"ProcessedEmail",
 	"Summary",
+	"TimeOfDayMetric",
 	"Tag",
 	"User",
 	"IntentSchema",
