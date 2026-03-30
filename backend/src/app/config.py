@@ -88,12 +88,17 @@ class Settings(BaseSettings):
     mongodb_uri: str = Field(default="mongodb://localhost:27017/articles_db")
 
     # AI Provider Configuration
-    ai_provider: Literal["openai", "bedrock"] = Field(default="openai")
+    ai_provider: Literal["openai", "bedrock", "ollama"] = Field(default="openai")
     openai_api_key: str = Field(default="")
     openai_model: str = Field(default="gpt-4")
     openai_embedding_model: str = Field(default="text-embedding-3-small")
     openai_agent_id: str = Field(default="")  # OpenAI Agent ID (e.g. asst_xxxxx)
     openai_workflow_id: str = Field(default="")
+
+    # Ollama Local LLM Configuration
+    ollama_base_url: str = Field(default="http://localhost:11434")
+    ollama_model: str = Field(default="mistral")
+    ollama_embedding_model: str = Field(default="nomic-embed-text")
 
     # Agent Session Encryption (OpenAI Agents SDK EncryptedSession)
     agent_session_encryption_key: str = Field(default="")

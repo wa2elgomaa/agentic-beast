@@ -13,7 +13,7 @@ const LogoIcon = ({ color, ...props }: LogoProps) => <svg
   x="0px"
   y="0px"
   viewBox="0 0 1000 1000"
-  style={{ enableBackground: 'new 0 0 1000 1000' }}
+  enableBackground="new 0 0 1000 1000"
   xmlSpace="preserve"
   {...props}
 >

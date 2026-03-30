@@ -13,5 +13,5 @@ RUN pip install --no-cache-dir .
 RUN chmod +x /app/scripts/*.py
 
 ENV PYTHONUNBUFFERED=1
-# Runner will execute the python scripts via RagFlow commands, so keep a shell entrypoint.
-ENTRYPOINT ["bash", "-lc"]
+# Keep container running to process jobs
+CMD ["sleep", "infinity"]

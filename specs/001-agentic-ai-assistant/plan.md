@@ -5,7 +5,9 @@
 
 ## Summary
 
-Build a multi-agent AI assistant platform with pluggable data adapters, prioritizing Gmail Excel report ingestion and analytics querying. The system uses AWS Strands Agents SDK for agentic orchestration, a hybrid data access layer (structured query objects + tool functions + RAG + pre-computed summaries), and supports multiple AI providers (OpenAI + AWS Bedrock). REST API only; no frontend in scope.
+Build a multi-agent AI assistant platform with pluggable data adapters, prioritizing Gmail Excel report ingestion and analytics querying. The system uses AWS Strands Agents SDK for agentic orchestration, a hybrid data access layer (structured query objects + tool functions + RAG + pre-computed summaries), and supports multiple AI providers (OpenAI + AWS Bedrock). REST API + Admin React frontend for ingestion management.
+
+**Status as of 2026-03-18**: User Stories 1-2 (Analytics + Ingestion) fully implemented and tested. User Stories 3-6 scaffolded. Admin UI complete. Ready for production deployment of MVP or continued implementation of remaining features.
 
 ## Technical Context
 

@@ -58,7 +58,7 @@ export default function TagSuggestionsView({ data, metadata }: TagSuggestionsVie
     }
 
     const copyAllTags = () => {
-        const tagSlugs = tags.map(t => t.slug).join(', ')
+        const tagSlugs = tags.map((t: any) => t.slug).join(', ')
         navigator.clipboard.writeText(tagSlugs)
         setCopiedIndex(-1)
         setTimeout(() => setCopiedIndex(null), 2000)
@@ -72,7 +72,7 @@ export default function TagSuggestionsView({ data, metadata }: TagSuggestionsVie
         setSaveError(null)
 
         try {
-            const tagSlugs = tags.map(t => ({
+            const tagSlugs = tags.map((t: any) => ({
                 slug: t.slug,
                 text: t.name
             }))
@@ -183,7 +183,7 @@ export default function TagSuggestionsView({ data, metadata }: TagSuggestionsVie
 
             {/* Tags Grid */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                {tags.map((tag, index) => (
+                {tags.map((tag: any, index: number) => (
                     <div
                         key={tag.slug}
                         className={`p-3 rounded-lg border-2 ${getScoreColor(tag.score)} transition-all hover:shadow-md`}

@@ -14,6 +14,7 @@ Dependency graph (no cycles):
 
 import spacy
 from spacy.matcher import Matcher
+from spacy.util import is_package
 
 from app.db.agent_session import get_agent_sqlalchemy_session
 from app.logging import get_logger
@@ -33,6 +34,8 @@ _VALID_INTENTS = [
 
 class IntentClassifier:
     """Intent classifier: spaCy keyword matching with Agent SDK fallback."""
+
+    MODEL_CANDIDATES = ("en_core_web_md", "en_core_web_sm")
 
     INTENT_KEYWORDS = {
         "query_metrics": [
@@ -71,8 +74,20 @@ class IntentClassifier:
 
     @classmethod
     def _get_nlp(cls):
-        if cls._nlp is None:
-            cls._nlp = spacy.load("en_core_web_md")
+        if cls._nlp is not None:
+            return cls._nlp
+
+        for model_name in cls.MODEL_CANDIDATES:
+            if is_package(model_name):
+                cls._nlp = spacy.load(model_name)
+                logger.info("Loaded spaCy model", model=model_name)
+                return cls._nlp
+
+        logger.warning(
+            "No spaCy language model installed; falling back to blank English pipeline",
+            requested_models=list(cls.MODEL_CANDIDATES),
+        )
+        cls._nlp = spacy.blank("en")
         return cls._nlp
 
     @staticmethod
