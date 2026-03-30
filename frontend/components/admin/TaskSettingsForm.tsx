@@ -5,6 +5,13 @@ import { IngestionTask, IngestionTaskUpdateInput, ScheduleType, TaskStatus } fro
 import { updateIngestionTask } from '@/lib/api'
 import { AlertCircle, Save } from 'lucide-react'
 
+function toUtcIsoOrUndefined(localDateTime: string | undefined): string | undefined {
+  if (!localDateTime) return undefined
+  const parsed = new Date(localDateTime)
+  if (Number.isNaN(parsed.getTime())) return undefined
+  return parsed.toISOString()
+}
+
 interface TaskSettingsFormProps {
   task: IngestionTask
   onUpdated: () => void
@@ -19,7 +26,7 @@ export default function TaskSettingsForm({ task, onUpdated }: TaskSettingsFormPr
   const [runAt, setRunAt] = useState(task.run_at ? task.run_at.slice(0, 16) : '')
 
   // Gmail-specific fields from adaptor_config
-  const [gmailQuery, setGmailQuery] = useState<string>(task.adaptor_config?.gmail_query || 'has:attachment is:unread')
+  const [gmailQuery, setGmailQuery] = useState<string>(task.adaptor_config?.gmail_query || '')
   const [senderFilter, setSenderFilter] = useState<string>(task.adaptor_config?.sender_filter || '')
   const [subjectPattern, setSubjectPattern] = useState<string>(task.adaptor_config?.subject_pattern || '')
   const [gmailSourceType, setGmailSourceType] = useState<'attachment' | 'download_link'>(task.adaptor_config?.gmail_source_type || 'attachment')
@@ -40,13 +47,13 @@ export default function TaskSettingsForm({ task, onUpdated }: TaskSettingsFormPr
         status,
         schedule_type: isWebhookTask ? 'none' : scheduleType,
         cron_expression: isWebhookTask ? undefined : (scheduleType === 'recurring' ? cronExpression : undefined),
-        run_at: isWebhookTask ? undefined : (scheduleType === 'once' ? (runAt || undefined) : undefined),
+        run_at: isWebhookTask ? undefined : (scheduleType === 'once' ? toUtcIsoOrUndefined(runAt) : undefined),
       }
 
       if (task.adaptor_type === 'gmail') {
         updates.adaptor_config = {
           ...task.adaptor_config,
-          gmail_query: gmailQuery.trim() || (gmailSourceType === 'download_link' ? 'is:unread' : 'has:attachment is:unread'),
+          gmail_query: gmailQuery.trim(), //|| (gmailSourceType === 'download_link' ? 'is:unread' : 'has:attachment is:unread'),
           sender_filter: senderFilter.trim() || undefined,
           subject_pattern: subjectPattern.trim() || undefined,
           gmail_source_type: gmailSourceType,
@@ -182,7 +189,7 @@ export default function TaskSettingsForm({ task, onUpdated }: TaskSettingsFormPr
                     checked={gmailSourceType === 'attachment'}
                     onChange={() => {
                       setGmailSourceType('attachment')
-                      if (gmailQuery === 'is:unread') setGmailQuery('has:attachment is:unread')
+                      // if (gmailQuery === 'is:unread') setGmailQuery('has:attachment is:unread')
                     }}
                     className="accent-blue-600"
                   />
@@ -195,7 +202,7 @@ export default function TaskSettingsForm({ task, onUpdated }: TaskSettingsFormPr
                     checked={gmailSourceType === 'download_link'}
                     onChange={() => {
                       setGmailSourceType('download_link')
-                      if (gmailQuery === 'has:attachment is:unread') setGmailQuery('is:unread')
+                      // if (gmailQuery === 'has:attachment is:unread') setGmailQuery('is:unread')
                     }}
                     className="accent-blue-600"
                   />

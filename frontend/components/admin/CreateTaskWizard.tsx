@@ -6,6 +6,13 @@ import { AdaptorType, ScheduleType, TaskStatus, IngestionTaskCreateInput } from 
 import { createIngestionTask } from '@/lib/api'
 import { AlertCircle, ChevronRight, ChevronLeft } from 'lucide-react'
 
+function toUtcIsoOrUndefined(localDateTime: string | undefined): string | undefined {
+  if (!localDateTime) return undefined
+  const parsed = new Date(localDateTime)
+  if (Number.isNaN(parsed.getTime())) return undefined
+  return parsed.toISOString()
+}
+
 export default function CreateTaskWizard() {
   const router = useRouter()
   const [step, setStep] = useState(1)
@@ -52,6 +59,7 @@ export default function CreateTaskWizard() {
 
       const payload: IngestionTaskCreateInput = {
         ...formData,
+        run_at: formData.schedule_type === 'once' ? toUtcIsoOrUndefined(formData.run_at) : undefined,
         ...(formData.adaptor_type === 'webhook'
           ? {
               schedule_type: 'none',
@@ -159,7 +167,7 @@ export default function CreateTaskWizard() {
                     <label className="block text-sm font-medium text-gray-900 dark:text-white mb-2">Gmail Search Query</label>
                     <input
                       type="text"
-                      value={formData.adaptor_config.gmail_query || 'has:attachment is:unread'}
+                      value={formData.adaptor_config.gmail_query || ''}
                       onChange={(e) => handleConfigChange('gmail_query', e.target.value)}
                       placeholder="has:attachment is:unread"
                       className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"

@@ -33,11 +33,8 @@ validate_intent_guardrail = cast(
 async def handle_intent(message: str, context: dict[str, Any] | None = None) -> str:
     """Run only classification logic and return a validated intent."""
     session_id = build_agent_session_id("intent_classifier", context=context)
-    intent = await IntentClassifier.simple(message)
-    print(f"simple classify intent [{session_id}]: '{message}' -> '{intent}'")
-    if intent == "unknown":
-        intent = await IntentClassifier.complex(message, context=context)
-        print(f"complex classify intent [{session_id}]: '{message}' -> '{intent}'")
+    intent = await IntentClassifier.classify(message, context=context)
+    print(f"classify intent [{session_id}]: '{message}' -> '{intent}'")
 
     if intent not in _VALID_INTENTS:
         raise ValueError(f"Invalid intent classified: '{intent}'")

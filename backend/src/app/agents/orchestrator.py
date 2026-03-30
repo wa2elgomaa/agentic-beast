@@ -7,8 +7,11 @@ from agents import Agent, Runner, set_default_openai_key
 from app.logging import get_logger
 from app.tools.classify_tool import handle_intent, classify_intent_tool
 from app.agents.analytics_agent import analytics_agent as analytics_openai_agent
+from app.agents.tagging_agent import tagging_agent as tagging_openai_agent
 from app.db.agent_session import get_agent_sqlalchemy_session
 from app.agents.ingestion_agent import ingestion_openai_agent
+from app.services.agent_provider_service import execute_ingestion_with_provider, execute_tagging_with_provider
+from app.services.analytics_provider_service import execute_analytics_with_provider
 
 logger = get_logger(__name__)
 
@@ -27,7 +30,7 @@ openai_orchestrator = Agent(
     then choose the appropriate handoff based on the returned intent.
     """,
     tools=[classify_intent_tool],
-    handoffs=[analytics_openai_agent, ingestion_openai_agent],
+    handoffs=[analytics_openai_agent, ingestion_openai_agent, tagging_openai_agent],
 )
 
 class AgentOrchestrator:
@@ -35,7 +38,8 @@ class AgentOrchestrator:
 
     def __init__(self):
         """Initialize the orchestrator."""
-        set_default_openai_key(settings.openai_api_key)
+        if settings.ai_provider == "openai":
+            set_default_openai_key(settings.openai_api_key)
 
     async def execute(self, context: Dict) -> str | Dict[str, Any]:
         """Execute routing for a given context.
@@ -58,11 +62,25 @@ class AgentOrchestrator:
             # "tagging",
             # "document_qa",
             if intent == "ingestion":
-                target_agent = ingestion_openai_agent
+                if settings.ai_provider == "openai":
+                    target_agent = ingestion_openai_agent
+                else:
+                    return await execute_ingestion_with_provider(message, context=context)
             elif intent in {"analytics", "publishing_insights"}:
-                target_agent = analytics_openai_agent
+                if settings.ai_provider == "openai":
+                    target_agent = analytics_openai_agent
+                else:
+                    return await execute_analytics_with_provider(message)
             elif intent in {"query_metrics"}:
-                target_agent = analytics_openai_agent
+                if settings.ai_provider == "openai":
+                    target_agent = analytics_openai_agent
+                else:
+                    return await execute_analytics_with_provider(message)
+            elif intent == "tagging":
+                if settings.ai_provider == "openai":
+                    target_agent = tagging_openai_agent
+                else:
+                    return await execute_tagging_with_provider(message)
             else:
                 logger.warning("Unsupported intent after classification", intent=intent)
                 return POLITE_REJECTION

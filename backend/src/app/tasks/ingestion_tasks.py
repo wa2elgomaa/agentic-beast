@@ -98,15 +98,18 @@ def run_ingestion_task(self, task_id: str, run_id: str = None):
 
                 # Update run with error
                 try:
+                    await db.rollback()
                     if run_id_obj:
-                        task_service = get_ingestion_task_service(db)
-                        await task_service.update_run(
-                            run_id_obj,
-                            status=RunStatus.FAILED,
-                            completed_at=datetime.utcnow(),
-                            error_message=str(e),
-                        )
-                        await db.commit()
+                        # Use a fresh session for the failure update to avoid "current transaction is aborted" state
+                        async with AsyncSessionLocal() as db2:
+                            task_service = get_ingestion_task_service(db2)
+                            await task_service.update_run(
+                                run_id_obj,
+                                status=RunStatus.FAILED,
+                                completed_at=datetime.utcnow(),
+                                error_message=str(e),
+                            )
+                            await db2.commit()
                 except:
                     pass
 
@@ -180,14 +183,17 @@ def process_webhook_payload(self, task_id: str, run_id: str, payload: dict):
 
                 # Update run with error
                 try:
-                    task_service = get_ingestion_task_service(db)
-                    await task_service.update_run(
-                        UUID(run_id),
-                        status=RunStatus.FAILED,
-                        completed_at=datetime.utcnow(),
-                        error_message=str(e),
-                    )
-                    await db.commit()
+                    await db.rollback()
+                    # Use a fresh session to perform the failure update so we don't reuse an aborted transaction
+                    async with AsyncSessionLocal() as db2:
+                        task_service = get_ingestion_task_service(db2)
+                        await task_service.update_run(
+                            UUID(run_id),
+                            status=RunStatus.FAILED,
+                            completed_at=datetime.utcnow(),
+                            error_message=str(e),
+                        )
+                        await db2.commit()
                 except:
                     pass
 

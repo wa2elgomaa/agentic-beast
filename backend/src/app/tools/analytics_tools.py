@@ -45,19 +45,20 @@ class AnalyticsTools:
 
         # Map metric names to database columns
         metric_column_map = {
-            MetricName.REACH: Document.reach,
-            MetricName.IMPRESSIONS: Document.impressions,
-            MetricName.LIKES: Document.likes,
-            MetricName.COMMENTS: Document.comments,
-            MetricName.SHARES: Document.shares,
-            MetricName.SAVES: Document.saves,
+            MetricName.REACH: Document.total_reach,
+            MetricName.IMPRESSIONS: Document.total_impressions,
+            MetricName.ENGAGEMENT_RATE: Document.reach_engagement_rate,
+            MetricName.LIKES: Document.total_likes,
+            MetricName.COMMENTS: Document.total_comments,
+            MetricName.SHARES: Document.total_shares,
+            MetricName.SAVES: Document.engagements,
             MetricName.VIDEO_VIEWS: Document.video_views,
-            MetricName.AVG_WATCH_PERCENTAGE: Document.avg_watch_percentage,
+            MetricName.AVG_WATCH_PERCENTAGE: Document.completion_rate,
         }
 
         metric_col = metric_column_map.get(query.metric_name)
-        if not metric_col is None:
-            metric_col = Document.reach  # Default to reach
+        if metric_col is None:
+            metric_col = Document.total_reach
 
         # Build aggregation
         agg_func_map = {
@@ -73,8 +74,8 @@ class AnalyticsTools:
 
         # Build WHERE clause
         where_conditions = [
-            Document.report_date >= query.date_range.start_date,
-            Document.report_date <= query.date_range.end_date,
+            Document.published_date >= query.date_range.start_date,
+            Document.published_date <= query.date_range.end_date,
         ]
 
         if query.platform:
@@ -88,13 +89,13 @@ class AnalyticsTools:
         if query.group_by:
             for gb in query.group_by:
                 if gb == GroupBy.DATE:
-                    group_cols.append(Document.report_date)
+                    group_cols.append(Document.published_date)
                 elif gb == GroupBy.PLATFORM:
                     group_cols.append(Document.platform)
                 elif gb == GroupBy.PROFILE:
                     group_cols.append(Document.profile_id)
                 elif gb == GroupBy.POST:
-                    group_cols.append(Document.post_id)
+                    group_cols.append(Document.content_id)
 
         stmt = (
             select(*group_cols)

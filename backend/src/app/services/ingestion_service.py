@@ -1,6 +1,7 @@
 """Service for orchestrating data ingestion pipeline."""
 
 from datetime import date, datetime, time
+import uuid
 from typing import List, Optional
 from uuid import UUID
 import hashlib
@@ -8,7 +9,10 @@ import json
 
 import httpx
 from sqlalchemy import and_, insert, select, update
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.sql import func
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.db.session import AsyncSessionLocal
 
 from app.adapters.gmail_adapter import GmailAdapter
 from app.config import settings
@@ -40,6 +44,34 @@ class IngestionService:
     def __init__(self, db_session: AsyncSession):
         """Initialize ingestion service."""
         self.db = db_session
+
+    async def _safe_execute(self, stmt):
+        """Execute a statement, and if the current transaction is aborted,
+        rollback and retry the statement in a fresh session.
+
+        Returns the result of `execute` on success. Raises the final
+        exception on failure.
+        """
+        try:
+            return await self.db.execute(stmt)
+        except Exception as e:
+            msg = str(e).lower()
+            if "current transaction is aborted" in msg or "in failed sql transaction" in msg or "current transaction is in failed state" in msg:
+                try:
+                    await self.db.rollback()
+                except Exception:
+                    # best-effort rollback; continue to fresh session
+                    pass
+                async with AsyncSessionLocal() as fresh_sess:
+                    try:
+                        result = await fresh_sess.execute(stmt)
+                        await fresh_sess.commit()
+                        return result
+                    except Exception:
+                        await fresh_sess.rollback()
+                        raise
+            # not a transaction-abort case; re-raise
+            raise
 
     @staticmethod
     def _source_key_to_column(source_key: str) -> str:
@@ -192,14 +224,52 @@ class IngestionService:
             # Fallback to current ingestion time
             reported_time_value = datetime.now().time()
 
+        # Ensure sheet_name and row_number are present
+        sheet_name = source_row.get("sheet_name") or mapped_data.get("sheet_name") or "Sheet1"
+        row_number = source_row.get("row_number") or mapped_data.get("row_number") or 0
+
         payload = {
-            "sheet_name": source_row.get("sheet_name", "Sheet1"),
-            "row_number": source_row.get("row_number", 0),
+            "sheet_name": sheet_name,
+            "row_number": row_number,
             "text": str(text_value),
             "reported_time": reported_time_value,
             "doc_metadata": {"source_row": source_metadata},
         }
         payload.update(mapped_data)
+
+        # Sanitize nulls: numeric fields default to 0, booleans to False
+        numeric_defaults = [
+            "video_views",
+            "total_video_view_time_sec",
+            "avg_video_view_time_sec",
+            "total_interactions",
+            "total_reach",
+            "total_impressions",
+            "total_reactions",
+            "total_comments",
+            "total_shares",
+            "engagements",
+        ]
+        for fld in numeric_defaults:
+            if fld in payload and payload[fld] is None:
+                payload[fld] = 0
+
+        # Ensure is_current default if not set
+        if "is_current" not in payload:
+            payload["is_current"] = True
+
+        # beast_uuid handling: use mapped content identifier if provided, else preserve existing or generate
+        # If mapping indicated a content identifier target, it will have been mapped into payload already.
+        if "beast_uuid" in payload and payload["beast_uuid"]:
+            # attempt to keep provided uuid (could be string)
+            try:
+                payload["beast_uuid"] = uuid.UUID(str(payload["beast_uuid"]))
+            except Exception:
+                # ignore invalid uuid and generate a new one
+                payload["beast_uuid"] = uuid.uuid4()
+        else:
+            # generate a new UUID for this row so future ingests can match
+            payload["beast_uuid"] = uuid.uuid4()
         return payload
 
     @staticmethod
@@ -261,6 +331,7 @@ class IngestionService:
                 rows_inserted=rows_inserted,
                 rows_skipped=rows_skipped,
                 rows_failed=rows_failed,
+                processed_at=func.now(),
             )
             .on_conflict_do_nothing(index_elements=["message_id"])
         )
@@ -476,77 +547,115 @@ class IngestionService:
         Returns:
             'inserted' (new record), 'appended' (metrics changed), or 'skipped' (no change).
         """
-        # Ensure is_current defaults to FALSE if not set
-        if "is_current" not in row_data:
-            row_data["is_current"] = True
+        # Keep each row write isolated so one bad row does not abort the full run transaction.
+        async with self.db.begin_nested():
+            # Ensure is_current defaults to FALSE if not set
+            if "is_current" not in row_data:
+                row_data["is_current"] = True
 
-        # Check if record exists (by sheet_name and row_number, latest version only)
-        stmt = select(Document).where(
-            and_(
-                Document.sheet_name == row_data.get("sheet_name"),
-                Document.row_number == row_data.get("row_number"),
-                Document.is_current == True,
-            )
-        )
-        result = await self.db.execute(stmt)
-        existing = result.scalars().first()
-
-        # Generate embedding if needed
-        embedding_service = get_embedding_service()
-        profile_name = row_data.get("profile_name", "")
-        text_to_embed = f"{profile_name} {row_data.get('platform', '')}"
-
-        if text_to_embed.strip():
-            try:
-                row_data["embedding"] = embedding_service.embed_text(text_to_embed)
-            except Exception as e:
-                logger.warning("Could not generate embedding", error=str(e))
-
-        # Compute metric fingerprint
-        new_fingerprint = self._metric_fingerprint(row_data)
-
-        if existing:
-            # Extract metrics from existing record to compute its fingerprint
-            existing_data = {
-                column.name: getattr(existing, column.name)
-                for column in Document.__table__.columns
-            }
-            old_fingerprint = self._metric_fingerprint(existing_data)
-
-            # Check if metrics have changed
-            if new_fingerprint == old_fingerprint:
-                # No change detected; skip insert to avoid spurious duplicates
-                logger.debug(
-                    "Document metrics unchanged, skipping new version",
-                    row_number=row_data.get("row_number"),
-                    fingerprint=new_fingerprint,
+            # Check if record exists (by sheet_name and row_number, latest version only)
+            stmt = select(Document).where(
+                and_(
+                    Document.sheet_name == row_data.get("sheet_name"),
+                    Document.row_number == row_data.get("row_number"),
+                    Document.is_current == True,
                 )
-                return "skipped"
-
-            # Metrics changed: mark old record as stale and insert new version
-            logger.debug(
-                "Document metrics changed, appending new version",
-                row_number=row_data.get("row_number"),
-                old_fingerprint=old_fingerprint,
-                new_fingerprint=new_fingerprint,
             )
-            stmt = (
-                update(Document)
-                .where(Document.id == existing.id)
-                .values(is_current=False)
-            )
-            await self.db.execute(stmt)
+            result = await self.db.execute(stmt)
+            existing = result.scalars().first()
 
-            # Insert new version with is_current=TRUE
-            stmt = insert(Document).values(**row_data)
-            await self.db.execute(stmt)
-            return "appended"
-        else:
-            # New record: insert with is_current=TRUE
-            stmt = insert(Document).values(**row_data)
-            await self.db.execute(stmt)
-            logger.debug("Document inserted", row_number=row_data.get("row_number"))
-            return "inserted"
+            # Generate embedding if needed
+            embedding_service = get_embedding_service()
+            profile_name = row_data.get("profile_name", "")
+            text_to_embed = f"{profile_name} {row_data.get('platform', '')}"
+
+            if text_to_embed.strip():
+                try:
+                    row_data["embedding"] = embedding_service.embed_text(text_to_embed)
+                except Exception as e:
+                    logger.warning("Could not generate embedding", error=str(e))
+
+            # Compute metric fingerprint
+            new_fingerprint = self._metric_fingerprint(row_data)
+
+            if existing:
+                # Extract metrics from existing record to compute its fingerprint
+                existing_data = {
+                    column.name: getattr(existing, column.name)
+                    for column in Document.__table__.columns
+                }
+                old_fingerprint = self._metric_fingerprint(existing_data)
+
+                # Check if metrics have changed
+                if new_fingerprint == old_fingerprint:
+                    # No change detected; skip insert to avoid spurious duplicates
+                    logger.debug(
+                        "Document metrics unchanged, skipping new version",
+                        row_number=row_data.get("row_number"),
+                        fingerprint=new_fingerprint,
+                    )
+                    return "skipped"
+
+                # Metrics changed: mark old record as stale and insert new version
+                logger.debug(
+                    "Document metrics changed, appending new version",
+                    row_number=row_data.get("row_number"),
+                    old_fingerprint=old_fingerprint,
+                    new_fingerprint=new_fingerprint,
+                )
+                stmt = (
+                    update(Document)
+                    .where(Document.id == existing.id)
+                    .values(is_current=False)
+                )
+                await self._safe_execute(stmt)
+
+                # Insert new version with is_current=TRUE
+                stmt = insert(Document).values(**row_data)
+                try:
+                    await self._safe_execute(stmt)
+                    return "appended"
+                except IntegrityError as e:
+                    # Fallback for race conditions where unique index prevents insert
+                    logger.warning(
+                        "Insert conflict on append; falling back to updating existing row",
+                        sheet_name=row_data.get("sheet_name"),
+                        row_number=row_data.get("row_number"),
+                        error=str(e),
+                    )
+                    # Update the current record in-place instead
+                    upd_stmt = (
+                        update(Document)
+                        .where(
+                            and_(Document.sheet_name == row_data.get("sheet_name"), Document.row_number == row_data.get("row_number"))
+                        )
+                        .values(**{k: v for k, v in row_data.items() if k != "id"})
+                    )
+                    await self._safe_execute(upd_stmt)
+                    return "updated"
+            else:
+                # New record: insert with is_current=TRUE
+                stmt = insert(Document).values(**row_data)
+                try:
+                    await self._safe_execute(stmt)
+                    logger.debug("Document inserted", row_number=row_data.get("row_number"))
+                    return "inserted"
+                except IntegrityError as e:
+                    logger.warning(
+                        "Insert conflict on insert; falling back to updating existing row",
+                        sheet_name=row_data.get("sheet_name"),
+                        row_number=row_data.get("row_number"),
+                        error=str(e),
+                    )
+                    upd_stmt = (
+                        update(Document)
+                        .where(
+                            and_(Document.sheet_name == row_data.get("sheet_name"), Document.row_number == row_data.get("row_number"))
+                        )
+                        .values(**{k: v for k, v in row_data.items() if k != "id"})
+                    )
+                    await self._safe_execute(upd_stmt)
+                    return "updated"
 
     async def ingest_task(
         self,
@@ -673,7 +782,7 @@ class IngestionService:
             task_config = dict(task.adaptor_config or {})
 
             # Use task's adaptor config
-            gmail_query = task_config.get("gmail_query", "has:attachment is:unread")
+            gmail_query = task_config.get("gmail_query", "")
             sheet_name = task_config.get("sheet_name", "Sheet1")
             sender_filter = task_config.get("sender_filter")
             subject_pattern = task_config.get("subject_pattern")

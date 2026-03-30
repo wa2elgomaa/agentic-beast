@@ -60,7 +60,7 @@ async def start_scheduler() -> None:
         scheduler = await get_scheduler()
 
         if not scheduler.running:
-            await scheduler.start()
+            scheduler.start()
             logger.info("APScheduler started")
         else:
             logger.warning("APScheduler already running")
@@ -76,7 +76,7 @@ async def shutdown_scheduler() -> None:
         global _scheduler
 
         if _scheduler and _scheduler.running:
-            await _scheduler.shutdown()
+            _scheduler.shutdown()
             logger.info("APScheduler shut down")
             _scheduler = None
 

@@ -77,7 +77,7 @@ class Settings(BaseSettings):
     gmail_oauth_client_id: str = Field(default="")
     gmail_oauth_client_secret: str = Field(default="")
     gmail_oauth_token_uri: str = Field(default="https://oauth2.googleapis.com/token")
-    gmail_inbox_query: str = Field(default="has:attachment is:unread")
+    gmail_inbox_query: str = Field(default="")
     gmail_email_monitor_interval_seconds: int = Field(default=300)
 
     # CMS API Configuration

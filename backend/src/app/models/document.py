@@ -4,7 +4,7 @@ from datetime import date, datetime, time
 from typing import Optional
 
 from sqlalchemy import Boolean, Date, Integer, Numeric, String, Text, Time, TIMESTAMP
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.sql import func
 from pgvector.sqlalchemy import Vector
@@ -87,6 +87,9 @@ class Document(Base):
     label_groups: Mapped[Optional[str]] = mapped_column(Text)
 
     # Timestamps
+    # Per-row stable UUID for external content identifier mapping
+    beast_uuid: Mapped[Optional[PG_UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True, index=True)
+
     is_current: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP, nullable=False, server_default=func.current_timestamp())
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP, nullable=False, server_default=func.current_timestamp(), onupdate=func.current_timestamp())

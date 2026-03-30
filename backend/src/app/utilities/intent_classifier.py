@@ -16,6 +16,7 @@ import spacy
 from spacy.matcher import Matcher
 from spacy.util import is_package
 
+from app.config import settings
 from app.db.agent_session import get_agent_sqlalchemy_session
 from app.logging import get_logger
 
@@ -39,32 +40,32 @@ class IntentClassifier:
 
     INTENT_KEYWORDS = {
         "query_metrics": [
-            # [{"LOWER": {"IN": ["top", "total", "sum", "average", "many", "count"]}}],
-            # [{"LOWER": {"IN": ["views", "likes", "shares", "interactions", "comments", "metrics"]}}],
-            # [{"LOWER": {"IN": ["reach", "impressions", "engagement", "followers", "interactions", "metrics", "views"]}}],
+            [{"LOWER": {"IN": ["top", "total", "sum", "average", "many", "count"]}}],
+            [{"LOWER": {"IN": ["views", "likes", "shares", "interactions", "comments", "metrics"]}}],
+            [{"LOWER": {"IN": ["reach", "impressions", "engagement", "followers", "interactions", "metrics", "views"]}}],
         ],
         "publishing_insights": [
-            # [{"LOWER": {"IN": ["publish", "publishing", "post", "posting", "schedule"]}}],
-            # [{"LOWER": "best"}, {"LOWER": {"IN": ["day", "time"]}}],
-            # [{"LOWER": "when"}, {"LOWER": "to"}, {"LOWER": "publish"}],
-            # [{"LOWER": "which"}, {"LOWER": {"IN": ["day", "time"]}}, {"LOWER": "is"}, {"LOWER": {"IN": ["best", "better"]}}],
+            [{"LOWER": {"IN": ["publish", "publishing", "post", "posting", "schedule"]}}],
+            [{"LOWER": "best"}, {"LOWER": {"IN": ["day", "time"]}}],
+            [{"LOWER": "when"}, {"LOWER": "to"}, {"LOWER": "publish"}],
+            [{"LOWER": "which"}, {"LOWER": {"IN": ["day", "time"]}}, {"LOWER": "is"}, {"LOWER": {"IN": ["best", "better"]}}],
         ],
 
         "analytics": [
-            # [{"LOWER": {"IN": ["tag", "recommend", "trend", "peak", "worst"]}}],
-            # [{"LOWER": "when"}, {"LOWER": "is"}, {"LOWER": "the"}, {"LOWER": "best"}],
+            [{"LOWER": {"IN": ["recommend", "trend", "peak", "worst", "insight", "analyze"]}}],
+            [{"LOWER": "when"}, {"LOWER": "is"}, {"LOWER": "the"}, {"LOWER": "best"}],
         ],
         "ingestion": [
-            # [{"LOWER": {"IN": ["ingest", "import", "upload", "process"]}}],
-            # [{"LOWER": {"IN": ["excel", "gmail", "email"]}}],
+            [{"LOWER": {"IN": ["ingest", "import", "upload", "process"]}}],
+            [{"LOWER": {"IN": ["excel", "gmail", "email"]}}],
         ],
         "tagging": [
-            # [{"LOWER": {"IN": ["suggest", "recommendations", "categories"]}}],
-            # [{"LOWER": "suggest"}, {"LOWER": "tags"}, {"LOWER": "for"}, {"LOWER": {"IN": ["story", "article"]}}],
+            [{"LOWER": {"IN": ["suggest", "recommendations", "categories", "tags", "tagging"]}}],
+            [{"LOWER": "suggest"}, {"LOWER": "tags"}, {"LOWER": "for"}, {"LOWER": {"IN": ["story", "article"]}}],
         ],
         "document_qa": [
-            # [{"LOWER": {"IN": ["policy", "guide", "procedure", "employee", "document", "search", "find", "qa", "question", "answer"]}}],
-            # [{"LOWER": "what"}, {"LOWER": "is"}, {"LOWER": "our"}],
+            [{"LOWER": {"IN": ["policy", "guide", "procedure", "employee", "document", "search", "find", "qa", "question", "answer"]}}],
+            [{"LOWER": "what"}, {"LOWER": "is"}, {"LOWER": "our"}],
         ],
     }
 
@@ -163,7 +164,13 @@ class IntentClassifier:
         intent = await IntentClassifier.simple(message.lower())
         logger.debug(f"spaCy returned '{intent}', escalating to agent classifier")
         if intent == "unknown":
-            intent = await IntentClassifier.complex(message, context=context)
+            if settings.ai_provider == "openai":
+                intent = await IntentClassifier.complex(message, context=context)
+            else:
+                logger.info(
+                    "Skipping OpenAI classify fallback for non-OpenAI provider",
+                    provider=settings.ai_provider,
+                )
 
         logger.debug("Final intent is", intent=intent)
         return intent

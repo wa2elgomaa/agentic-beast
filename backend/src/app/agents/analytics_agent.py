@@ -1,33 +1,24 @@
 """Analytics agent for processing natural language analytics queries."""
 
-from typing import Dict, Optional
-import json
-from agents import CodeInterpreterTool, Agent, ModelSettings, TResponseInputItem, Runner, RunConfig, trace
-from sqlalchemy.ext.asyncio import AsyncSession
+from typing import Optional
+
+from agents import Agent, ModelSettings
 from pydantic import BaseModel, field_validator
-from app.agents.base import BaseAgent
-from app.config import settings
-from app.logging import get_logger
-from app.tools.analytics_tools import AnalyticsTools
+from app.tools.analytics_db_function_tools import (
+    get_publishing_insights_db,
+    get_top_content_db,
+    list_available_data_db,
+    query_metrics_db,
+)
 
-logger = get_logger(__name__)
 
-code_interpreter = CodeInterpreterTool(tool_config={
-  "type": "code_interpreter",
-  "container": {
-    "type": "auto",
-    "file_ids": [
-      "file-U27nohfaSQspmwAGpdbhKH",
-      "file-GHT4TfF8fjNjizcHuJBz9W"
-    ]
-  }
-})
 class AnalyticsAgentSchema__ResultDataItem(BaseModel):
-  platform: str
-  content: str
-  title: str
+  label: str
+  value: str
+  platform: Optional[str] = None
+  content: Optional[str] = None
+  title: Optional[str] = None
   published_at: Optional[str] = None
-  views: str
 
   @field_validator("content", mode="before")
   @classmethod
@@ -55,7 +46,7 @@ def _sanitize_output_text(value: object, max_len: int) -> str:
 
 class AnalyticsAgentSchema(BaseModel):
   query_type: str
-  resolved_context: str
+  resolved_subject: str
   result_data: list[AnalyticsAgentSchema__ResultDataItem]
   insight_summary: str
   verification: str
@@ -64,35 +55,33 @@ class AnalyticsAgentSchema(BaseModel):
 analytics_agent = Agent(
   name="Analytics Agent",
   instructions="""### Role
-    You are the \"TNN Content Analytics Pro.\" You provide verified, data-driven insights from normalized social media performance exports. You communicate exclusively via structured JSON.
+    You are the \"TNN Content Analytics Pro.\" You provide verified, data-driven insights from SQL-backed analytics records. You communicate exclusively via structured JSON.
 
     ### Operational Guidelines
-    1. **Mandatory Code Execution**: For any numeric, ranking, or temporal question, you MUST use the Python Code Interpreter. 
+    1. **Mandatory SQL Tool Usage**: For any numeric, ranking, or temporal question, you MUST use the provided DB tools.
+      - Start by calling `list_available_data_db` when table coverage/metrics are unclear.
+      - Use `query_metrics_db` for aggregate and grouped metric questions.
+      - Use `get_top_content_db` for ranking posts/videos/content.
+      - Use `get_publishing_insights_db` for best-day publishing insights.
+      - Never assume values; always ground answers in tool output.
     2. **Context Persistence**: 
       - Maintain the 'canonical_id' or cleaned 'content' or label snippet in your internal memory to handle follow-up questions.
-      - When context is implied (e.g., \"that video\"), filter the dataframe using the previously identified identifier from the conversation history.
-    3. **Fuzzy & Canonical Matching (Link/Hashtag Mitigation)**:
-      - Social platforms often append different links or CTAs to the same content.
-      - When grouping or matching, you MUST implement a Python function to clean the 'content' column:
-        - Remove URLs (http/https).
-        - Remove common signatures like \"Follow us on...\", \"Like us on...\", or \"All the latest news...\".
-        - Strip whitespace and newlines.
-      - Match content based on the first 100 characters of this cleaned text or use a similarity ratio > 0.85 to ensure cross-platform videos are linked correctly.
+      - When context is implied (e.g., \"that video\"), reuse the last resolved subject from prior tool results.
 
     ### Normalized Column Mapping (LOWER_SNAKE_CASE)
-    - **Time**: `published_at`
+    - **Time**: `published_date`
     - **Subject**: `content`, `title`, `description`
-    - **Identity**: `content_id`, `canonical_id`
-    - **Metrics**: `video_view_count`, `media_views`, `total_reach`, `total_interactions`, `total_impressions`
+    - **Identity**: `content_id`, `profile_id`
+    - **Metrics**: `video_views`, `total_reach`, `total_interactions`, `total_impressions`
     - **Categories**: `platform`, `content_type`, `media_type`, `labels`
 
     ### Handling Specific Queries
     - **Best day to publish**: 
-      - Python: Convert `published_at` to datetime, extract `day_name()`, and group by it to find the mean of `video_view_count`.
+      - Use `get_publishing_insights_db`.
     - **Top video featuring [Topic]**:
-      - Python: Use the cleaning function above. Filter by keyword, group by the cleaned content string, sum `video_view_count`, and sort descending.
+      - Use `get_top_content_db` with `keyword` and the relevant metric.
     - **Cross-platform breakdown**: 
-      - Python: Identify the target video via its cleaned content snippet, then group the original matches by `platform` to show the distribution of views.
+      - Use `query_metrics_db` grouped by `platform`.
 
     ### Output Restrictions
     - **FORMAT**: Your response MUST be a single, valid JSON object. 
@@ -116,7 +105,10 @@ analytics_agent = Agent(
     }""",
   model="gpt-4.1",
   tools=[
-    code_interpreter
+    list_available_data_db,
+    query_metrics_db,
+    get_top_content_db,
+    get_publishing_insights_db,
   ],
   output_type=AnalyticsAgentSchema,
   model_settings=ModelSettings(

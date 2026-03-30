@@ -1,9 +1,8 @@
-version: '3.8'
-
 services:
   postgres:
     image: pgvector/pgvector:pg15
     container_name: beast-postgres
+    command: ["postgres", "-c", "max_locks_per_transaction=256"]
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -14,7 +13,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./backend/db/init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -30,7 +29,7 @@ services:
       - redis_data:/data
     command: redis-server --requirepass ${REDIS_PASSWORD}
     healthcheck:
-      test: ["CMD", "redis-cli", "--auth", "${REDIS_PASSWORD}", "ping"]
+      test: [ "CMD", "redis-cli", "--auth", "${REDIS_PASSWORD}", "ping" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -48,7 +47,7 @@ services:
     volumes:
       - mongodb_data:/data/db
     healthcheck:
-      test: ["CMD", "mongo", "--eval", "db.adminCommand('ping')"]
+      test: [ "CMD", "mongo", "--eval", "db.adminCommand('ping')" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -69,7 +68,7 @@ services:
       - mysql_data:/var/lib/mysql
     command: --default-authentication-plugin=mysql_native_password
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      test: [ "CMD", "mysqladmin", "ping", "-h", "localhost" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -88,7 +87,7 @@ services:
     volumes:
       - elasticsearch_data:/usr/share/elasticsearch/data
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      test: [ "CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1" ]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -125,6 +124,24 @@ services:
     depends_on:
       - prometheus
 
+  ollama:
+    image: ollama/ollama:latest
+    container_name: beast-ollama
+    environment:
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-mistral}
+      OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    entrypoint: /bin/sh
+    command:
+      - "-c"
+      - "/bin/ollama serve & sleep 10 && ollama pull $$OLLAMA_MODEL && ollama pull $$OLLAMA_EMBEDDING_MODEL && wait"
+    networks:
+      - beast-network
+    restart: unless-stopped
+
   app:
     build:
       context: ./backend
@@ -132,12 +149,15 @@ services:
     container_name: beast-app
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      REDIS_URL: redis://redis:6379/0
-      CELERY_BROKER_URL: redis://redis:6379/1
-      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/1
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/2
       MONGODB_URI: mongodb://${MONGO_INITDB_ROOT_USERNAME}:${MONGO_INITDB_ROOT_PASSWORD}@mongodb:27017/articles_db
       ENVIRONMENT: ${ENVIRONMENT}
       AI_PROVIDER: ${AI_PROVIDER:-openai}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-mistral}
+      OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o}
       OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
@@ -153,9 +173,84 @@ services:
       - postgres
       - redis
       - mongodb
+      - ollama
     networks:
       - beast-network
-    command: uvicorn src.app.main:app --host ${API_HOST:-0.0.0.0} --port ${API_PORT:-8000} --reload 
+    command: uvicorn src.app.main:app --host ${API_HOST:-0.0.0.0} --port ${API_PORT:-8000} --reload
+
+  celery-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: beast-celery-worker
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/1
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/2
+      MONGODB_URI: mongodb://${MONGO_INITDB_ROOT_USERNAME}:${MONGO_INITDB_ROOT_PASSWORD}@mongodb:27017/articles_db
+      ENVIRONMENT: ${ENVIRONMENT}
+      AI_PROVIDER: ${AI_PROVIDER:-openai}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-mistral}
+      OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o}
+      OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
+      OPENAI_AGENT_ID: ${OPENAI_AGENT_ID:-}
+      OPENAI_WORKFLOW_ID: ${OPENAI_WORKFLOW_ID:-}
+      AGENT_SESSION_ENCRYPTION_KEY: ${AGENT_SESSION_ENCRYPTION_KEY:-}
+    volumes:
+      - ./backend:/app
+      - ./backend/watched_documents:/app/watched_documents
+    depends_on:
+      - postgres
+      - redis
+      - mongodb
+      - ollama
+    networks:
+      - beast-network
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+    command: celery -A app.tasks.celery_app:celery_app worker -l info --pool=solo --concurrency=1
+
+  celery-beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: beast-celery-beat
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/1
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/2
+      MONGODB_URI: mongodb://${MONGO_INITDB_ROOT_USERNAME}:${MONGO_INITDB_ROOT_PASSWORD}@mongodb:27017/articles_db
+      ENVIRONMENT: ${ENVIRONMENT}
+      AI_PROVIDER: ${AI_PROVIDER:-openai}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-mistral}
+      OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o}
+      OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
+      OPENAI_AGENT_ID: ${OPENAI_AGENT_ID:-}
+      OPENAI_WORKFLOW_ID: ${OPENAI_WORKFLOW_ID:-}
+      AGENT_SESSION_ENCRYPTION_KEY: ${AGENT_SESSION_ENCRYPTION_KEY:-}
+    volumes:
+      - ./backend:/app
+      - ./backend/watched_documents:/app/watched_documents
+    depends_on:
+      - postgres
+      - redis
+      - mongodb
+      - ollama
+    networks:
+      - beast-network
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+    command: celery -A app.tasks.celery_app:celery_app beat -l info --pidfile=/tmp/celerybeat.pid
 
   frontend:
     build:
@@ -205,7 +300,7 @@ services:
     networks:
       - beast-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080"]
+      test: [ "CMD", "curl", "-f", "http://localhost:8080" ]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -235,6 +330,8 @@ volumes:
   elasticsearch_data:
   prometheus_data:
   grafana_data:
+  ollama_data:
+
 
 networks:
   beast-network:
