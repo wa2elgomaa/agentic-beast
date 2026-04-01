@@ -12,12 +12,25 @@ logger = get_logger(__name__)
 
 
 class OpenAIProvider(AIProvider):
-    """OpenAI API provider implementation."""
+    """OpenAI API provider implementation.
 
-    def __init__(self):
-        """Initialize OpenAI provider."""
-        super().__init__(settings.openai_model)
-        self.client = AsyncOpenAI(api_key=settings.openai_api_key)
+    This provider is configurable via the factory; it accepts optional
+    `model`, `api_key`, and `embedding_model` parameters. If not provided
+    it falls back to values from `settings` for backwards compatibility.
+    """
+
+    def __init__(self, model: Optional[str] = None, api_key: Optional[str] = None, embedding_model: Optional[str] = None, **kwargs):
+        """Initialize OpenAI provider.
+
+        Args:
+            model: Optional model id override.
+            api_key: Optional API key override.
+            embedding_model: Optional embedding model id override.
+        """
+        chosen_model = model or settings.openai_model
+        super().__init__(chosen_model, **kwargs)
+        self.client = AsyncOpenAI(api_key=api_key or settings.openai_api_key)
+        self.embedding_model = embedding_model or getattr(settings, "openai_embedding_model", None)
         logger.info("OpenAI provider initialized", model=self.model)
 
     async def complete(
@@ -74,7 +87,7 @@ class OpenAIProvider(AIProvider):
         """
         try:
             response = await self.client.embeddings.create(
-                model=settings.openai_embedding_model,
+                model=self.embedding_model or settings.openai_embedding_model,
                 input=text,
             )
 

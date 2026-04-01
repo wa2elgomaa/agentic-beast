@@ -128,8 +128,12 @@ services:
     image: ollama/ollama:latest
     container_name: beast-ollama
     environment:
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-mistral}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-deepseek-coder:6.7b}
       OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
+      OLLAMA_NUM_CTX: "4096"
+      OLLAMA_MAX_LOADED_MODELS: "2"
+      OLLAMA_NUM_PARALLEL: "2"
+      OLLAMA_KEEP_ALIVE: "-1"
     ports:
       - "${OLLAMA_PORT:-11434}:11434"
     volumes:
@@ -157,6 +161,8 @@ services:
       AI_PROVIDER: ${AI_PROVIDER:-openai}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-mistral}
+      OLLAMA_INTENT_MODEL: ${OLLAMA_INTENT_MODEL:-}
+      OLLAMA_SQL_MODEL: ${OLLAMA_SQL_MODEL:-}
       OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o}
@@ -193,6 +199,8 @@ services:
       AI_PROVIDER: ${AI_PROVIDER:-openai}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-mistral}
+      OLLAMA_INTENT_MODEL: ${OLLAMA_INTENT_MODEL:-}
+      OLLAMA_SQL_MODEL: ${OLLAMA_SQL_MODEL:-}
       OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o}
@@ -230,6 +238,8 @@ services:
       AI_PROVIDER: ${AI_PROVIDER:-openai}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-mistral}
+      OLLAMA_INTENT_MODEL: ${OLLAMA_INTENT_MODEL:-}
+      OLLAMA_SQL_MODEL: ${OLLAMA_SQL_MODEL:-}
       OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o}

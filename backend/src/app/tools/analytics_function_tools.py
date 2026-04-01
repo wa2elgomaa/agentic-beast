@@ -22,7 +22,7 @@ from functools import lru_cache
 from typing import Optional
 
 import pandas as pd
-from agents import function_tool
+from strands import tool
 
 # ---------------------------------------------------------------------------
 # Data loading
@@ -171,7 +171,7 @@ def _list_available_data_impl() -> str:
     })
 
 
-list_available_data = function_tool(_list_available_data_impl)
+list_available_data = tool(_list_available_data_impl)
 
 
 # ---------------------------------------------------------------------------
@@ -282,7 +282,7 @@ def _query_metrics_impl(
     })
 
 
-query_metrics = function_tool(_query_metrics_impl)
+query_metrics = tool(_query_metrics_impl)
 
 
 # ---------------------------------------------------------------------------
@@ -399,7 +399,7 @@ def _get_top_content_impl(
     })
 
 
-get_top_content = function_tool(_get_top_content_impl)
+get_top_content = tool(_get_top_content_impl)
 
 
 # ---------------------------------------------------------------------------
@@ -481,4 +481,4 @@ def _get_publishing_insights_impl(
     })
 
 
-get_publishing_insights = function_tool(_get_publishing_insights_impl)
+get_publishing_insights = tool(_get_publishing_insights_impl)

@@ -11,18 +11,17 @@ import json
 from datetime import date, timedelta
 from typing import Any
 
-from agents import function_tool
+from strands import tool
 from sqlalchemy import and_, func, select
 
 from app.db.session import AsyncSessionLocal
-from app.logging import get_logger
+import logging
 from app.models.document import Document
 
-logger = get_logger(__name__)
-
+_logger = logging.getLogger(__name__)
 
 def _parse_date(value: str | None) -> date | None:
-    if not value:
+    if not value or not isinstance(value, str):
         return None
     try:
         return date.fromisoformat(value)
@@ -40,6 +39,7 @@ def _safe_float(value: Any) -> float:
 
 
 METRIC_COLUMNS: dict[str, Any] = {
+    # Primary aliases (short names)
     "reach": Document.total_reach,
     "impressions": Document.total_impressions,
     "likes": Document.total_likes,
@@ -49,6 +49,24 @@ METRIC_COLUMNS: dict[str, Any] = {
     "engagements": Document.engagements,
     "video_views": Document.video_views,
     "completion_rate": Document.completion_rate,
+    # Full column-name aliases (match init.sql exactly)
+    "total_reach": Document.total_reach,
+    "organic_reach": Document.organic_reach,
+    "paid_reach": Document.paid_reach,
+    "total_impressions": Document.total_impressions,
+    "organic_impressions": Document.organic_impressions,
+    "paid_impressions": Document.paid_impressions,
+    "total_interactions": Document.total_interactions,
+    "organic_interactions": Document.organic_interactions,
+    "total_reactions": Document.total_reactions,
+    "reactions": Document.total_reactions,
+    "total_comments": Document.total_comments,
+    "total_shares": Document.total_shares,
+    "total_likes": Document.total_likes,
+    "reach_engagement_rate": Document.reach_engagement_rate,
+    "engagement_rate": Document.reach_engagement_rate,
+    "total_video_view_time_sec": Document.total_video_view_time_sec,
+    "avg_video_view_time_sec": Document.avg_video_view_time_sec,
 }
 
 
@@ -58,10 +76,16 @@ GROUP_BY_COLUMNS: dict[str, Any] = {
     "profile_id": Document.profile_id,
     "content_type": Document.content_type,
     "media_type": Document.media_type,
+    # Additional dimensions
+    "labels": Document.labels,
+    "author_name": Document.author_name,
+    "profile_name": Document.profile_name,
+    "origin_of_content": Document.origin_of_the_content,
+    "origin_of_the_content": Document.origin_of_the_content,
 }
 
 
-@function_tool
+@tool
 async def list_available_data_db() -> str:
     return await list_available_data_db_impl()
 
@@ -100,7 +124,7 @@ async def list_available_data_db_impl() -> str:
     )
 
 
-@function_tool
+@tool
 async def query_metrics_db(
     metric: str,
     aggregation: str = "sum",
@@ -198,6 +222,8 @@ async def query_metrics_db_impl(
         stmt = stmt.group_by(*group_cols)
     stmt = stmt.order_by(value_col.desc()).limit(bounded_limit)
 
+    _logger.info(f"Executing SQL query {stmt}")
+    
     async with AsyncSessionLocal() as session:
         result = await session.execute(stmt)
         raw_rows = result.fetchall()
@@ -230,7 +256,7 @@ async def query_metrics_db_impl(
     )
 
 
-@function_tool
+@tool
 async def get_top_content_db(
     metric: str = "video_views",
     platform: str | None = None,
@@ -325,19 +351,22 @@ async def get_top_content_db_impl(
     )
 
 
-@function_tool
+@tool
 async def get_publishing_insights_db(
-    platform: str,
+    platform: str | None = None,
     days: int = 90,
 ) -> str:
     return await get_publishing_insights_db_impl(platform=platform, days=days)
 
 
 async def get_publishing_insights_db_impl(
-    platform: str,
+    platform: str | None = None,
     days: int = 90,
 ) -> str:
-    """Compute best publish day by average interactions from SQL data."""
+    """Compute best publish day by average interactions from SQL data.
+
+    If *platform* is None or 'all', aggregates across every platform.
+    """
     bounded_days = max(7, min(days, 365))
     start = date.today() - timedelta(days=bounded_days)
 
@@ -345,14 +374,14 @@ async def get_publishing_insights_db_impl(
     avg_eng = func.avg(func.coalesce(Document.total_interactions, 0)).label("avg_interactions")
     sample = func.count(Document.id).label("sample_size")
 
+    conditions = [Document.published_date >= start]
+    resolved_platform = (platform or "").strip().lower()
+    if resolved_platform and resolved_platform != "all":
+        conditions.append(func.lower(Document.platform) == resolved_platform)
+
     stmt = (
         select(day_label, avg_eng, sample)
-        .where(
-            and_(
-                func.lower(Document.platform) == platform.lower(),
-                Document.published_date >= start,
-            )
-        )
+        .where(and_(*conditions))
         .group_by(day_label)
         .order_by(avg_eng.desc())
     )
@@ -373,7 +402,7 @@ async def get_publishing_insights_db_impl(
     return json.dumps(
         {
             "source": "postgres.documents",
-            "platform": platform,
+            "platform": resolved_platform or "all",
             "analysis_days": bounded_days,
             "rows": rows,
         }

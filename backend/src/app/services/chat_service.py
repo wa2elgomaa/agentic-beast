@@ -288,11 +288,13 @@ class ChatService:
         )
 
         # Prepare context for orchestrator
+        history = await self.get_conversation_context(conversation.id, limit=6)
         context = {
             "conversation_id": str(conversation.id),
             "user_id": str(user_id) if user_id else None,
             "message": message_content,
             "db_session": self.db_session,
+            "conversation_history": history,
         }
 
         # Route to agent via orchestrator

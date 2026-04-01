@@ -1,9 +1,11 @@
-from typing import Annotated
+from __future__ import annotations
 
-from agents import Agent, ToolSearchTool, function_tool, tool_namespace
+from typing import Annotated, Optional
+
+from strands import tool
 
 
-@function_tool(defer_loading=True)
+@tool
 def get_article_content(
     article_id: Annotated[str, "The article ID to look up."],
 ) -> str:
@@ -11,7 +13,7 @@ def get_article_content(
     return f"content for {article_id}"
 
 
-@function_tool(defer_loading=True)
+@tool
 def list_available_tags(
     article_id: Annotated[str, "The article ID to look up."],
 ) -> str:
@@ -19,15 +21,23 @@ def list_available_tags(
     return f"available tags for {article_id}"
 
 
-cms_tools = tool_namespace(
-    name="cms",
-    description="CMS tools for article content and tagging.",
-    tools=[get_article_content, list_available_tags],
-)
+# ---------------------------------------------------------------------------
+# Agent factory
+# ---------------------------------------------------------------------------
 
-tagging_agent = Agent(
-    name="Tagging assistant",
-    model="gpt-5.4",
-    instructions="Load article content and tagging tools before using the agent.",
-    tools=[*cms_tools, ToolSearchTool()],
-)
+def get_strands_tagging_agent(selected_model: Optional[str] = None):
+    """Return a Strands Agent for CMS article tagging."""
+    from strands import Agent  # noqa: PLC0415
+    from app.agents.agent_factory import get_model_provider  # noqa: PLC0415
+
+    model = get_model_provider(selected_model)
+    return Agent(
+        name="TaggingAgent",
+        model=model,
+        tools=[get_article_content, list_available_tags],
+        system_prompt=(
+            "You are a CMS tagging assistant. "
+            "Use the available tools to fetch article content and suggest appropriate tags."
+        ),
+        callback_handler=None,
+    )

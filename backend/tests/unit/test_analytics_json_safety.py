@@ -1,11 +1,6 @@
 import json
-import sys
-import types
 
 import pandas as pd
-
-if "agents" not in sys.modules:
-    sys.modules["agents"] = types.SimpleNamespace(function_tool=lambda fn: fn)
 
 from app.tools.analytics_function_tools import _get_top_content_impl, _safe_truncate, _sanitize_text
 

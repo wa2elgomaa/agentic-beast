@@ -88,7 +88,7 @@ class Settings(BaseSettings):
     mongodb_uri: str = Field(default="mongodb://localhost:27017/articles_db")
 
     # AI Provider Configuration
-    ai_provider: Literal["openai", "bedrock", "ollama"] = Field(default="openai")
+    ai_provider: Literal["openai", "bedrock", "ollama", "strands"] = Field(default="openai")
     openai_api_key: str = Field(default="")
     openai_model: str = Field(default="gpt-4")
     openai_embedding_model: str = Field(default="text-embedding-3-small")
@@ -98,6 +98,10 @@ class Settings(BaseSettings):
     # Ollama Local LLM Configuration
     ollama_base_url: str = Field(default="http://localhost:11434")
     ollama_model: str = Field(default="mistral")
+    # Model used specifically for SQL generation — deepseek-coder:6.7b recommended
+    ollama_sql_model: str = Field(default="")
+    # Model used specifically for intent classification — qwen2.5-coder recommended
+    ollama_intent_model: str = Field(default="")
     ollama_embedding_model: str = Field(default="nomic-embed-text")
 
     # Agent Session Encryption (OpenAI Agents SDK EncryptedSession)

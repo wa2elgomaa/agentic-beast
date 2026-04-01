@@ -8,15 +8,24 @@ from app.agents.base import AgentCapability, BaseAgent
 from app.logging import get_logger
 from app.services.ingestion_service import get_ingestion_service
 from app.tasks.celery_app import celery_app
-from agents import Agent
 
-ingestion_openai_agent = Agent(
-    name="Ingestion Agent",
-    instructions="""
-    Handles ingestion-related tasks such as triggering imports and checking status.
-    When handed off, respond with structured JSON describing the action taken.
-    """,
-)
+
+def get_strands_ingestion_agent(selected_model=None):
+    """Return a Strands Agent for data ingestion tasks."""
+    from strands import Agent  # noqa: PLC0415
+    from app.agents.agent_factory import get_model_provider  # noqa: PLC0415
+
+    model = get_model_provider(selected_model)
+    return Agent(
+        name="IngestionAgent",
+        model=model,
+        system_prompt=(
+            "Handles ingestion-related tasks such as triggering imports and checking status. "
+            "Respond with structured JSON describing the action taken."
+        ),
+        callback_handler=None,
+    )
+
 
 logger = get_logger(__name__)
 

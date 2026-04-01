@@ -13,8 +13,10 @@ logger = get_logger(__name__)
 class OllamaProvider(AIProvider):
     """Ollama local LLM provider implementation.
 
-    This provider uses Ollama to run LLMs locally without external API calls.
-    Supports any model available on Ollama (Mistral, Llama2, Neural-Chat, etc.)
+    Config-driven: accepts optional model/base_url/embedding_model overrides;
+    falls back to `settings` when not provided. This makes it usable both via
+    the legacy module-level `get_ai_provider()` call and via the provider factory
+    with explicit parameters.
 
     Installation:
         1. Download from https://ollama.ai
@@ -23,19 +25,30 @@ class OllamaProvider(AIProvider):
         4. Set AI_PROVIDER=ollama in .env
     """
 
-    def __init__(self):
+    def __init__(
+        self,
+        model: Optional[str] = None,
+        base_url: Optional[str] = None,
+        embedding_model: Optional[str] = None,
+        **kwargs,
+    ):
         """Initialize Ollama provider.
 
-        Connects to local Ollama server and validates connectivity.
+        Args:
+            model: Optional model override (falls back to settings.ollama_model).
+            base_url: Optional Ollama base URL override (falls back to settings.ollama_base_url).
+            embedding_model: Optional embedding model override (falls back to settings.ollama_embedding_model).
         """
-        super().__init__(settings.ollama_model)
-        self.base_url = settings.ollama_base_url.rstrip("/")
+        chosen_model = model or settings.ollama_model
+        super().__init__(chosen_model, **kwargs)
+        self.base_url = (base_url or settings.ollama_base_url).rstrip("/")
+        self.embedding_model = embedding_model or settings.ollama_embedding_model
         self.client = httpx.AsyncClient(timeout=120.0)
         logger.info(
             "Ollama provider initialized",
             model=self.model,
             base_url=self.base_url,
-            embedding_model=settings.ollama_embedding_model
+            embedding_model=self.embedding_model
         )
 
     async def complete(
@@ -160,14 +173,14 @@ class OllamaProvider(AIProvider):
         try:
             logger.debug(
                 "Ollama embedding request",
-                model=settings.ollama_embedding_model,
+                model=self.embedding_model,
                 text_length=len(text)
             )
 
             response = await self.client.post(
                 f"{self.base_url}/api/embeddings",
                 json={
-                    "model": settings.ollama_embedding_model,
+                    "model": self.embedding_model,
                     "prompt": text
                 },
                 timeout=60.0
@@ -193,8 +206,8 @@ class OllamaProvider(AIProvider):
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
                 error_msg = (
-                    f"Embedding model '{settings.ollama_embedding_model}' not found. "
-                    f"Pull it with: 'ollama pull {settings.ollama_embedding_model}'"
+                    f"Embedding model '{self.embedding_model}' not found. "
+                    f"Pull it with: 'ollama pull {self.embedding_model}'"
                 )
                 logger.error("Ollama embedding model not found", error=str(e))
                 raise RuntimeError(error_msg) from e

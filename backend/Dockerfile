@@ -15,8 +15,7 @@ RUN mkdir -p src/app && touch src/app/__init__.py
 
 # Install dependencies 
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
-    pip install --no-cache-dir -e . && \
-    python -m spacy download en_core_web_md
+    pip install --no-cache-dir -e .
 
 # Runtime stage
 FROM python:3.11-slim

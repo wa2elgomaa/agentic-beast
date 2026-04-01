@@ -64,8 +64,9 @@ async def _execute_planned_tool(tool_name: str, args: dict[str, Any]) -> str:
         return await list_available_data_db_impl()
 
     if tool_name == "query_metrics_db":
+        metric_arg = str(args.get("metric", "reach"))
         return await query_metrics_db_impl(
-            metric=str(args.get("metric", "reach")),
+            metric=metric_arg,
             aggregation=str(args.get("aggregation", "sum")),
             platform=args.get("platform"),
             profile_id=args.get("profile_id"),
@@ -76,8 +77,9 @@ async def _execute_planned_tool(tool_name: str, args: dict[str, Any]) -> str:
         )
 
     if tool_name == "get_top_content_db":
+        metric_arg = str(args.get("metric", "video_views"))
         return await get_top_content_db_impl(
-            metric=str(args.get("metric", "video_views")),
+            metric=metric_arg,
             platform=args.get("platform"),
             start_date=args.get("start_date"),
             end_date=args.get("end_date"),
@@ -106,9 +108,13 @@ async def execute_analytics_with_provider(message: str) -> dict[str, Any]:
         "Choose exactly one SQL analytics tool and arguments for the user question. "
         "Return ONLY valid JSON with keys: tool, args, query_type. "
         "Allowed tools: list_available_data_db, query_metrics_db, get_top_content_db, get_publishing_insights_db. "
-        "For query_metrics_db args may include: metric, aggregation, platform, profile_id, start_date, end_date, group_by, limit. "
-        "For get_top_content_db args may include: metric, platform, start_date, end_date, keyword, limit. "
-        "For get_publishing_insights_db args: platform, days."
+        "CRITICAL: Use only the following metric column names when setting the `metric` argument: \n"
+        "['comments', 'completion_rate', 'engagements', 'impressions', 'interactions', 'likes', 'reach', 'shares', 'video_views']\n"
+        "For `query_metrics_db` args may include: metric (one of the allowed names above), aggregation, platform, profile_id, start_date, end_date, group_by, limit. "
+        "For `get_top_content_db` args may include: metric (one of the allowed names above), platform, start_date, end_date, keyword, limit. "
+        "For `get_publishing_insights_db` args: platform, days. "
+        "If the user's wording uses synonyms (e.g., 'views', 'view_count', 'likes_count'), map them internally to the nearest allowed metric but RETURN the allowed metric name in the JSON `args.metric` field — do NOT invent new metric names. "
+        "If you cannot confidently map a requested metric to one of the allowed names, set `args.metric` to 'reach' and include a short explanation in `args._note` describing ambiguity."
     )
 
     plan_resp = await provider.complete_with_retry(

@@ -1,32 +1,23 @@
-"""AI provider factory and implementations."""
+"""Provider compatibility shim: expose factory helper and legacy symbols."""
 
-from app.config import settings
 from app.logging import get_logger
 from app.providers.base import AIProvider
-from app.providers.bedrock_provider import BedrockProvider
+from app.providers.factory import clear_provider_cache, get_ai_provider
 from app.providers.openai_provider import OpenAIProvider
 from app.providers.ollama_provider import OllamaProvider
+from app.providers.strands_provider import StrandsProvider
 
 logger = get_logger(__name__)
 
+# Keep a simple compatibility surface for callers that import from
+# `app.providers`. Prefer `get_ai_provider(name, model, options)` from
+# `app.providers.factory` for new code.
 
-def get_ai_provider() -> AIProvider:
-    """Get the configured AI provider instance.
-
-    Returns:
-        An AI provider instance based on configuration.
-    """
-    if settings.ai_provider == "openai":
-        logger.info("Using OpenAI provider")
-        return OpenAIProvider()
-    elif settings.ai_provider == "bedrock":
-        logger.info("Using AWS Bedrock provider")
-        return BedrockProvider()
-    elif settings.ai_provider == "ollama":
-        logger.info("Using Ollama local LLM provider")
-        return OllamaProvider()
-    else:
-        raise ValueError(f"Unknown AI provider: {settings.ai_provider}")
-
-
-__all__ = ["get_ai_provider", "AIProvider", "OpenAIProvider", "BedrockProvider", "OllamaProvider"]
+__all__ = [
+    "get_ai_provider",
+    "clear_provider_cache",
+    "AIProvider",
+    "OpenAIProvider",
+    "OllamaProvider",
+    "StrandsProvider",
+]

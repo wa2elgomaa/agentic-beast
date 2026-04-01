@@ -1,176 +1,140 @@
-"""IntentClassifier -- pure-logic intent classification, no agent imports.
+"""IntentClassifier -- LLM-based intent classification via Ollama JSON mode.
 
-Kept in tools/ so it can be imported by both:
+Kept in utilities/ so it can be imported by both:
   - tools/classify_tool.py  (the @function_tool the orchestrator calls)
   - agents/classify_agent.py (which defines the classify_agent Agent object)
 
 Dependency graph (no cycles):
-  tools/intent_classifier.py
+  utilities/intent_classifier.py
        ^                  ^
   tools/classify_tool   agents/classify_agent
        ^
   agents/orchestrator
 """
 
-import spacy
-from spacy.matcher import Matcher
-from spacy.util import is_package
-
 from app.config import settings
-from app.db.agent_session import get_agent_sqlalchemy_session
 from app.logging import get_logger
 
 logger = get_logger(__name__)
 
+# Three user-facing intents + unknown.
+# analytics  — any quantitative / insight query (top-N, totals, comparisons,
+#              publishing time, trends). Sub-routing happens inside AnalyticsAgent.
+# tag_suggestions         — suggest or apply content tags.
+# article_recommendations — recommend or retrieve articles / documents.
 _VALID_INTENTS = [
-    "query_metrics",
     "analytics",
-    "publishing_insights",
-    "ingestion",
-    "tagging",
-    "document_qa",
+    "tag_suggestions",
+    "article_recommendations",
     "unknown",
 ]
 
 
+# ---------------------------------------------------------------------------
+# Few-shot examples for the intent classifier (kept minimal for latency)
+# ---------------------------------------------------------------------------
+_INTENT_FEW_SHOT: list[dict] = [
+    {"role": "user",      "content": "top 5 videos by views"},
+    {"role": "assistant", "content": '{"intent": "analytics"}'},
+    {"role": "user",      "content": "best day to post on TikTok"},
+    {"role": "assistant", "content": '{"intent": "analytics"}'},
+    {"role": "user",      "content": "suggest tags for this article"},
+    {"role": "assistant", "content": '{"intent": "tag_suggestions"}'},
+    {"role": "user",      "content": "recommend articles about AI"},
+    {"role": "assistant", "content": '{"intent": "article_recommendations"}'},
+    {"role": "user",      "content": "hello"},
+    {"role": "assistant", "content": '{"intent": "unknown"}'},
+]
+
+_INTENT_SYSTEM_PROMPT = """\
+You are a JSON-only intent classifier for a social media analytics platform.
+Output ONLY a valid JSON object: {"intent": "<label>"}
+No markdown, no explanation, no extra keys.
+
+Intent labels (choose exactly one):
+- analytics            : ANY question about data, metrics, numbers, performance, reach,
+                         views, engagement, top content, best posting time, platform
+                         comparison, trends, publishing schedule, or content analysis.
+                         When in doubt between analytics and unknown, choose analytics.
+- tag_suggestions      : user wants tag or label suggestions for a piece of content.
+- article_recommendations : user wants article, document, or content recommendations.
+- unknown              : greetings, off-topic, or truly ambiguous requests.
+
+Rule: questions about "top N", "best", "compare", "when to post", "how many",
+"total", "average", "views", "reach", "engagement" are ALWAYS analytics.\
+"""
+
+
 class IntentClassifier:
-    """Intent classifier: spaCy keyword matching with Agent SDK fallback."""
-
-    MODEL_CANDIDATES = ("en_core_web_md", "en_core_web_sm")
-
-    INTENT_KEYWORDS = {
-        "query_metrics": [
-            [{"LOWER": {"IN": ["top", "total", "sum", "average", "many", "count"]}}],
-            [{"LOWER": {"IN": ["views", "likes", "shares", "interactions", "comments", "metrics"]}}],
-            [{"LOWER": {"IN": ["reach", "impressions", "engagement", "followers", "interactions", "metrics", "views"]}}],
-        ],
-        "publishing_insights": [
-            [{"LOWER": {"IN": ["publish", "publishing", "post", "posting", "schedule"]}}],
-            [{"LOWER": "best"}, {"LOWER": {"IN": ["day", "time"]}}],
-            [{"LOWER": "when"}, {"LOWER": "to"}, {"LOWER": "publish"}],
-            [{"LOWER": "which"}, {"LOWER": {"IN": ["day", "time"]}}, {"LOWER": "is"}, {"LOWER": {"IN": ["best", "better"]}}],
-        ],
-
-        "analytics": [
-            [{"LOWER": {"IN": ["recommend", "trend", "peak", "worst", "insight", "analyze"]}}],
-            [{"LOWER": "when"}, {"LOWER": "is"}, {"LOWER": "the"}, {"LOWER": "best"}],
-        ],
-        "ingestion": [
-            [{"LOWER": {"IN": ["ingest", "import", "upload", "process"]}}],
-            [{"LOWER": {"IN": ["excel", "gmail", "email"]}}],
-        ],
-        "tagging": [
-            [{"LOWER": {"IN": ["suggest", "recommendations", "categories", "tags", "tagging"]}}],
-            [{"LOWER": "suggest"}, {"LOWER": "tags"}, {"LOWER": "for"}, {"LOWER": {"IN": ["story", "article"]}}],
-        ],
-        "document_qa": [
-            [{"LOWER": {"IN": ["policy", "guide", "procedure", "employee", "document", "search", "find", "qa", "question", "answer"]}}],
-            [{"LOWER": "what"}, {"LOWER": "is"}, {"LOWER": "our"}],
-        ],
-    }
+    """Intent classifier using Qwen2.5-Coder (or any configured model) via Ollama JSON-mode."""
 
     VALID_INTENTS = _VALID_INTENTS
 
-    _nlp = None
-
-    @classmethod
-    def _get_nlp(cls):
-        if cls._nlp is not None:
-            return cls._nlp
-
-        for model_name in cls.MODEL_CANDIDATES:
-            if is_package(model_name):
-                cls._nlp = spacy.load(model_name)
-                logger.info("Loaded spaCy model", model=model_name)
-                return cls._nlp
-
-        logger.warning(
-            "No spaCy language model installed; falling back to blank English pipeline",
-            requested_models=list(cls.MODEL_CANDIDATES),
-        )
-        cls._nlp = spacy.blank("en")
-        return cls._nlp
-
     @staticmethod
-    async def simple(message: str) -> str:
-        """Classify intent using spaCy keyword/pattern matching.
+    async def complex(message: str, context: dict | None = None) -> str:  # noqa: ARG002
+        """Classify intent using Ollama JSON-mode with Qwen2.5-Coder.
 
-        Returns the matched intent label, or 'unknown' if no pattern matches.
+        Uses a dedicated ``ollama_intent_model`` (default: qwen2.5-coder) so SQL
+        generation and intent classification can use different models independently.
+        Falls back to ``ollama_model`` if ``ollama_intent_model`` is not set.
         """
-        nlp = IntentClassifier._get_nlp()
-        matcher = Matcher(nlp.vocab)
-        doc = nlp(message)
+        import json  # noqa: PLC0415
+        import httpx  # noqa: PLC0415
 
-        for label, pattern_list in IntentClassifier.INTENT_KEYWORDS.items():
-            matcher.add(label, pattern_list)
+        # Prefer dedicated intent model; fall back gracefully
+        intent_model = (settings.ollama_intent_model or "").strip() or settings.ollama_model
+        url = f"{settings.ollama_base_url.rstrip('/')}/api/chat"
 
-        matches = matcher(doc)
-        entities = [{"text": ent.text, "label": ent.label_} for ent in doc.ents]
+        messages = [
+            {"role": "system", "content": _INTENT_SYSTEM_PROMPT},
+            *_INTENT_FEW_SHOT,
+            {"role": "user", "content": message},
+        ]
 
-        if not matches:
-            return "unknown"
-
-        match_id, start, end = matches[0]
-        intent_label = nlp.vocab.strings[match_id]
-        confidence = 0.8 if entities else 0.6
-        logger.debug(
-            "spaCy intent classification",
-            intent=intent_label,
-            confidence=confidence,
-            entities=entities,
-        )
-        return intent_label
-
-    @staticmethod
-    async def complex(message: str, context: dict | None = None) -> str:
-        """Classify intent using the Agent SDK (gpt-4o-mini).
-
-        Used as fallback when spaCy pattern matching returns 'unknown'.
-        Imported lazily to avoid circular imports at module load time.
-        """
-        # Late import: classify_agent lives in app.agents which imports orchestrator
-        from app.agents.classify_agent import classify_agent  # noqa: PLC0415
-        from agents import Runner  # noqa: PLC0415
+        payload = {
+            "model": intent_model,
+            "format": "json",
+            "stream": False,
+            "messages": messages,
+        }
 
         try:
-            result = await Runner.run(
-                classify_agent,
-                message,
-                session=get_agent_sqlalchemy_session("IntentClassifier", context=context),
-            )
-            intent = result.final_output.strip().lower()
+            async with httpx.AsyncClient(timeout=45.0) as client:
+                response = await client.post(url, json=payload)
+                response.raise_for_status()
+                data = response.json()
+
+            raw = data.get("message", {}).get("content", "{}")
+            parsed = json.loads(raw)
+            intent = parsed.get("intent", "unknown").strip().lower()
 
             if intent not in IntentClassifier.VALID_INTENTS:
-                logger.warning("Agent returned unknown intent, using 'unknown'", intent=intent)
-                intent = "unknown"
+                logger.warning(
+                    "Ollama intent classifier returned invalid label — defaulting to 'unknown'",
+                    intent=intent,
+                    model=intent_model,
+                )
+                return "unknown"
 
-            logger.debug("Agent intent classification", intent=intent)
+            logger.info(
+                "Intent classified",
+                intent=intent,
+                model=intent_model,
+                message_snippet=message[:60],
+            )
             return intent
 
-        except Exception as e:
-            logger.error("Agent intent classification failed, using 'unknown'", error=str(e))
+        except Exception as exc:
+            logger.error(
+                "Ollama intent classification failed — defaulting to 'unknown'",
+                error=str(exc),
+                model=intent_model,
+            )
             return "unknown"
 
     @staticmethod
     async def classify(message: str, context: dict | None = None) -> str:
-        """Classify intent: spaCy first, Agent SDK fallback if result is 'unknown'.
-
-        Args:
-            message: User message text.
-
-        Returns:
-            Intent string (one of VALID_INTENTS, or 'unknown').
-        """
-        intent = await IntentClassifier.simple(message.lower())
-        logger.debug(f"spaCy returned '{intent}', escalating to agent classifier")
-        if intent == "unknown":
-            if settings.ai_provider == "openai":
-                intent = await IntentClassifier.complex(message, context=context)
-            else:
-                logger.info(
-                    "Skipping OpenAI classify fallback for non-OpenAI provider",
-                    provider=settings.ai_provider,
-                )
-
-        logger.debug("Final intent is", intent=intent)
+        """Public entry point: classify intent using Ollama JSON-mode."""
+        intent = await IntentClassifier.complex(message, context=context)
+        logger.debug("Final intent", intent=intent)
         return intent
