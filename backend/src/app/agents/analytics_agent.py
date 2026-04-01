@@ -254,13 +254,20 @@ def _rows_to_result_data(rows: list[dict], query_category: str = "metrics") -> l
                 or r.get("content_id")
                 or "Unknown"
             )
+            # Ensure title falls back to full content when title is empty
+            raw_title = (r.get("title") or "").strip()
+            if raw_title:
+                title_field = raw_title
+            else:
+                title_field = r.get("content") or r.get("content_id") or None
+
             result.append(
                 {
                     "label": str(label),
                     "value": str(r.get("value", 0)),
                     "platform": r.get("platform"),
-                    "content": r.get("content_id"),
-                    "title": r.get("title"),
+                    "content": r.get("content_id") or r.get("content"),
+                    "title": title_field,
                 }
             )
     return result
@@ -483,7 +490,7 @@ Other useful columns: title (text), content (text), content_id (text),
   published_date (date), platform (text)
 
 Display label rule:
-  ALWAYS include COALESCE(title, LEFT(content, 200)) AS display_label
+    ALWAYS include COALESCE(NULLIF(title, ''), LEFT(content, 200)) AS display_label
   in SELECT when fetching individual content rows.
 """.strip()
 
@@ -538,11 +545,11 @@ _SQL_GEN_FEW_SHOT: list[dict] = [
     {
         "role": "assistant",
         "content": json.dumps({
-            "sql": (
-                "SELECT COALESCE(title, LEFT(content, 200)) AS display_label, "
+                "sql": (
+                "SELECT COALESCE(NULLIF(title, ''), LEFT(content, 200)) AS display_label, "
                 "platform, content_id, SUM(video_views) AS metric_value "
                 "FROM documents "
-                "GROUP BY display_label, platform, content_id "
+                "GROUP BY COALESCE(NULLIF(title, ''), LEFT(content, 200)), platform, content_id "
                 "ORDER BY metric_value DESC LIMIT :max_rows"
             ),
             "params": {"max_rows": 5},
@@ -600,13 +607,13 @@ _SQL_GEN_FEW_SHOT: list[dict] = [
     {
         "role": "assistant",
         "content": json.dumps({
-            "sql": (
-                "SELECT COALESCE(title, LEFT(content, 200)) AS display_label, "
+                "sql": (
+                "SELECT COALESCE(NULLIF(title, ''), LEFT(content, 200)) AS display_label, "
                 "platform, content_id, SUM(video_views) AS metric_value "
                 "FROM documents "
                 "WHERE (title ILIKE :keyword OR content ILIKE :keyword) "
                 "AND published_date BETWEEN :start_date::date AND :end_date::date "
-                "GROUP BY COALESCE(title, LEFT(content, 200)), platform, content_id "
+                "GROUP BY COALESCE(NULLIF(title, ''), LEFT(content, 200)), platform, content_id "
                 "ORDER BY metric_value DESC LIMIT :max_rows"
             ),
             "params": {

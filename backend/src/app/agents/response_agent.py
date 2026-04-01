@@ -89,13 +89,21 @@ def build_analytics_response(
             or _display_label(row)
         )
         value = _numeric_value(row)
+        # Ensure title falls back to the actual content when title is empty
+        raw_title = (row.get("title") or "").strip()
+        if raw_title:
+            title_field = _safe_str(raw_title)
+        else:
+            # prefer the full content text, then content_id, then any display_label
+            title_field = _safe_str(row.get("content") or row.get("content_id") or row.get("display_label"))
+
         result_data.append(
             {
                 "label": label,
                 "value": _safe_str(value),
                 # Frontend AnalyticsResultDataItem fields
                 "platform": _safe_str(row.get("platform")),
-                "title": _safe_str(row.get("title") or row.get("display_label")),
+                "title": title_field,
                 "content": _safe_str(row.get("content_id") or row.get("content")),
                 "published_at": _safe_str(
                     row.get("published_date") or row.get("published_at")
