@@ -141,8 +141,8 @@ export default function Sidebar({
                         <div
                           key={conv.id}
                           className={`group relative rounded-lg transition-colors ${conv.id === currentConversationId
-                              ? 'bg-blue-50 border border-blue-200'
-                              : 'hover:bg-gray-100 border border-transparent'
+                            ? 'bg-blue-50 border border-blue-200'
+                            : 'hover:bg-gray-100 border border-transparent'
                             }`}
                         >
                           {editingId === conv.id ? (
@@ -274,9 +274,14 @@ export default function Sidebar({
                   </div>
                 )}
 
+
+              </div>
+
+              {/* Footer */}
+              <div className="p-4 border-t border-gray-200">
                 {/* Admin Section */}
                 {user?.is_admin && (
-                  <div className="mt-6 pt-4 border-t border-gray-200">
+                  <div className="px-4 py-2 text-xs text-gray-600 border-b border-gray-200 pb-3 mb-2">
                     <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3 flex items-center gap-2">
                       <Settings size={14} />
                       Admin
@@ -290,10 +295,6 @@ export default function Sidebar({
                     </a>
                   </div>
                 )}
-              </div>
-
-              {/* Footer */}
-              <div className="p-4 border-t border-gray-200">
                 {user && (
                   <div className="px-4 py-2 text-xs text-gray-600 border-b border-gray-200 pb-3 mb-2">
                     <div className="font-medium text-gray-900">{user.username}</div>
