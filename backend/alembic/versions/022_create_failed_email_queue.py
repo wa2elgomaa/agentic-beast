@@ -101,14 +101,12 @@ def upgrade() -> None:
         'idx_failed_email_queue_task_next_retry',
         'failed_email_queue',
         ['task_id', 'next_retry_at'],
-        comment='Optimize queries for finding emails due for retry'
     )
 
     op.create_index(
         'idx_failed_email_queue_created_at',
         'failed_email_queue',
         ['created_at'],
-        comment='For historical queries and cleanup'
     )
 
 
