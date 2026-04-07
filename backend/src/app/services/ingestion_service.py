@@ -251,6 +251,11 @@ class IngestionService:
         }
         payload.update(mapped_data)
 
+        # Protect required fields from being overwritten with None
+        # text cannot be null - ensure it has a value
+        if not payload.get("text") or payload["text"] == "None":
+            payload["text"] = f"Row {row_number}"
+
         # Sanitize nulls: numeric fields default to 0, booleans to False
         numeric_defaults = [
             "video_views",
