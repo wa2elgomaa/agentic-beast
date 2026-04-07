@@ -24,7 +24,7 @@ def upgrade() -> None:
         sa.Column(
             'is_success',
             sa.Boolean(),
-            default=True,
+            server_default='true',
             nullable=False,
             comment='Whether email was successfully processed (all rows succeeded or had rows at all)'
         )
@@ -35,7 +35,7 @@ def upgrade() -> None:
         sa.Column(
             'is_retryable',
             sa.Boolean(),
-            default=False,
+            server_default='false',
             nullable=False,
             comment='Whether email can/should be retried'
         )
@@ -47,7 +47,7 @@ def upgrade() -> None:
         sa.Column(
             'failed_emails_count',
             sa.Integer(),
-            default=0,
+            server_default='0',
             nullable=False,
             comment='Number of emails that failed processing during this run'
         )
@@ -58,7 +58,7 @@ def upgrade() -> None:
         sa.Column(
             'retry_emails_count',
             sa.Integer(),
-            default=0,
+            server_default='0',
             nullable=False,
             comment='Number of emails queued for retry after this run'
         )
