@@ -24,6 +24,7 @@ import sqlparse
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError  # noqa: F401 – re-exported for callers
 
+from app.config import settings
 from app.db.session import AsyncSessionLocal
 
 _logger = logging.getLogger(__name__)
@@ -32,10 +33,10 @@ _logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-MAX_ROWS: int = 200
+MAX_ROWS: int = settings.db_max_rows_per_query
 """Hard upper bound on rows returned per query."""
 
-STATEMENT_TIMEOUT_MS: int = 10_000
+STATEMENT_TIMEOUT_MS: int = settings.db_statement_timeout_ms
 """PostgreSQL statement_timeout in milliseconds (10 s)."""
 
 _ALLOWED_TABLES: frozenset[str] = frozenset({"documents"})
@@ -122,7 +123,7 @@ def validate_sql(sql: str) -> None:
 async def execute_safe_sql(
     sql: str,
     params: dict[str, Any] | None = None,
-    max_rows: int = 100,
+    max_rows: int | None = None,
 ) -> dict[str, Any]:
     """Execute a parameterized SELECT in a read-only, time-limited DB session.
 
@@ -141,7 +142,8 @@ async def execute_safe_sql(
     """
     validate_sql(sql)  # raises SQLValidationError on failure
 
-    capped = max(1, min(max_rows, MAX_ROWS))
+    requested_rows = settings.db_default_limit if max_rows is None else max_rows
+    capped = max(1, min(requested_rows, MAX_ROWS))
     bound_params: dict[str, Any] = dict(params or {})
 
     # Inject or clamp LIMIT so the DB-level row cap is always enforced

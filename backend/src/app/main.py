@@ -8,13 +8,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.requests import Request
 from fastapi.responses import JSONResponse
 from fastapi import status
+from sqlalchemy import select
 
 from app.config import settings
+from app.config.registry import initialize_registries
 from app.db.session import close_db, init_db, AsyncSessionLocal
 from app.logging import configure_logging, get_logger
 from app.middleware.metrics import PrometheusMiddleware, get_metrics
 from app.monitoring.sentry import init_sentry
 from app.services.scheduler_service import SchedulerService
+from app.models import IngestionTask, ScheduleType
 
 # Configure logging on startup
 configure_logging()
@@ -24,11 +27,52 @@ logger = get_logger(__name__)
 init_sentry()
 
 
+async def reschedule_tasks_from_db():
+    """Load and reschedule all active ingestion tasks from the database on startup.
+
+    This ensures that scheduled tasks persist across app restarts.
+    """
+    try:
+        async with AsyncSessionLocal() as session:
+            # Fetch all active tasks with schedules
+            stmt = select(IngestionTask).where(
+                (IngestionTask.status == 'active') &
+                (IngestionTask.schedule_type.in_([ScheduleType.ONCE, ScheduleType.RECURRING]))
+            )
+            result = await session.execute(stmt)
+            tasks = result.scalars().all()
+
+            logger.info(f"Found {len(tasks)} active scheduled tasks to reschedule")
+
+            # Reschedule each task
+            for task in tasks:
+                try:
+                    # Import here to avoid circular imports
+                    from app.api.admin_ingestion import run_ingestion_task_job
+
+                    await SchedulerService.schedule_task(task, run_ingestion_task_job)
+                    logger.info(f"Rescheduled task: {task.name} (ID: {task.id})")
+                except Exception as e:
+                    logger.warning(f"Failed to reschedule task {task.id}: {str(e)}")
+
+    except Exception as e:
+        logger.warning(f"Failed to reschedule tasks from database: {str(e)}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator:
     """Lifespan context manager for startup and shutdown events."""
     # Startup
     logger.info("Starting Agentic Beast API", version=settings.api_version)
+    
+    # Initialize registries (schema, intents, agent settings)
+    try:
+        initialize_registries(config_dir=settings.config_dir)
+        logger.info("Registries initialized successfully")
+    except Exception as e:
+        logger.error("Failed to initialize registries", error=str(e))
+        raise
+    
     try:
         await init_db()
         logger.info("Database connection established")
@@ -40,6 +84,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         try:
             await SchedulerService.start()
             logger.info("APScheduler started")
+
+            # Reschedule tasks from database
+            await reschedule_tasks_from_db()
+            logger.info("Rescheduled tasks from database")
         except Exception as e:
             logger.error("Failed to start APScheduler", error=str(e))
 
@@ -267,7 +315,7 @@ def create_app() -> FastAPI:
     app.include_router(chat.router, prefix="/api/v1", tags=["chat"])
     app.include_router(ingestion.router, prefix="/api/v1", tags=["ingestion"])
     app.include_router(users.router, prefix="/api/v1", tags=["auth"])
-    app.include_router(admin_ingestion.router, tags=["admin-ingestion"])
+    app.include_router(admin_ingestion.router, prefix="/api/v1", tags=["admin-ingestion"])
     app.include_router(webhooks.router, tags=["webhooks"])
     
     # TODO: Add other routers when implemented

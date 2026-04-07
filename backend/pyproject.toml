@@ -75,6 +75,11 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "pytz>=2023.3",
     "sqlparse>=0.4.4",
+    "PyYAML>=6.0",
+
+    # Code Interpreter
+    "RestrictedPython>=7.0",
+    "matplotlib>=3.8.0",
 ]
 
 [project.optional-dependencies]

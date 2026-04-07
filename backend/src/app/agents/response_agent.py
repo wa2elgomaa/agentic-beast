@@ -36,6 +36,43 @@ def _safe_str(v: Any) -> str:
     return "" if v is None else str(v)
 
 
+def _format_number(v: Any) -> str:
+    """Format numeric values with thousands separators and no decimals when possible."""
+    try:
+        if v is None:
+            return ""
+        num = float(v)
+    except (ValueError, TypeError):
+        return _safe_str(v)
+
+    # If effectively an integer, format without decimals
+    if abs(num - int(num)) < 1e-9:
+        return f"{int(num):,}"
+    # Otherwise format with no fractional digits as well (UI prefers whole numbers)
+    return f"{num:,.0f}"
+
+
+def _build_view_url(platform: str | None, content_id: str | None) -> str:
+    """Return a best-effort URL to view the content on its platform.
+
+    Uses common platform URL patterns; falls back to a generic host if unknown.
+    """
+    if not content_id:
+        return ""
+    p = (platform or "").strip().lower()
+    cid = str(content_id)
+    if "youtube" in p or p == "youtube":
+        return f"https://www.youtube.com/watch?v={cid}"
+    if "tiktok" in p or p == "tiktok":
+        return f"https://www.tiktok.com/t/{cid}"
+    if "instagram" in p or p == "instagram":
+        return f"https://www.instagram.com/p/{cid}"
+    if "facebook" in p or p == "facebook":
+        return f"https://www.facebook.com/{cid}"
+    # Generic fallback
+    return f"https://{p or 'content'}.example/{cid}"
+
+
 def _numeric_value(row: dict[str, Any]) -> float:
     """Extract the primary numeric value from a row (handles varied column names)."""
     for key in ("metric_value", "value", "avg_interactions", "total", "count"):
@@ -83,36 +120,50 @@ def build_analytics_response(
     result_data: list[dict[str, Any]] = []
     for row in rows:
         # Display label: day_of_week (insights), platform (compare), otherwise title/content
+        # Prefer content/title label for top-item cards; fall back to platform for compare rows.
+        display_label = _display_label(row)
         label = (
             _safe_str(row.get("day_of_week")).strip()
+            or (display_label if display_label != "Unknown" else "")
             or _safe_str(row.get("platform")).strip()
-            or _display_label(row)
+            or "Unknown"
         )
-        value = _numeric_value(row)
-        # Ensure title falls back to the actual content when title is empty
+
+        # Primary numeric value (ensure formatted for UI)
+        numeric = _numeric_value(row)
+        formatted_value = _format_number(numeric)
+
+        # Title should be title column first, then content column.
         raw_title = (row.get("title") or "").strip()
         if raw_title:
             title_field = _safe_str(raw_title)
         else:
-            # prefer the full content text, then content_id, then any display_label
-            title_field = _safe_str(row.get("content") or row.get("content_id") or row.get("display_label"))
+            title_field = _safe_str(row.get("content") or "")
+
+        # Content/description should map to content column (not content_id).
+        content_field = _safe_str(row.get("content") or "")
+
+        # View link for platform (best-effort)
+        view_url = _build_view_url(_safe_str(row.get("platform")), row.get("content_id"))
 
         result_data.append(
             {
                 "label": label,
-                "value": _safe_str(value),
+                "value": formatted_value,
                 # Frontend AnalyticsResultDataItem fields
                 "platform": _safe_str(row.get("platform")),
                 "title": title_field,
-                "content": _safe_str(row.get("content_id") or row.get("content")),
+                # keep `content` for backwards compatibility and add description alias
+                "content": content_field,
+                "description": content_field,
+                "view_url": view_url,
                 "published_at": _safe_str(
                     row.get("published_date") or row.get("published_at")
                 ),
                 # Extra convenience field (frontend uses "views" for top-content cards)
-                "views": _safe_str(row.get("video_views") or row.get("value") or ""),
+                "views": _format_number(row.get("video_views") or row.get("value") or numeric),
             }
         )
-
     # ------------------------------------------------------------------
     # insight_summary — deterministic text from real values (no LLM numbers)
     # ------------------------------------------------------------------

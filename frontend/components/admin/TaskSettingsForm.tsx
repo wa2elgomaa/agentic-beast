@@ -1,9 +1,10 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { IngestionTask, IngestionTaskUpdateInput, ScheduleType, TaskStatus } from '@/types'
 import { updateIngestionTask } from '@/lib/api'
 import { AlertCircle, Save } from 'lucide-react'
+import CronBuilder from './CronBuilder'
 
 function toUtcIsoOrUndefined(localDateTime: string | undefined): string | undefined {
   if (!localDateTime) return undefined
@@ -36,6 +37,23 @@ export default function TaskSettingsForm({ task, onUpdated }: TaskSettingsFormPr
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState(false)
 
+  // Sync form state when task prop changes (e.g., after save and parent re-fetch)
+  useEffect(() => {
+    setName(task.name)
+    setStatus(task.status)
+    setScheduleType(task.schedule_type)
+    setCronExpression(task.cron_expression || '')
+    setRunAt(task.run_at ? task.run_at.slice(0, 16) : '')
+    setGmailQuery(task.adaptor_config?.gmail_query || '')
+    setSenderFilter(task.adaptor_config?.sender_filter || '')
+    setSubjectPattern(task.adaptor_config?.subject_pattern || '')
+    setGmailSourceType(task.adaptor_config?.gmail_source_type || 'attachment')
+    setDownloadLinkRegex(task.adaptor_config?.download_link_regex || '')
+  }, [task])
+
+  const handleCronChange = (newCron: string) => {
+    setCronExpression(newCron)
+  }
   const handleSave = async () => {
     try {
       setIsSaving(true)
@@ -157,15 +175,8 @@ export default function TaskSettingsForm({ task, onUpdated }: TaskSettingsFormPr
 
             {scheduleType === 'recurring' && (
               <div>
-                <label className="block text-sm font-medium text-gray-900 dark:text-white mb-1">Cron Expression</label>
-                <input
-                  type="text"
-                  value={cronExpression}
-                  onChange={(e) => setCronExpression(e.target.value)}
-                  placeholder="0 9 * * * (9 AM daily)"
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
-                />
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Standard cron syntax: minute hour day month weekday</p>
+                <label className="block text-sm font-medium text-gray-900 dark:text-white mb-3">Recurring Schedule</label>
+                <CronBuilder value={cronExpression} onChange={handleCronChange} />
               </div>
             )}
           </div>

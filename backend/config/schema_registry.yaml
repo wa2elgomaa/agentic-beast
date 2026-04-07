@@ -1,0 +1,217 @@
+schema:
+  version: "1.0"
+  table: "documents"
+  description: "Social media analytics schema"
+  
+  metrics:
+    # Reach metrics
+    total_reach:
+      aliases: ["reach", "total reach"]
+      type: "integer"
+      aggregations: ["sum", "avg", "max", "min", "count"]
+      description: "Total reach across all posts"
+    
+    organic_reach:
+      aliases: ["organic reach", "organic_reach"]
+      type: "integer"
+      aggregations: ["sum", "avg", "max", "min", "count"]
+      description: "Organic (non-paid) reach"
+    
+    paid_reach:
+      aliases: ["paid reach", "paid_reach"]
+      type: "integer"
+      aggregations: ["sum", "avg", "max", "min", "count"]
+      description: "Paid reach from ads"
+    
+    # Impression metrics
+    total_impressions:
+      aliases: ["impressions", "total impressions", "total_impressions"]
+      type: "integer"
+      aggregations: ["sum", "avg", "max", "min", "count"]
+      description: "Total impressions (content views)"
+    
+    organic_impressions:
+      aliases: ["organic impressions", "organic_impressions"]
+      type: "integer"
+      aggregations: ["sum", "avg", "max", "min", "count"]
+      description: "Organic impressions"
+    
+    paid_impressions:
+      aliases: ["paid impressions", "paid_impressions"]
+      type: "integer"
+      aggregations: ["sum", "avg", "max", "min", "count"]
+      description: "Paid impressions"
+    
+    # Engagement metrics
+    total_interactions:
+      aliases: ["interactions", "total interactions", "total_interactions", "engagement"]
+      type: "integer"
+      aggregations: ["sum", "avg", "max", "min", "count"]
+      description: "Total interactions (likes + comments + shares + reactions)"
+    
+    organic_interactions:
+      aliases: ["organic interactions", "organic_interactions"]
+      type: "integer"
+      aggregations: ["sum", "avg", "max", "min", "count"]
+      description: "Organic interactions"
+    
+    total_reactions:
+      aliases: ["reactions", "total reactions", "total_reactions", "likes"]
+      type: "integer"
+      aggregations: ["sum", "avg", "max", "min", "count"]
+      description: "Total reactions (likes, hearts, etc.)"
+    
+    total_likes:
+      aliases: ["likes", "total likes", "total_likes", "favorited"]
+      type: "integer"
+      aggregations: ["sum", "avg", "max", "min", "count"]
+      description: "Total likes"
+    
+    total_comments:
+      aliases: ["comments", "total comments", "total_comments", "replies"]
+      type: "integer"
+      aggregations: ["sum", "avg", "max", "min", "count"]
+      description: "Total comments"
+    
+    total_shares:
+      aliases: ["shares", "total shares", "total_shares", "retweets"]
+      type: "integer"
+      aggregations: ["sum", "avg", "max", "min", "count"]
+      description: "Total shares (retweets, reposts, etc.)"
+    
+    engagements:
+      aliases: ["total engagements", "total_engagements"]
+      type: "integer"
+      aggregations: ["sum", "avg", "max", "min", "count"]
+      description: "Total engagements (synonym for interactions)"
+    
+    # Video-specific metrics
+    video_views:
+      aliases: ["views", "video views", "total views", "total_views"]
+      type: "integer"
+      aggregations: ["sum", "avg", "max", "min", "count"]
+      description: "Total video views"
+    
+    total_video_view_time_sec:
+      aliases: ["view time", "video view time", "watch time", "total view time"]
+      type: "integer"
+      aggregations: ["sum", "avg", "max", "min"]
+      description: "Total video view time in seconds"
+    
+    avg_video_view_time_sec:
+      aliases: ["average view time", "avg view time", "average watch time"]
+      type: "float"
+      aggregations: ["avg", "max", "min"]
+      description: "Average video view time in seconds"
+    
+    completion_rate:
+      aliases: ["completion", "video completion", "completion percentage", "watch-through rate"]
+      type: "float"
+      aggregations: ["avg", "max", "min"]
+      description: "Video completion rate (percentage or decimal)"
+    
+    # Derived metrics
+    reach_engagement_rate:
+      aliases: ["engagement rate", "er", "engagement per reach"]
+      type: "float"
+      aggregations: ["avg", "max", "min"]
+      description: "Engagement per reach (interactions / reach * 100)"
+  
+  dimensions:
+    # Platform dimension
+    platform:
+      aliases: ["social platform", "channel", "social channel", "network"]
+      type: "categorical"
+      values: ["YouTube", "TikTok", "Instagram", "Facebook", "Twitter", "LinkedIn"]
+      description: "Social media platform"
+    
+    # Date dimension
+    published_date:
+      aliases: ["date", "publish date", "posted date", "date posted", "publication date"]
+      type: "date"
+      description: "Date when content was published"
+    
+    # Content classification
+    content_type:
+      aliases: ["type", "content type", "post type", "message type"]
+      type: "categorical"
+      values: ["video", "image", "text", "carousel", "story", "reel", "livestream"]
+      description: "Type of content (video, image, text, etc.)"
+    
+    media_type:
+      aliases: ["media", "media type"]
+      type: "categorical"
+      values: ["image", "video", "mixed", "text"]
+      description: "Type of media in post"
+    
+    # Origin/attribution
+    origin_of_the_content:
+      aliases: ["origin", "source", "content origin", "origin_of_the_content", "origin of content"]
+      type: "categorical"
+      description: "Source or origin of the content"
+    
+    origin_of_content:
+      aliases: ["content source"]
+      type: "categorical"
+      description: "Alias for origin_of_the_content"
+    
+    # Creator info
+    profile_name:
+      aliases: ["creator", "profile", "account", "profile_name"]
+      type: "text"
+      description: "Name of the content creator/profile"
+    
+    author_name:
+      aliases: ["author", "creator name", "author_name"]
+      type: "text"
+      description: "Author name"
+    
+    # Profile/account
+    profile_id:
+      aliases: ["profile id", "account id", "profile_id", "account_id"]
+      type: "text"
+      description: "Unique profile/account identifier"
+    
+    # Content labeling
+    labels:
+      aliases: ["tags", "label", "categories", "category", "topic", "topics"]
+      type: "categorical"
+      description: "Content labels or tags"
+  
+  # Fields that numerically default to 0 when NULL in ingestion
+  numeric_defaults:
+    - video_views
+    - total_video_view_time_sec
+    - avg_video_view_time_sec
+    - total_interactions
+    - total_reach
+    - total_impressions
+    - total_reactions
+    - total_comments
+    - total_shares
+    - organic_reach
+    - paid_reach
+  
+  # Metrics used for fingerprinting / duplicate detection
+  fingerprint_metrics:
+    - video_views
+    - total_video_view_time_sec
+    - avg_video_view_time_sec
+    - completion_rate
+    - total_interactions
+    - total_reach
+    - total_impressions
+    - total_reactions
+    - total_comments
+    - total_shares
+    - organic_reach
+    - paid_reach
+    - total_likes
+    - engagements
+  
+  # Query constraints
+  constraints:
+    max_rows_per_query: 200
+    default_limit: 20
+    min_limit: 1
+    max_limit: 100

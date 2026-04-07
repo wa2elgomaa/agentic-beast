@@ -7,6 +7,7 @@ from openpyxl import load_workbook
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.logging import get_logger
 from app.models import Document, SchemaMappingTemplate, TaskSchemaMapping, IngestionTask
 from app.schemas.ingestion import SchemaDetectResponse
@@ -208,7 +209,7 @@ class SchemaMappingService:
             logger.error("Failed to create template", error=str(e), name=name)
             raise
 
-    async def list_templates(self, limit: int = 100, offset: int = 0) -> Tuple[List[SchemaMappingTemplate], int]:
+    async def list_templates(self, limit: int = settings.db_max_rows_per_query, offset: int = 0) -> Tuple[List[SchemaMappingTemplate], int]:
         """List all schema mapping templates.
 
         Args:
@@ -344,6 +345,8 @@ class SchemaMappingService:
         source_columns: List[str],
         field_mappings: Dict[str, str],
         template_id: Optional[str] = None,
+        identifier_column: Optional[str] = None,
+        dedup_config: Optional[Dict] = None,
     ) -> TaskSchemaMapping:
         """Save or update schema mapping for a task.
 
@@ -352,6 +355,8 @@ class SchemaMappingService:
             source_columns: List of source column names.
             field_mappings: {source: target} mapping dict.
             template_id: Optional template ID to link.
+            identifier_column: Optional column name for deduplication.
+            dedup_config: Optional deduplication strategy configuration.
 
         Returns:
             TaskSchemaMapping.
@@ -379,6 +384,8 @@ class SchemaMappingService:
                 task_mapping.source_columns = source_columns
                 task_mapping.field_mappings = field_mappings
                 task_mapping.template_id = template_id
+                task_mapping.identifier_column = identifier_column
+                task_mapping.dedup_config = dedup_config
             else:
                 # Create new
                 task_mapping = TaskSchemaMapping(
@@ -386,6 +393,8 @@ class SchemaMappingService:
                     source_columns=source_columns,
                     field_mappings=field_mappings,
                     template_id=template_id,
+                    identifier_column=identifier_column,
+                    dedup_config=dedup_config,
                 )
 
             self.db.add(task_mapping)

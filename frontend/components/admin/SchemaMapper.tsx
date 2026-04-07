@@ -18,7 +18,9 @@ const DB_TARGET_FIELDS = [
   'row_number',
   'platform',
   'published_date',
+  'published_time',
   'reported_at',
+  'reported_time',
   'profile_name',
   'profile_url',
   'profile_id',
@@ -53,13 +55,36 @@ const DB_TARGET_FIELDS = [
   'label_groups',
 ] as const
 
-const DATETIME_SPLIT_FIELDS = new Set<string>(['published_date', 'reported_at'])
 const DUPLICATE_SOURCE_SEPARATOR = '::dup::'
 
-interface DateTimeSplitSelection {
-  enabled: boolean
-  dateColumn: string
-  timeColumn: string
+// Deduplication strategy descriptions
+const DEDUP_STRATEGIES = {
+  'subtract': {
+    label: 'Subtract (Delta)',
+    description: 'Calculate delta: new_value - sum(previous_values). Best for daily/weekly increment metrics.'
+  },
+  'keep': {
+    label: 'Keep (Replace)',
+    description: 'Use only the new value, replacing old. Best for current state metrics (followers, likes).'
+  },
+  'add': {
+    label: 'Add (Cumulative)',
+    description: 'Sum all values: new_value + sum(previous_values). Best for lifetime totals.'
+  },
+  'sum': {
+    label: 'Sum (Cumulative)',
+    description: 'Same as Add - cumulative sum of all values.'
+  },
+  'skip': {
+    label: 'Skip',
+    description: 'Don\'t store duplicate. Completely skip if seen before.'
+  }
+} as const
+
+interface DeduplicationConfig {
+  default_strategy: 'subtract' | 'keep' | 'add' | 'sum' | 'skip'
+  field_strategies?: Record<string, 'subtract' | 'keep' | 'add' | 'sum' | 'skip'>
+  is_metric?: Record<string, boolean>
 }
 
 function uniq(values: string[]): string[] {
@@ -113,10 +138,11 @@ function fromTargetLookup(targetLookup: Record<string, string>): Record<string, 
 export default function SchemaMapper({ task, initialMapping, onUpdated }: SchemaMappperProps) {
   const initialFieldMappings = initialMapping?.field_mappings || {}
   const initialSourceColumns = initialMapping?.source_columns || []
-  const initialDatetimeConfig = (task.adaptor_config?.datetime_split_mappings || {}) as Record<
-    string,
-    { date_column?: string; time_column?: string }
-  >
+  const initialDedupConfig = (initialMapping?.dedup_config || {
+    default_strategy: 'subtract',
+    field_strategies: {},
+    is_metric: {}
+  }) as DeduplicationConfig
 
   const [targetLookup, setTargetLookup] = useState<Record<string, string>>(toTargetLookup(initialFieldMappings))
   const [sourceColumns, setSourceColumns] = useState<string[]>(
@@ -125,17 +151,7 @@ export default function SchemaMapper({ task, initialMapping, onUpdated }: Schema
   const [availableColumns, setAvailableColumns] = useState<string[]>(
     uniq([...initialSourceColumns, ...Object.keys(initialFieldMappings)])
   )
-  const [dateTimeSplit, setDateTimeSplit] = useState<Record<string, DateTimeSplitSelection>>(() => {
-    const seeded: Record<string, DateTimeSplitSelection> = {}
-    for (const [target, cfg] of Object.entries(initialDatetimeConfig)) {
-      seeded[target] = {
-        enabled: true,
-        dateColumn: cfg.date_column || '',
-        timeColumn: cfg.time_column || '',
-      }
-    }
-    return seeded
-  })
+  const [dedupConfig, setDedupConfig] = useState<DeduplicationConfig>(initialDedupConfig)
 
   const [isSaving, setIsSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -144,6 +160,7 @@ export default function SchemaMapper({ task, initialMapping, onUpdated }: Schema
   const [templateName, setTemplateName] = useState('')
   const [templateDescr, setTemplateDescr] = useState('')
   const [columnInput, setColumnInput] = useState('')
+  const [identifierColumn, setIdentifierColumn] = useState<string>(initialMapping?.identifier_column || '')
 
   const customTargetMappings = Object.fromEntries(
     Object.entries(initialFieldMappings).filter(([, target]) => !DB_TARGET_FIELDS.includes(target as typeof DB_TARGET_FIELDS[number]))
@@ -205,21 +222,33 @@ export default function SchemaMapper({ task, initialMapping, onUpdated }: Schema
     setSuccess(false)
   }
 
-  const handleDateTimeSplitChange = (
-    target: string,
-    key: 'enabled' | 'dateColumn' | 'timeColumn',
-    value: string | boolean,
-  ) => {
-    setDateTimeSplit((prev) => {
-      const current = prev[target] || { enabled: false, dateColumn: '', timeColumn: '' }
-      return {
-        ...prev,
-        [target]: {
-          ...current,
-          [key]: value,
-        },
+  const handleToggleIsMetric = (target: string, isMetric: boolean) => {
+    setDedupConfig((prev) => ({
+      ...prev,
+      is_metric: {
+        ...prev.is_metric,
+        [target]: isMetric
       }
-    })
+    }))
+    setSuccess(false)
+  }
+
+  const handleChangeFieldStrategy = (target: string, strategy: string) => {
+    setDedupConfig((prev) => ({
+      ...prev,
+      field_strategies: {
+        ...prev.field_strategies,
+        [target]: strategy as 'subtract' | 'keep' | 'add' | 'sum' | 'skip'
+      }
+    }))
+    setSuccess(false)
+  }
+
+  const handleChangeDefaultStrategy = (strategy: string) => {
+    setDedupConfig((prev) => ({
+      ...prev,
+      default_strategy: strategy as 'subtract' | 'keep' | 'add' | 'sum' | 'skip'
+    }))
     setSuccess(false)
   }
 
@@ -228,37 +257,18 @@ export default function SchemaMapper({ task, initialMapping, onUpdated }: Schema
       setIsSaving(true)
       setError(null)
 
-      const normalizedTargetLookup = { ...targetLookup }
-      const datetimeSplitForConfig: Record<string, { date_column: string; time_column?: string }> = {}
-
-      for (const [target, cfg] of Object.entries(dateTimeSplit)) {
-        if (!cfg.enabled || !cfg.dateColumn.trim()) continue
-        normalizedTargetLookup[target] = cfg.dateColumn.trim()
-        datetimeSplitForConfig[target] = {
-          date_column: cfg.dateColumn.trim(),
-          ...(cfg.timeColumn.trim() ? { time_column: cfg.timeColumn.trim() } : {}),
-        }
-      }
-
       const fieldMappings = {
         ...customTargetMappings,
-        ...fromTargetLookup(normalizedTargetLookup),
+        ...fromTargetLookup(targetLookup),
       }
-      
+
       await updateTaskSchemaMapping(task.id, {
         source_columns: uniq([...sourceColumns, ...availableColumns]),
-        field_mappings: fieldMappings
+        field_mappings: fieldMappings,
+        identifier_column: identifierColumn || undefined,
+        dedup_config: dedupConfig
       })
 
-      // Persist optional datetime split metadata in task config for future ingestion logic.
-      const nextAdaptorConfig = { ...(task.adaptor_config || {}) }
-      if (Object.keys(datetimeSplitForConfig).length > 0) {
-        nextAdaptorConfig.datetime_split_mappings = datetimeSplitForConfig
-      } else {
-        delete nextAdaptorConfig.datetime_split_mappings
-      }
-      await updateIngestionTask(task.id, { adaptor_config: nextAdaptorConfig })
-      
       setSuccess(true)
       onUpdated()
       setTimeout(() => setSuccess(false), 3000)
@@ -326,6 +336,61 @@ export default function SchemaMapper({ task, initialMapping, onUpdated }: Schema
           <p className="text-green-800 dark:text-green-200">✓ Changes saved successfully</p>
         </div>
       )}
+
+      {/* Cross-Platform Deduplication Settings */}
+      <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+        <div className="space-y-3">
+          <div>
+            <label className="block text-sm font-medium text-gray-900 dark:text-white mb-2">
+              Deduplication Identifier Column
+              <span className="text-gray-400 font-normal"> (optional)</span>
+            </label>
+            <select
+              value={identifierColumn}
+              onChange={(e) => {
+                setIdentifierColumn(e.target.value)
+                setSuccess(false)
+              }}
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="">None (use sheet position)</option>
+              {availableColumns.map(col => (
+                <option key={col} value={col}>{col}</option>
+              ))}
+            </select>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+              When set, this column will be normalized and used to detect duplicate content across different platforms/sheets.
+              Leave empty to use only sheet position for matching.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Deduplication Strategy Configuration */}
+      <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-900 dark:text-white mb-2">
+              Default Deduplication Strategy
+            </label>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+              When duplicates are found, apply this strategy to all metric fields (unless overridden per-field below)
+            </p>
+            <select
+              value={dedupConfig.default_strategy}
+              onChange={(e) => handleChangeDefaultStrategy(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              {Object.entries(DEDUP_STRATEGIES).map(([key, { label }]) => (
+                <option key={key} value={key}>{label}</option>
+              ))}
+            </select>
+            <p className="text-xs text-gray-600 dark:text-gray-400 mt-2">
+              {DEDUP_STRATEGIES[dedupConfig.default_strategy].description}
+            </p>
+          </div>
+        </div>
+      </div>
 
       {/* Mapping Controls */}
       <div className="flex gap-3 flex-wrap">
@@ -422,16 +487,18 @@ export default function SchemaMapper({ task, initialMapping, onUpdated }: Schema
               <tr className="border-b border-gray-200 dark:border-gray-700">
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">DB Field</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Source Column</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Is Metric</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Dedup Strategy</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Status</th>
               </tr>
             </thead>
             <tbody>
               {DB_TARGET_FIELDS.map((target) => {
                 const selectedSource = targetLookup[target] || ''
-                const splitConfig = dateTimeSplit[target] || { enabled: false, dateColumn: '', timeColumn: '' }
-                const supportsSplit = DATETIME_SPLIT_FIELDS.has(target)
-                const isMatched = !!selectedSource || (supportsSplit && splitConfig.enabled && !!splitConfig.dateColumn)
-                
+                const isMatched = !!selectedSource
+                const isMetric = dedupConfig.is_metric?.[target] || false
+                const fieldStrategy = dedupConfig.field_strategies?.[target] || dedupConfig.default_strategy
+
                 return (
                   <tr key={target} className="border-b border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50 align-top">
                     <td className="px-6 py-4 text-sm text-gray-900 dark:text-white">
@@ -439,56 +506,47 @@ export default function SchemaMapper({ task, initialMapping, onUpdated }: Schema
                       <p className="font-mono text-xs text-gray-500 dark:text-gray-400 mt-1">{target}</p>
                     </td>
                     <td className="px-6 py-4">
-                      <div className="space-y-2">
-                        <select
-                          value={selectedSource}
-                          onChange={(e) => handleFieldMappingChange(target, e.target.value)}
-                          className="min-w-[240px] px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        >
-                          <option value="">Unselected</option>
-                          {availableColumns.map((column) => (
-                            <option key={`${target}-${column}`} value={column}>{column}</option>
-                          ))}
-                        </select>
-
-                        {supportsSplit && (
-                          <div className="p-3 rounded-lg bg-gray-50 dark:bg-gray-700/50 border border-gray-200 dark:border-gray-600 space-y-2">
-                            <label className="inline-flex items-center gap-2 text-xs text-gray-700 dark:text-gray-300">
-                              <input
-                                type="checkbox"
-                                checked={splitConfig.enabled}
-                                onChange={(e) => handleDateTimeSplitChange(target, 'enabled', e.target.checked)}
-                              />
-                              Use split Date + Time columns for this field
-                            </label>
-
-                            {splitConfig.enabled && (
-                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                                <select
-                                  value={splitConfig.dateColumn}
-                                  onChange={(e) => handleDateTimeSplitChange(target, 'dateColumn', e.target.value)}
-                                  className="px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-sm text-gray-900 dark:text-white"
-                                >
-                                  <option value="">Date column</option>
-                                  {availableColumns.map((column) => (
-                                    <option key={`${target}-date-${column}`} value={column}>{column}</option>
-                                  ))}
-                                </select>
-                                <select
-                                  value={splitConfig.timeColumn}
-                                  onChange={(e) => handleDateTimeSplitChange(target, 'timeColumn', e.target.value)}
-                                  className="px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-sm text-gray-900 dark:text-white"
-                                >
-                                  <option value="">Time column (optional)</option>
-                                  {availableColumns.map((column) => (
-                                    <option key={`${target}-time-${column}`} value={column}>{column}</option>
-                                  ))}
-                                </select>
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
+                      <select
+                        value={selectedSource}
+                        onChange={(e) => handleFieldMappingChange(target, e.target.value)}
+                        className="min-w-[240px] px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      >
+                        <option value="">Unselected</option>
+                        {availableColumns.map((column) => (
+                          <option key={`${target}-${column}`} value={column}>{column}</option>
+                        ))}
+                      </select>
+                    </td>
+                    <td className="px-6 py-4">
+                      <label className="inline-flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={isMetric}
+                          onChange={(e) => handleToggleIsMetric(target, e.target.checked)}
+                          className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                        />
+                        <span className="text-xs text-gray-600 dark:text-gray-400">{isMetric ? 'Yes' : 'No'}</span>
+                      </label>
+                    </td>
+                    <td className="px-6 py-4">
+                      {isMetric ? (
+                        <div className="min-w-[140px]">
+                          <select
+                            value={fieldStrategy}
+                            onChange={(e) => handleChangeFieldStrategy(target, e.target.value)}
+                            className="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          >
+                            {Object.entries(DEDUP_STRATEGIES).map(([key, { label }]) => (
+                              <option key={key} value={key}>{label}</option>
+                            ))}
+                          </select>
+                          <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 max-w-xs">
+                            {DEDUP_STRATEGIES[fieldStrategy as keyof typeof DEDUP_STRATEGIES].description}
+                          </p>
+                        </div>
+                      ) : (
+                        <span className="text-xs text-gray-500 dark:text-gray-400">N/A</span>
+                      )}
                     </td>
                     <td className="px-6 py-4">
                       {isMatched ? (

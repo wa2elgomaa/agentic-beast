@@ -14,7 +14,9 @@ CREATE TABLE IF NOT EXISTS documents (
 
   -- Profile & Post Information
   published_date date,
+  published_time time,
   reported_at date,
+  reported_time time,
   profile_name text,
   profile_url text,
   profile_id text,

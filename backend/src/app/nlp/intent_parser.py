@@ -1,7 +1,7 @@
 """Structured query parser: converts a user message → StructuredQueryObject.
 
-Uses Ollama's ``format=json`` constraint so the model is *forced* to emit
-valid JSON, eliminating free-text hallucinations at the parse stage.
+Uses provider-aware JSON chat generation so parse behavior works for both
+Ollama and OpenAI while keeping strict JSON output constraints.
 """
 
 from __future__ import annotations
@@ -10,11 +10,11 @@ import json
 import logging
 from typing import Optional
 
-import httpx
 from pydantic import BaseModel, Field, field_validator
 
 from app.config import settings
 from app.nlp.column_mapper import WHITELISTED_METRICS, WHITELISTED_DIMENSIONS
+from app.utilities.json_chat import generate_json_object
 
 logger = logging.getLogger(__name__)
 
@@ -306,8 +306,8 @@ async def parse_query(
 ) -> StructuredQueryObject:
     """Parse a natural language analytics query into a StructuredQueryObject.
 
-    Sends the message to Ollama with ``format=json`` to guarantee valid JSON
-    output. Validates the result against WHITELISTED_METRICS.
+    Sends the message to the configured provider with strict JSON output and
+    validates the result against WHITELISTED_METRICS.
 
     Args:
         message: User's natural language query.
@@ -318,9 +318,12 @@ async def parse_query(
         StructuredQueryObject with parsed parameters.
 
     Raises:
-        UnsupportedQueryError: If Ollama is unreachable or returns invalid JSON.
+        UnsupportedQueryError: If provider is unreachable or returns invalid JSON.
     """
-    url = f"{settings.ollama_base_url.rstrip('/')}/api/chat"
+    if settings.ai_provider in ("openai", "strands"):
+        parse_model = (settings.openai_parse_model or "").strip() or settings.openai_model
+    else:
+        parse_model = settings.ollama_model
 
     # Build message list: system + few-shot + optional history + current query
     messages: list[dict] = [
@@ -337,30 +340,15 @@ async def parse_query(
             messages.append({"role": role, "content": str(content)})
     messages.append({"role": "user", "content": message})
 
-    payload = {
-        "model": settings.ollama_model,
-        "format": "json",
-        "stream": False,
-        "messages": messages,
-    }
-
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(url, json=payload)
-            resp.raise_for_status()
-            data = resp.json()
-    except httpx.HTTPStatusError as exc:
-        logger.error("parse_query: Ollama HTTP error", extra={"error": str(exc)})
-        raise UnsupportedQueryError(f"Ollama returned HTTP {exc.response.status_code}") from exc
-    except httpx.RequestError as exc:
-        logger.error("parse_query: Ollama unreachable", extra={"error": str(exc)})
-        raise UnsupportedQueryError(f"Ollama unreachable: {exc}") from exc
-
-    raw_content = data.get("message", {}).get("content", "{}")
-    try:
-        parsed_dict = json.loads(raw_content)
-    except json.JSONDecodeError as exc:
-        logger.error("parse_query: non-JSON from Ollama", extra={"raw": raw_content[:200]})
-        raise UnsupportedQueryError("Ollama returned non-JSON content") from exc
+        parsed_dict = await generate_json_object(
+            messages=messages,
+            model=parse_model,
+            timeout_seconds=30.0,
+            purpose="sqo_parse",
+        )
+    except Exception as exc:
+        logger.error("parse_query failed", extra={"error": str(exc), "model": parse_model})
+        raise UnsupportedQueryError(str(exc)) from exc
 
     return StructuredQueryObject.model_validate(parsed_dict)

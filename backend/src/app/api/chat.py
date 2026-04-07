@@ -22,6 +22,7 @@ from app.schemas.chat import (
     ConversationTitleUpdateRequest,
 )
 from app.api.users import get_current_user
+from app.config import settings
 from app.services.chat_service import ChatService
 
 logger = get_logger(__name__)
@@ -290,7 +291,7 @@ async def get_conversation_context(
     conversation_id: str,
     chat_service: Annotated[ChatService, Depends(get_chat_service)],
     current_user: Annotated[User, Depends(get_current_user)],
-    limit: int = 10,
+    limit: int = settings.db_default_limit,
 ):
     """Get the last N conversation messages for LLM context."""
     try:

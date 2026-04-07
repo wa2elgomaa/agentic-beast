@@ -25,14 +25,19 @@ _worker_loop_pid: int | None = None
 
 
 def run_async_in_worker(coro: Coroutine):
-    """Run async code on a persistent event loop scoped to the current worker process."""
+    """Run async code on a persistent event loop scoped to the current worker process.
+    
+    Reuses event loop per worker process to maintain greenlet context for SQLAlchemy.
+    Creates new loop if closed or in different process.
+    """
     global _worker_loop, _worker_loop_pid
 
     current_pid = os.getpid()
+    # Check if we need a new loop: None, closed, or different process
     if _worker_loop is None or _worker_loop.is_closed() or _worker_loop_pid != current_pid:
         _worker_loop = asyncio.new_event_loop()
-        _worker_loop_pid = current_pid
         asyncio.set_event_loop(_worker_loop)
+        _worker_loop_pid = current_pid
 
     return _worker_loop.run_until_complete(coro)
 
@@ -58,24 +63,8 @@ celery_config = dict(
 
 # Celery prefork is unstable on macOS/Python 3.13 in local development.
 if IS_MACOS:
-    celery_config["worker_pool"] = "solo"
-    celery_config["worker_concurrency"] = 1
+    celery_app.conf.update(
+        worker_pool="solo",
+    )
 
-celery_app.conf.update(**celery_config)
-
-# Beat schedule for periodic tasks (Gmail monitoring is now handled by APScheduler)
-celery_app.conf.beat_schedule = {
-    # Recompute summaries daily at 2 AM UTC
-    "recompute-summaries": {
-        "task": "app.tasks.summary_compute.recompute_daily_summaries",
-        "schedule": crontab(hour=2, minute=0),
-    },
-}
-
-# Import task modules so they register with the app on startup.
-from app.tasks import email_monitor, excel_ingest, ingestion_tasks, summary_compute  # noqa: E402,F401
-
-@celery_app.task(bind=True)
-def debug_task(self):
-    """Debug task for testing Celery."""
-    print(f"Request: {self.request!r}")
+celery_app.conf.update(celery_config)

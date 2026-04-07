@@ -1,7 +1,7 @@
 """Ingestion API request and response schemas."""
 
 from datetime import date, datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -119,6 +119,8 @@ class IngestionTaskResponse(BaseModel):
     cron_expression: Optional[str]
     run_at: Optional[datetime]
     status: str
+    deduplication_enabled: bool
+    dedup_lookback_imports: Optional[int]
     created_by: Optional[UUID]
     created_at: datetime
     updated_at: datetime
@@ -139,13 +141,30 @@ class IngestionTaskRunResponse(BaseModel):
     rows_inserted: int
     rows_updated: int
     rows_failed: int
+    total_rows_processed: int
+    total_duplicates_found: int
+    total_deltas_calculated: int
+    deduplication_enabled: bool
     error_message: Optional[str]
+    error_type: Optional[str]  # data_error, auth_error, network_error
+    error_code: Optional[str]  # invalid_grant, unauthorized, etc.
     run_metadata: Optional[Dict]
     created_at: datetime
 
     class Config:
         """Pydantic config."""
         from_attributes = True
+
+
+class DeduplicationSummaryResponse(BaseModel):
+    """Summary of deduplication results for a run."""
+
+    run_id: UUID
+    total_rows_processed: int
+    total_duplicates_found: int
+    total_deltas_calculated: int
+    deduplication_enabled: bool
+    duplicates_summary: Dict[str, Any]  # Detailed breakdown of duplicates
 
 
 # ============================================================================
@@ -165,7 +184,9 @@ class SchemaMappingUpdate(BaseModel):
     """Request to save/update task schema mapping."""
 
     source_columns: List[str]
-    field_mappings: Dict[str, str]  # {source: target}
+    field_mappings: Dict[str, Any]  # {source: target or {target, is_metric, is_datetime_split, datetime_split_companion_field}}
+    identifier_column: Optional[str] = None  # Column name for cross-platform deduplication
+    dedup_config: Optional[Dict[str, Any]] = None  # Deduplication strategy configuration
     template_id: Optional[UUID] = None  # Optional: apply existing template
 
 
@@ -202,7 +223,9 @@ class TaskSchemaMappingResponse(BaseModel):
     task_id: UUID
     template_id: Optional[UUID]
     source_columns: List[str]
-    field_mappings: Dict[str, str]
+    field_mappings: Dict[str, Any]  # Can include per-field config with is_metric, is_datetime_split, etc.
+    identifier_column: Optional[str]  # Column name for cross-platform matching
+    dedup_config: Optional[Dict[str, Any]]  # Deduplication strategy configuration
     created_at: datetime
     updated_at: datetime
 
@@ -271,3 +294,48 @@ class GmailExchangeCodeResponse(BaseModel):
     connected_email: str
     message: str = "Gmail account linked successfully"
 
+
+
+# ============================================================================
+# Gmail Credential Management Schemas
+# ============================================================================
+
+
+class CredentialStatusResponse(BaseModel):
+    """Current credential status and health information."""
+
+    task_id: UUID
+    status: str  # active | expired | invalid | needs_refresh | pending_auth
+    health_score: int  # 0-100
+    account_email: Optional[str]
+    consecutive_failures: int
+    max_consecutive_failures: int
+    last_used_at: Optional[str]
+    auth_established_at: Optional[str]
+    token_refreshed_at: Optional[str]
+    last_error_code: Optional[str]
+    last_error_message: Optional[str]
+    created_at: str
+    updated_at: str
+
+
+class CredentialAuditLogEntryResponse(BaseModel):
+    """Individual credential audit log entry."""
+
+    id: UUID
+    task_id: UUID
+    event_type: str  # authenticated | token_refreshed | auth_failed | invalidated | manually_cleared
+    account_email: Optional[str]
+    error_code: Optional[str]
+    error_message: Optional[str]
+    action_by: Optional[UUID]
+    created_at: str
+
+
+class CredentialAuditLogResponse(BaseModel):
+    """Paginated credential audit log."""
+
+    audit_log: List[CredentialAuditLogEntryResponse]
+    limit: int
+    offset: int
+    total: int

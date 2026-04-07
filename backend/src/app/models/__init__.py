@@ -11,13 +11,18 @@ from .agent import IntentSchema
 from .ingestion_task import (
 	IngestionTask,
 	IngestionTaskRun,
+	IngestionDeduplication,
 	SchemaMappingTemplate,
 	TaskSchemaMapping,
 	UploadedFile,
+	CronTestRun,
+	GmailCredentialStatus,
+	GmailCredentialAuditLog,
 	AdaptorType,
 	ScheduleType,
 	TaskStatus,
 	RunStatus,
+	DeduplicationStrategy,
 )
 
 __all__ = [
@@ -34,9 +39,13 @@ __all__ = [
 	"IntentSchema",
 	"IngestionTask",
 	"IngestionTaskRun",
+	"IngestionDeduplication",
 	"SchemaMappingTemplate",
 	"TaskSchemaMapping",
 	"UploadedFile",
+	"CronTestRun",
+	"GmailCredentialStatus",
+	"GmailCredentialAuditLog",
 	"AdaptorType",
 	"ScheduleType",
 	"TaskStatus",

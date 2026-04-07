@@ -4,6 +4,7 @@ docker-compose up -d  # PostgreSQL, Redis, MongoDB, Prometheus, Grafana
 
 # Run migrations
 alembic upgrade head
+docker compose exec app alembic current
 
 # Start app
 python3 -m venv .venv

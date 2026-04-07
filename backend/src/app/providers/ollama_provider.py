@@ -43,7 +43,7 @@ class OllamaProvider(AIProvider):
         super().__init__(chosen_model, **kwargs)
         self.base_url = (base_url or settings.ollama_base_url).rstrip("/")
         self.embedding_model = embedding_model or settings.ollama_embedding_model
-        self.client = httpx.AsyncClient(timeout=120.0)
+        self.client = httpx.AsyncClient(timeout=float(settings.http_client_timeout_seconds))
         logger.info(
             "Ollama provider initialized",
             model=self.model,
@@ -108,7 +108,7 @@ class OllamaProvider(AIProvider):
             response = await self.client.post(
                 f"{self.base_url}/api/chat",
                 json=payload,
-                timeout=120.0  # Generous timeout for local processing
+                timeout=float(settings.http_client_timeout_seconds),
             )
             response.raise_for_status()
 
@@ -183,7 +183,7 @@ class OllamaProvider(AIProvider):
                     "model": self.embedding_model,
                     "prompt": text
                 },
-                timeout=60.0
+                timeout=float(settings.http_client_timeout_seconds)
             )
             response.raise_for_status()
 

@@ -1,0 +1,86 @@
+intents:
+  analytics:
+    description: "Analyze metrics, query content performance, trends, publishing insights"
+    examples:
+      - "What are the top 5 viewed videos?"
+      - "When is the best day to post on Instagram?"
+      - "Compare engagements on TikTok vs YouTube"
+      - "Show me reach by platform"
+    aliases: 
+      - "query_metrics"
+      - "publishing_insights"
+      - "trend_analysis"
+    tools:
+      - "run_analytics_query"
+      - "run_code_interpreter"
+    default_agent: "analytics_agent"
+  
+  tagging:
+    description: "Generate or suggest content tags based on topic or content"
+    examples:
+      - "Suggest tags for this article about AI"
+      - "What tags would fit this post about marketing?"
+      - "Generate tags for video content"
+    aliases:
+      - "tag_suggestions"
+      - "generate_tags"
+    tools:
+      - "tag_generator"
+    default_agent: "tagging_agent"
+  
+  recommendation:
+    description: "Recommend content, articles, or resources"
+    examples:
+      - "Recommend articles about machine learning"
+      - "What content should I read about RAG systems?"
+      - "Find related posts on this topic"
+    aliases:
+      - "article_recommendations"
+      - "document_qa"
+      - "content_search"
+    tools:
+      - "recommendation_engine"
+    default_agent: "recommendation_agent"
+  
+  general:
+    description: "General conversation, questions not related to analytics or tagging"
+    examples:
+      - "Hello, how are you?"
+      - "What can you help me with?"
+      - "Tell me about the platform"
+    aliases: []
+    tools:
+      - "chat"
+    default_agent: "general_agent"
+
+# Intent classification settings
+classification_settings:
+  confidence_threshold: 0.7
+  fallback_intent: "general"
+  allow_intent_override: true
+  retry_on_invalid_intent: true
+  max_classification_retries: 2
+  model: "gpt-4o-mini"
+  temperature: 0.1
+
+# Intent routing rules
+routing_rules:
+  analytics:
+    requires_conversation_context: true
+    allows_followup_detection: true
+    supports_code_execution: true
+  
+  tagging:
+    requires_conversation_context: false
+    allows_followup_detection: false
+    supports_code_execution: false
+  
+  recommendation:
+    requires_conversation_context: true
+    allows_followup_detection: false
+    supports_code_execution: false
+  
+  general:
+    requires_conversation_context: false
+    allows_followup_detection: false
+    supports_code_execution: false

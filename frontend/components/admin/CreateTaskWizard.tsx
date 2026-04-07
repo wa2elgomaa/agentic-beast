@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { AdaptorType, ScheduleType, TaskStatus, IngestionTaskCreateInput } from '@/types'
 import { createIngestionTask } from '@/lib/api'
 import { AlertCircle, ChevronRight, ChevronLeft } from 'lucide-react'
+import CronBuilder from './CronBuilder'
 
 function toUtcIsoOrUndefined(localDateTime: string | undefined): string | undefined {
   if (!localDateTime) return undefined
@@ -32,6 +33,13 @@ export default function CreateTaskWizard() {
     setFormData(prev => ({
       ...prev,
       [name]: value
+    }))
+  }
+
+  const handleCronChange = (cron: string) => {
+    setFormData(prev => ({
+      ...prev,
+      cron_expression: cron
     }))
   }
 
@@ -169,7 +177,7 @@ export default function CreateTaskWizard() {
                       type="text"
                       value={formData.adaptor_config.gmail_query || ''}
                       onChange={(e) => handleConfigChange('gmail_query', e.target.value)}
-                      placeholder="has:attachment is:unread"
+                      placeholder=""
                       className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
                     />
                   </div>
@@ -196,6 +204,45 @@ export default function CreateTaskWizard() {
                       className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
                     />
                     <p className="text-xs text-gray-600 dark:text-gray-400 mt-2">Example: Scheduled Report (Emplifi - ...)</p>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-900 dark:text-white mb-2">Attachment File Extensions (optional)</label>
+                    <div className="space-y-2">
+                      <div className="flex items-center">
+                        <input
+                          type="checkbox"
+                          id="ext-xlsx"
+                          checked={(formData.adaptor_config.allowed_extensions || []).includes('xlsx')}
+                          onChange={(e) => {
+                            const exts = formData.adaptor_config.allowed_extensions || []
+                            const updated = e.target.checked
+                              ? [...new Set([...exts, 'xlsx'])]
+                              : exts.filter(x => x !== 'xlsx')
+                            handleConfigChange('allowed_extensions', updated)
+                          }}
+                          className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                        />
+                        <label htmlFor="ext-xlsx" className="ml-2 text-sm text-gray-700 dark:text-gray-300">Excel (.xlsx)</label>
+                      </div>
+                      <div className="flex items-center">
+                        <input
+                          type="checkbox"
+                          id="ext-csv"
+                          checked={(formData.adaptor_config.allowed_extensions || []).includes('csv')}
+                          onChange={(e) => {
+                            const exts = formData.adaptor_config.allowed_extensions || []
+                            const updated = e.target.checked
+                              ? [...new Set([...exts, 'csv'])]
+                              : exts.filter(x => x !== 'csv')
+                            handleConfigChange('allowed_extensions', updated)
+                          }}
+                          className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                        />
+                        <label htmlFor="ext-csv" className="ml-2 text-sm text-gray-700 dark:text-gray-300">CSV (.csv)</label>
+                      </div>
+                    </div>
+                    <p className="text-xs text-gray-600 dark:text-gray-400 mt-2">Only attachments with these extensions will be processed. Leave empty to accept all.</p>
                   </div>
                 </div>
               )}
@@ -269,16 +316,11 @@ export default function CreateTaskWizard() {
 
                   {formData.schedule_type === 'recurring' && (
                     <div>
-                      <label className="block text-sm font-medium text-gray-900 dark:text-white mb-2">Cron Expression</label>
-                      <input
-                        type="text"
-                        name="cron_expression"
+                      <label className="block text-sm font-medium text-gray-900 dark:text-white mb-3">Recurring Schedule</label>
+                      <CronBuilder
                         value={formData.cron_expression || ''}
-                        onChange={handleInputChange}
-                        placeholder="0 0 * * * (Daily at midnight)"
-                        className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        onChange={handleCronChange}
                       />
-                      <p className="text-xs text-gray-600 dark:text-gray-400 mt-2">Use standard cron syntax (minute hour day month weekday)</p>
                     </div>
                   )}
                 </>

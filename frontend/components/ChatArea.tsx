@@ -137,6 +137,12 @@ export default function ChatArea({
         operation: response.operation,
         operationData: response.data,
         operationMetadata: response.metadata,
+        // Expose chart/code interpreter output via typed metadata field
+        metadata: response.metadata.chart_b64 || response.metadata.code_output ? {
+          chart_b64: response.metadata.chart_b64,
+          code_output: response.metadata.code_output,
+          generated_sql: response.metadata.generated_sql,
+        } : undefined,
         conversation_id: resolvedConversationId,
         isLoading: false,
       })
@@ -202,6 +208,11 @@ export default function ChatArea({
         operation: data.operation,
         operationData: data.data,
         operationMetadata: data.metadata,
+        metadata: data.metadata.chart_b64 || data.metadata.code_output ? {
+          chart_b64: data.metadata.chart_b64,
+          code_output: data.metadata.code_output,
+          generated_sql: data.metadata.generated_sql,
+        } : undefined,
         isLoading: false,
       })
     } catch (error) {

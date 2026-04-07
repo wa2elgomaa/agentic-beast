@@ -97,14 +97,33 @@ export default function TaskRunHistory({ runs, onRefresh, onCancelRun, canceling
                   <td className="px-6 py-4 text-sm font-medium text-green-700 dark:text-green-300">{run.rows_inserted}</td>
                   <td className="px-6 py-4 text-sm font-medium text-blue-700 dark:text-blue-300">{run.rows_updated}</td>
                   <td className="px-6 py-4 text-sm font-medium text-red-700 dark:text-red-300">{run.rows_failed}</td>
-                  <td className="px-6 py-4 text-sm text-gray-600 dark:text-gray-400 max-w-xs truncate">
-                    {run.error_message ? (
-                      <span title={run.error_message} className="text-red-600 dark:text-red-400">
-                        {run.error_message.length > 50 ? `${run.error_message.substring(0, 50)}...` : run.error_message}
-                      </span>
-                    ) : (
-                      '-'
-                    )}
+                  <td className="px-6 py-4 text-sm text-gray-600 dark:text-gray-400 max-w-xs">
+                    <div className="space-y-1">
+                      {run.error_type && (
+                        <div className="flex gap-1">
+                          <span className={`px-2 py-1 rounded text-xs font-medium ${
+                            run.error_type === 'auth_error' 
+                              ? 'bg-orange-100 dark:bg-orange-900 text-orange-800 dark:text-orange-200'
+                              : run.error_type === 'network_error'
+                              ? 'bg-purple-100 dark:bg-purple-900 text-purple-800 dark:text-purple-200'
+                              : 'bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200'
+                          }`}>
+                            {run.error_type}
+                          </span>
+                          {run.error_code && (
+                            <span className="px-2 py-1 text-xs font-mono bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded">
+                              {run.error_code}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      {run.error_message && (
+                        <span title={run.error_message} className="text-red-600 dark:text-red-400 block truncate text-xs">
+                          {run.error_message.length > 50 ? `${run.error_message.substring(0, 50)}...` : run.error_message}
+                        </span>
+                      )}
+                      {!run.error_type && !run.error_message && <span>-</span>}
+                    </div>
                   </td>
                   <td className="px-6 py-4 text-sm text-gray-600 dark:text-gray-400">
                     {['pending', 'running'].includes(run.status) && onCancelRun ? (

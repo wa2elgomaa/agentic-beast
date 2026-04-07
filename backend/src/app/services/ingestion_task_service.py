@@ -7,6 +7,7 @@ from uuid import UUID
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.logging import get_logger
 from app.models import IngestionTask, IngestionTaskRun, AdaptorType, ScheduleType, TaskStatus, RunStatus
 
@@ -121,7 +122,7 @@ class IngestionTaskService:
         self,
         adaptor_type: Optional[str] = None,
         status: Optional[str] = None,
-        limit: int = 100,
+        limit: int = settings.db_max_rows_per_query,
         offset: int = 0,
     ) -> Tuple[List[IngestionTask], int]:
         """List ingestion tasks with optional filtering.
@@ -324,7 +325,7 @@ class IngestionTaskService:
         self,
         task_id: UUID,
         status: Optional[str] = None,
-        limit: int = 50,
+        limit: int = settings.db_default_limit,
         offset: int = 0,
     ) -> Tuple[List[IngestionTaskRun], int]:
         """List runs for a task with optional filtering.

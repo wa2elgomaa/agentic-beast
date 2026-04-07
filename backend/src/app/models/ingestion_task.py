@@ -44,6 +44,27 @@ class RunStatus(str, Enum):
     CANCELED = "canceled"
 
 
+class DeduplicationStrategy(str, Enum):
+    """Metric handling strategies for duplicate rows."""
+    SUBTRACT = "subtract"  # New value - sum(previous values) = delta
+    KEEP = "keep"  # Use new value only (replace old)
+    ADD = "add"  # Sum all values (cumulative: new + sum(previous))
+    SUM = "sum"  # Same as ADD, keep last value
+    SKIP = "skip"  # Don't store duplicate (already have this metric)
+
+    @staticmethod
+    def get_description(strategy: str) -> str:
+        """Get human-readable description of strategy."""
+        descriptions = {
+            "subtract": "Calculate delta (new - previous sum) - use for weekly/daily metrics",
+            "keep": "Keep new value only (replace) - use for current state metrics",
+            "add": "Sum all values (cumulative) - use for lifetime totals",
+            "sum": "Cumulative sum - same as Add",
+            "skip": "Skip duplicate - don't store if already processed",
+        }
+        return descriptions.get(strategy, "Unknown strategy")
+
+
 class IngestionTask(Base):
     """Ingestion task configuration."""
     
@@ -68,7 +89,15 @@ class IngestionTask(Base):
     # Status
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     status: Mapped[str] = mapped_column(SQLEnum(TaskStatus, native_enum=False), nullable=False, default=TaskStatus.ACTIVE)
-    
+
+    # Test execution configuration
+    test_execution_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    test_execution_interval_minutes: Mapped[int] = mapped_column(Integer, default=60, nullable=False)
+
+    # Deduplication configuration
+    deduplication_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    dedup_lookback_imports: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # Number of previous imports to check for duplicates
+
     # Audit
     created_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP, nullable=False, server_default=func.current_timestamp())
@@ -78,6 +107,7 @@ class IngestionTask(Base):
     runs: Mapped[list["IngestionTaskRun"]] = relationship("IngestionTaskRun", back_populates="task", cascade="all, delete-orphan")
     schema_mapping: Mapped[Optional["TaskSchemaMapping"]] = relationship("TaskSchemaMapping", back_populates="task", uselist=False, cascade="all, delete-orphan")
     uploaded_files: Mapped[list["UploadedFile"]] = relationship("UploadedFile", back_populates="task", cascade="all, delete-orphan")
+    test_runs: Mapped[list["CronTestRun"]] = relationship("CronTestRun", back_populates="task", cascade="all, delete-orphan")
 
     def __repr__(self) -> str:
         """String representation."""
@@ -109,7 +139,15 @@ class IngestionTaskRun(Base):
     
     # Error tracking
     error_message: Mapped[Optional[str]] = mapped_column(Text)
-    
+    error_type: Mapped[Optional[str]] = mapped_column(String(50))  # data_error, auth_error, network_error
+    error_code: Mapped[Optional[str]] = mapped_column(String(50))  # invalid_grant, unauthorized, etc.
+
+    # Deduplication tracking
+    total_rows_processed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_duplicates_found: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_deltas_calculated: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    deduplication_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
     # Metadata
     run_metadata: Mapped[Optional[dict]] = mapped_column(JSONB)  # e.g. {"file_name": "...", "email_subject": "..."}
     
@@ -169,7 +207,33 @@ class TaskSchemaMapping(Base):
     # Schema configuration
     source_columns: Mapped[list] = mapped_column(JSONB, nullable=False)  # ["col1", "col2", ...]
     field_mappings: Mapped[dict] = mapped_column(JSONB, nullable=False)  # {"source_col": "target_field", ...}
-    
+
+    # Field configuration metadata (stored in field_mappings for backward compatibility)
+    # field_mappings can include per-field config:
+    # {
+    #   "source_col": {
+    #     "target": "target_field",
+    #     "is_metric": true,  # Mark as metric column for delta calculation
+    #     "is_datetime_split": true,  # Split date/time into separate fields
+    #     "datetime_split_companion_field": "published_time"  # Companion field name
+    #   }
+    # }
+
+    # Identifier configuration
+    identifier_column: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)  # Column name for cross-platform matching
+
+    # Deduplication strategy configuration
+    # Stored as JSONB to support per-field strategies:
+    # {
+    #   "default_strategy": "subtract",  # Global default strategy
+    #   "field_strategies": {
+    #     "video_views": "subtract",  # Weekly views - calculate delta
+    #     "total_followers": "keep",   # Current follower count - keep latest
+    #     "lifetime_reach": "add",     # Lifetime metric - sum all
+    #   }
+    # }
+    dedup_config: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)  # Dedup strategy configuration
+
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP, nullable=False, server_default=func.current_timestamp())
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP, nullable=False, server_default=func.current_timestamp(), onupdate=func.current_timestamp())
@@ -214,3 +278,164 @@ class UploadedFile(Base):
     def __repr__(self) -> str:
         """String representation."""
         return f"<UploadedFile(id={self.id}, filename='{self.original_filename}', s3_key='{self.s3_key}')>"
+
+
+class CronTestRun(Base):
+    """Test execution record for monitoring cron task scheduling."""
+
+    __tablename__ = "cron_test_runs"
+
+    # Primary key
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+
+    # Foreign key
+    task_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("ingestion_tasks.id", ondelete="CASCADE"), nullable=False)
+
+    # Execution details
+    executed_at: Mapped[datetime] = mapped_column(TIMESTAMP, nullable=False, server_default=func.current_timestamp())
+    status: Mapped[str] = mapped_column(String(50), nullable=False)  # SUCCESS, FAILED, TIMEOUT
+    duration_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    logs: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Relationships
+    task: Mapped["IngestionTask"] = relationship("IngestionTask", back_populates="test_runs")
+
+    def __repr__(self) -> str:
+        """String representation."""
+        return f"<CronTestRun(id={self.id}, task_id={self.task_id}, status='{self.status}')>"
+
+
+class GmailCredentialStatus(Base):
+    """Track the status and health of Gmail OAuth credentials."""
+
+    __tablename__ = "gmail_credential_status"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    task_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("ingestion_tasks.id", ondelete="CASCADE"), nullable=False, unique=True)
+    
+    status: Mapped[str] = mapped_column(String(50), nullable=False, default="pending_auth")
+    health_score: Mapped[int] = mapped_column(Integer, nullable=False, default=100)
+    account_email: Mapped[Optional[str]] = mapped_column(String(255))
+    scopes: Mapped[Optional[str]] = mapped_column(Text)
+    
+    last_used_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP)
+    last_auth_attempt_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP)
+    auth_established_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP)
+    token_refreshed_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP)
+    
+    last_error_code: Mapped[Optional[str]] = mapped_column(String(50))
+    last_error_message: Mapped[Optional[str]] = mapped_column(Text)
+    consecutive_failures: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_consecutive_failures: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+    
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, nullable=False, server_default=func.current_timestamp())
+    updated_at: Mapped[datetime] = mapped_column(TIMESTAMP, nullable=False, server_default=func.current_timestamp(), onupdate=func.current_timestamp())
+    
+    task: Mapped["IngestionTask"] = relationship("IngestionTask", foreign_keys=[task_id])
+
+    def __repr__(self) -> str:
+        """String representation."""
+        return f"<GmailCredentialStatus(task_id={self.task_id}, status=\'{self.status}\', health={self.health_score})>"
+
+
+class GmailCredentialAuditLog(Base):
+    """Audit trail for Gmail credential lifecycle events."""
+
+    __tablename__ = "gmail_credential_audit_log"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    task_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("ingestion_tasks.id", ondelete="CASCADE"), nullable=False)
+    
+    event_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    account_email: Mapped[Optional[str]] = mapped_column(String(255))
+    error_code: Mapped[Optional[str]] = mapped_column(String(50))
+    error_message: Mapped[Optional[str]] = mapped_column(Text)
+    details: Mapped[Optional[dict]] = mapped_column(JSONB)
+    action_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True))
+    
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, nullable=False, server_default=func.current_timestamp())
+    
+    task: Mapped["IngestionTask"] = relationship("IngestionTask", foreign_keys=[task_id])
+
+    def __repr__(self) -> str:
+        """String representation."""
+        return f"<GmailCredentialAuditLog(task_id={self.task_id}, event_type=\'{self.event_type}\')>"
+
+
+
+class IngestionDeduplication(Base):
+    """Track deduplication actions and delta calculations for row matching."""
+
+    __tablename__ = "ingestion_deduplication"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    
+    # Foreign key to the run this deduplication tracking is for
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ingestion_task_runs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True
+    )
+    
+    # Row tracking
+    row_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    cleaned_identifier: Mapped[str] = mapped_column(String(150), nullable=False)
+    beast_uuid: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    
+    # Deduplication status and action
+    is_duplicate: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
+    duplicate_of_run_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ingestion_task_runs.id", ondelete="SET NULL"),
+        nullable=True
+    )
+    dedup_action: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        default="first_occurrence"
+    )  # first_occurrence, inserted_delta, skipped
+    
+    # Metrics calculation details
+    metrics_calculation_summary: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    # Example: {
+    #   "views": {"previous_sum": 1300, "new_value": 1850, "delta": 550},
+    #   "likes": {"previous_sum": 150, "new_value": 200, "delta": 50}
+    # }
+    
+    # Timestamps
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP,
+        nullable=False,
+        server_default=func.current_timestamp()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP,
+        nullable=False,
+        server_default=func.current_timestamp(),
+        onupdate=func.current_timestamp()
+    )
+    
+    # Relationships
+    run: Mapped["IngestionTaskRun"] = relationship(
+        "IngestionTaskRun",
+        foreign_keys=[run_id],
+        lazy="joined"
+    )
+    duplicate_of_run: Mapped[Optional["IngestionTaskRun"]] = relationship(
+        "IngestionTaskRun",
+        foreign_keys=[duplicate_of_run_id],
+        lazy="joined"
+    )
+    
+    def __repr__(self) -> str:
+        """String representation."""
+        return (
+            f"<IngestionDeduplication("
+            f"run_id={self.run_id}, "
+            f"row={self.row_number}, "
+            f"duplicate={self.is_duplicate}, "
+            f"action={self.dedup_action}"
+            f")>"
+        )

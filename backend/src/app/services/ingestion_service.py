@@ -14,12 +14,23 @@ from sqlalchemy.sql import func
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import AsyncSessionLocal
 
-from app.adapters.gmail_adapter import GmailAdapter
+from app.adapters.gmail_adapter import (
+    GmailAdapter,
+    CredentialExpiredError,
+    TemporaryAuthError,
+)
+from app.services.gmail_credential_service import (
+    get_gmail_credential_service,
+    GmailCredentialHealthStatus,
+    ErrorCode,
+)
 from app.config import settings
 from app.logging import get_logger
-from app.models import Document, IngestionTask, IngestionTaskRun, ProcessedEmail, RunStatus
+from app.models import Document, IngestionTask, IngestionTaskRun, IngestionDeduplication, ProcessedEmail, RunStatus, TaskSchemaMapping
 from app.processors.excel_processor import ExcelProcessor
 from app.schemas.ingestion import IngestResult, RowError
+from app.services.content_normalizer import ContentNormalizer
+from app.services.deduplication_service import DeduplicationService
 from app.services.embedding_service import get_embedding_service
 from app.services.summary_service import get_summary_service
 from app.services.schema_mapping_service import SchemaMappingService
@@ -493,7 +504,7 @@ class IngestionService:
             # Insert/upsert rows
             for row_data in excel_rows:
                 try:
-                    result = await self._upsert_document(row_data)
+                    result = await self._upsert_document(row_data, identifier_column=None)
                     if result == "inserted":
                         rows_inserted += 1
                     elif result == "updated":
@@ -535,34 +546,74 @@ class IngestionService:
             errors=errors,
         )
 
-    async def _upsert_document(self, row_data: dict) -> str:
+    async def _upsert_document(self, row_data: dict, identifier_column: Optional[str] = None) -> str:
         """Insert or append document record with full history tracking.
 
         Implements append-only history: instead of updating, creates new row
         if metrics have changed. Marks old record as stale (is_current=FALSE).
 
+        When task_schema_mapping is provided with identifier_column configured,
+        performs cross-platform deduplication using normalized content identifiers.
+
         Args:
             row_data: Row data dict.
+            task_schema_mapping: Optional schema mapping with identifier_column for cross-platform matching.
 
         Returns:
             'inserted' (new record), 'appended' (metrics changed), or 'skipped' (no change).
         """
         # Keep each row write isolated so one bad row does not abort the full run transaction.
         async with self.db.begin_nested():
-            # Ensure is_current defaults to FALSE if not set
+            # Ensure is_current defaults to TRUE if not set
             if "is_current" not in row_data:
                 row_data["is_current"] = True
 
-            # Check if record exists (by sheet_name and row_number, latest version only)
-            stmt = select(Document).where(
-                and_(
-                    Document.sheet_name == row_data.get("sheet_name"),
-                    Document.row_number == row_data.get("row_number"),
-                    Document.is_current == True,
+            # Attempt cross-platform matching if identifier_column is configured
+            existing = None
+            if identifier_column:
+                identifier_value = row_data.get(identifier_column)
+
+                if identifier_value:
+                    # Normalize and hash the identifier for cross-platform matching
+                    try:
+                        identifier_cleaned, identifier_hash = ContentNormalizer.normalize(str(identifier_value))
+                        row_data["identifier_cleaned"] = identifier_cleaned
+                        row_data["identifier_hash"] = identifier_hash
+
+                        # Query for match across any sheet/platform using identifier hash
+                        stmt = select(Document).where(
+                            and_(
+                                Document.identifier_hash == identifier_hash,
+                                Document.is_current == True,
+                            )
+                        )
+                        result = await self.db.execute(stmt)
+                        existing = result.scalars().first()
+
+                        if existing:
+                            logger.debug(
+                                "Found existing document via cross-platform identifier match",
+                                identifier_column=identifier_column,
+                                identifier_hash=identifier_hash,
+                                existing_id=existing.id,
+                            )
+                    except Exception as e:
+                        logger.warning(
+                            "Error during identifier normalization; falling back to legacy matching",
+                            error=str(e),
+                        )
+
+            # Fallback: legacy sheet_name + row_number matching if cross-platform didn't find match
+            if not existing:
+                stmt = select(Document).where(
+                    and_(
+                        Document.sheet_name == row_data.get("sheet_name"),
+                        Document.row_number == row_data.get("row_number"),
+                        Document.is_current == True,
+                    )
                 )
-            )
-            result = await self.db.execute(stmt)
-            existing = result.scalars().first()
+                result = await self.db.execute(stmt)
+                existing = result.scalars().first()
 
             # Generate embedding if needed
             embedding_service = get_embedding_service()
@@ -596,12 +647,28 @@ class IngestionService:
                     )
                     return "skipped"
 
+                # Calculate metric deltas before marking old as stale
+                metric_deltas = self._calculate_metric_deltas(existing_data, row_data)
+                if metric_deltas:
+                    row_data["metric_deltas"] = metric_deltas
+
+                # Apply deduplication strategies to metric fields
+                dedup_config = task_schema_mapping.dedup_config if task_schema_mapping else None
+                row_data = self._apply_dedup_strategies(row_data, existing_data, dedup_config)
+
+                # Reuse existing beast_uuid if available, otherwise generate new
+                if existing.beast_uuid:
+                    row_data["beast_uuid"] = existing.beast_uuid
+                else:
+                    row_data["beast_uuid"] = uuid.uuid4()
+
                 # Metrics changed: mark old record as stale and insert new version
                 logger.debug(
                     "Document metrics changed, appending new version",
                     row_number=row_data.get("row_number"),
                     old_fingerprint=old_fingerprint,
                     new_fingerprint=new_fingerprint,
+                    beast_uuid=row_data.get("beast_uuid"),
                 )
                 stmt = (
                     update(Document)
@@ -634,11 +701,14 @@ class IngestionService:
                     await self._safe_execute(upd_stmt)
                     return "updated"
             else:
-                # New record: insert with is_current=TRUE
+                # New record: assign fresh beast_uuid and insert with is_current=TRUE
+                row_data["beast_uuid"] = uuid.uuid4()
+                row_data["metric_deltas"] = None  # First ingestion has no deltas
+
                 stmt = insert(Document).values(**row_data)
                 try:
                     await self._safe_execute(stmt)
-                    logger.debug("Document inserted", row_number=row_data.get("row_number"))
+                    logger.debug("Document inserted", row_number=row_data.get("row_number"), beast_uuid=row_data.get("beast_uuid"))
                     return "inserted"
                 except IntegrityError as e:
                     logger.warning(
@@ -656,6 +726,210 @@ class IngestionService:
                     )
                     await self._safe_execute(upd_stmt)
                     return "updated"
+
+    def _calculate_metric_deltas(self, existing_data: dict, new_data: dict) -> Optional[dict]:
+        """Calculate metric deltas (differences) between old and new values.
+
+        Returns:
+            Dict of {metric_name: delta} for metrics that changed, or None if no deltas.
+        """
+        # Metric columns to track (from Document model)
+        METRIC_COLUMNS = {
+            "video_views", "total_reach", "engagements", "shares", "comments",
+            "likes", "total_impressions", "profile_views", "followers_gained",
+            "followers_lost", "total_followers", "message_count", "message_reach",
+            "message_engagement", "clicks", "utm_source", "utm_medium", "utm_campaign"
+        }
+
+        deltas = {}
+        for metric in METRIC_COLUMNS:
+            if metric in existing_data and metric in new_data:
+                prev_val = existing_data.get(metric) or 0
+                new_val = new_data.get(metric) or 0
+
+                # Skip non-numeric values
+                if not isinstance(prev_val, (int, float)) or not isinstance(new_val, (int, float)):
+                    continue
+
+                delta = new_val - prev_val
+                if delta != 0:
+                    deltas[metric] = delta
+
+        return deltas if deltas else None
+
+    def _apply_dedup_strategies(
+        self,
+        row_data: dict,
+        existing_data: dict,
+        dedup_config: Optional[dict],
+    ) -> dict:
+        """Apply deduplication strategies to metric fields in row_data.
+
+        When a duplicate is found and dedup_config is provided, applies the configured
+        strategy to each metric field:
+        - subtract: new_value - previous_value (for delta metrics like daily views)
+        - keep: new_value only (for current state like follower count)
+        - add/sum: new_value + previous_value (for cumulative like lifetime reach)
+        - skip: don't include this field (completely skip duplicate)
+
+        Args:
+            row_data: New row data being ingested
+            existing_data: Existing row data from database
+            dedup_config: Dedup config with {default_strategy, field_strategies, is_metric}
+
+        Returns:
+            Modified row_data with strategies applied to metric fields.
+        """
+        if not dedup_config:
+            # No config: default to subtract for all metrics (backward compatible)
+            return row_data
+
+        # Metric columns to track
+        METRIC_COLUMNS = {
+            "video_views", "total_reach", "engagements", "shares", "comments",
+            "likes", "total_impressions", "profile_views", "followers_gained",
+            "followers_lost", "total_followers", "message_count", "message_reach",
+            "message_engagement", "clicks", "utm_source", "utm_medium", "utm_campaign"
+        }
+
+        is_metric = dedup_config.get("is_metric", {})
+        default_strategy = dedup_config.get("default_strategy", "subtract")
+        field_strategies = dedup_config.get("field_strategies", {})
+
+        applied_strategies = {}
+        for metric in METRIC_COLUMNS:
+            # Only process if this field is marked as metric
+            if not is_metric.get(metric, False):
+                continue
+
+            if metric not in row_data or metric not in existing_data:
+                continue
+
+            prev_val = existing_data.get(metric) or 0
+            new_val = row_data.get(metric) or 0
+
+            # Skip non-numeric values
+            if not isinstance(prev_val, (int, float)) or not isinstance(new_val, (int, float)):
+                continue
+
+            # Get the strategy for this field (override or default)
+            strategy = field_strategies.get(metric, default_strategy)
+
+            if strategy == "skip":
+                # Skip completely - don't store this metric for duplicates
+                row_data.pop(metric, None)
+                applied_strategies[metric] = "skip"
+            elif strategy == "keep":
+                # Keep new value only (no change needed, already in row_data)
+                applied_strategies[metric] = "keep"
+            elif strategy in ("add", "sum"):
+                # Cumulative: new + previous
+                row_data[metric] = new_val + prev_val
+                applied_strategies[metric] = f"add ({prev_val} + {new_val})"
+            else:  # subtract (default)
+                # Delta: new - previous
+                row_data[metric] = new_val - prev_val
+                applied_strategies[metric] = f"subtract ({new_val} - {prev_val})"
+
+        if applied_strategies:
+            logger.debug(
+                "Applied deduplication strategies to duplicate metrics",
+                strategies=applied_strategies,
+                default_strategy=default_strategy,
+            )
+
+        return row_data
+
+    async def _upsert_document_with_dedup_tracking(
+        self,
+        row_data: dict,
+        identifier_column: Optional[str],
+        dedup_service: DeduplicationService,
+        run_id: UUID,
+    ) -> str:
+        """Upsert document and record deduplication tracking.
+
+        Args:
+            row_data: Row data to upsert
+            task_schema_mapping: Optional schema mapping with identifier column
+            dedup_service: Deduplication service for tracking
+            run_id: Current run ID
+
+        Returns:
+            Result string: 'inserted', 'appended', or 'skipped'
+        """
+        # Call the standard upsert method
+        result = await self._upsert_document(row_data, identifier_column)
+
+        # Record deduplication event if we have the necessary metadata
+        row_number = row_data.get("row_number", 0)
+        identifier_value = row_data.get(identifier_column) if identifier_column else None
+
+        if identifier_value:
+            # Determine the dedup action based on result
+            if result == "inserted":
+                # New content, first occurrence
+                await dedup_service.record_dedup_action(
+                    run_id=run_id,
+                    row_number=row_number,
+                    identifier=str(identifier_value),
+                    action="first_occurrence",
+                    calculation_summary=None,
+                )
+            elif result == "appended":
+                # Duplicate found, metrics changed (delta calculated)
+                calculation_summary = {
+                    "metric_deltas": row_data.get("metric_deltas"),
+                    "timestamp": datetime.utcnow().isoformat(),
+                }
+                await dedup_service.record_dedup_action(
+                    run_id=run_id,
+                    row_number=row_number,
+                    identifier=str(identifier_value),
+                    action="inserted_delta",
+                    calculation_summary=calculation_summary,
+                )
+            elif result == "skipped":
+                # Duplicate found, no metrics changed
+                await dedup_service.record_dedup_action(
+                    run_id=run_id,
+                    row_number=row_number,
+                    identifier=str(identifier_value),
+                    action="skipped",
+                    calculation_summary=None,
+                )
+
+        return result
+
+    def _calculate_metric_deltas(self, existing_data: dict, new_data: dict) -> Optional[dict]:
+        """Calculate metric deltas (differences) between old and new values.
+
+        Returns:
+            Dict of {metric_name: delta} for metrics that changed, or None if no deltas.
+        """
+        # Metric columns to track (from Document model)
+        METRIC_COLUMNS = {
+            "video_views", "total_reach", "engagements", "shares", "comments",
+            "likes", "total_impressions", "profile_views", "followers_gained",
+            "followers_lost", "total_followers", "message_count", "message_reach",
+            "message_engagement", "clicks", "utm_source", "utm_medium", "utm_campaign"
+        }
+
+        deltas = {}
+        for metric in METRIC_COLUMNS:
+            if metric in existing_data and metric in new_data:
+                prev_val = existing_data.get(metric) or 0
+                new_val = new_data.get(metric) or 0
+
+                # Skip non-numeric values
+                if not isinstance(prev_val, (int, float)) or not isinstance(new_val, (int, float)):
+                    continue
+
+                delta = new_val - prev_val
+                if delta != 0:
+                    deltas[metric] = delta
+
+        return deltas if deltas else None
 
     async def ingest_task(
         self,
@@ -682,6 +956,8 @@ class IngestionService:
         rows_inserted = 0
         rows_updated = 0
         rows_failed = 0
+        total_duplicates = 0
+        total_deltas = 0
         errors = []
 
         try:
@@ -689,45 +965,81 @@ class IngestionService:
             stmt = select(IngestionTask).where(IngestionTask.id == task_id)
             result = await self.db.execute(stmt)
             task = result.scalar_one_or_none()
-
+            task_dedup_enabled = None
+            task_adaptor_type= None
+            identifier_column= None
             if not task:
                 raise ValueError(f"Task not found: {task_id}")
+
+            # Capture task attributes immediately to avoid lazy-loading in async context
+            if task:
+                task_adaptor_config = dict(task.adaptor_config or {})
+                task_adaptor_type = task.adaptor_type
+                task_dedup_enabled = task.deduplication_enabled
 
             # Get schema mapping
             schema_service = SchemaMappingService(self.db)
             task_mapping = await schema_service.get_task_mapping(str(task_id))
             field_mappings = task_mapping.field_mappings if task_mapping else {}
+            # Capture identifier_column early to prevent lazy-loading in other async contexts
+            identifier_column = task_mapping.identifier_column if task_mapping else None
 
-            logger.info("Task loaded", adaptor_type=task.adaptor_type, has_mapping=task_mapping is not None)
+            # Initialize deduplication service if deduplication is enabled
+            dedup_service = None
+            if task_dedup_enabled is not None:
+                from app.services.deduplication_service import get_deduplication_service
+                dedup_service = await get_deduplication_service(self.db, task_id)
+
+            logger.info("Task loaded", adaptor_type=task_adaptor_type, has_mapping=task_mapping is not None,
+                       deduplication_enabled=task_dedup_enabled)
 
             if await self._is_run_stop_requested(run_id):
                 raise IngestionCanceledError()
 
             # Dispatch based on adaptor type
-            if task.adaptor_type == "gmail":
+            if task_adaptor_type == "gmail":
                 # Gmail adaptor: fetch from Gmail
                 rows_inserted, rows_updated, rows_failed, errors = await self._ingest_from_gmail_task(
-                    task, run_id, field_mappings
+                    task, run_id, field_mappings, identifier_column, dedup_service
                 )
 
-            elif task.adaptor_type == "webhook":
+            elif task_adaptor_type == "webhook":
                 # Webhook adaptor: process provided payload
                 if not webhook_payload:
                     raise ValueError("webhook_payload required for webhook adaptor")
                 rows_inserted, rows_updated, rows_failed, errors = await self._ingest_from_webhook(
-                    task, run_id, webhook_payload, field_mappings
+                    task, run_id, webhook_payload, field_mappings, identifier_column, dedup_service
                 )
 
-            elif task.adaptor_type == "manual":
+            elif task_adaptor_type == "manual":
                 # Manual adaptor: ingest from file
                 if not file_bytes:
                     raise ValueError("file_bytes required for manual adaptor")
                 rows_inserted, rows_updated, rows_failed, errors = await self._ingest_from_file_task(
-                    task, run_id, file_bytes, field_mappings
+                    task, run_id, file_bytes, field_mappings, identifier_column, dedup_service
                 )
 
             else:
-                raise ValueError(f"Unknown adaptor type: {task.adaptor_type}")
+                raise ValueError(f"Unknown adaptor type: {task_adaptor_type}")
+
+            # Update run with deduplication statistics if available
+            if dedup_service:
+                try:
+                    dedup_summary = await dedup_service.get_deduplication_summary(run_id)
+                    stmt = (
+                        update(IngestionTaskRun)
+                        .where(IngestionTaskRun.id == run_id)
+                        .values(
+                            total_rows_processed=dedup_summary.get("total_rows_processed", rows_inserted + rows_updated),
+                            total_duplicates_found=dedup_summary.get("total_duplicates_found", 0),
+                            total_deltas_calculated=dedup_summary.get("total_deltas_calculated", 0),
+                            deduplication_enabled=True,
+                        )
+                    )
+                    await self.db.execute(stmt)
+                    await self.db.commit()
+                except Exception as e:
+                    logger.warning("Failed to update dedup statistics", error=str(e))
 
             # Trigger summary recomputation
             if rows_inserted > 0 or rows_updated > 0:
@@ -764,13 +1076,18 @@ class IngestionService:
         task: IngestionTask,
         run_id: UUID,
         field_mappings: dict,
+        identifier_column: Optional[str] = None,
+        dedup_service: Optional[DeduplicationService] = None,
     ) -> tuple:
         """Ingest from Gmail using task configuration.
 
         Returns:
             Tuple of (rows_inserted, rows_updated, rows_failed, errors).
         """
-        logger.info("Ingesting from Gmail task", task_id=task.id)
+        # Capture ORM attributes immediately to avoid lazy-loading in async context
+        task_id = task.id
+        adaptor_config = dict(task.adaptor_config or {})
+        logger.info("Ingesting from Gmail task", task_id=task_id)
 
         rows_inserted = 0
         rows_updated = 0
@@ -779,7 +1096,7 @@ class IngestionService:
 
         gmail_adapter = None
         try:
-            task_config = dict(task.adaptor_config or {})
+            task_config = adaptor_config
 
             # Use task's adaptor config
             gmail_query = task_config.get("gmail_query", "")
@@ -804,16 +1121,76 @@ class IngestionService:
                 oauth_changed = True
 
             # Connect to Gmail
-            gmail_adapter = GmailAdapter(oauth_config=oauth_config)
-            await gmail_adapter.connect()
+            # Initialize credential service for tracking
+            credential_service = get_gmail_credential_service(self.db)
+            
+            # Create adapter with credential service integration
+            gmail_adapter = GmailAdapter(
+                oauth_config=oauth_config,
+                credential_service=credential_service,
+                task_id=str(task.id),
+            )
+            # Connect to Gmail with error handling
+            try:
+                await gmail_adapter.connect()
+            except CredentialExpiredError as e:
+                # Permanent auth failure: refresh token is invalid
+                logger.error(
+                    "Gmail credential expired (invalid_grant)",
+                    task_id=task.id,
+                    error=str(e),
+                )
+                
+                # Mark run as auth error
+                stmt = (
+                    update(IngestionTaskRun)
+                    .where(IngestionTaskRun.id == run_id)
+                    .values(
+                        error_type="auth_error",
+                        error_code="invalid_grant",
+                        status=RunStatus.FAILED,
+                        completed_at=datetime.utcnow(),
+                        error_message=str(e),
+                    )
+                )
+                await self.db.execute(stmt)
+                await self.db.commit()
+                
+                return 0, 0, 1, [RowError(row_number=0, error=str(e))]
+            
+            except TemporaryAuthError as e:
+                # Transient auth failure
+                logger.warning(
+                    "Gmail authentication temporary failure",
+                    task_id=task.id,
+                    error=str(e),
+                )
+                
+                # Mark run as auth error but allow retry
+                stmt = (
+                    update(IngestionTaskRun)
+                    .where(IngestionTaskRun.id == run_id)
+                    .values(
+                        error_type="auth_error",
+                        error_code="temporary_auth_failure",
+                        status=RunStatus.FAILED,
+                        completed_at=datetime.utcnow(),
+                        error_message=str(e),
+                    )
+                )
+                await self.db.execute(stmt)
+                await self.db.commit()
+                
+                return 0, 0, 1, [RowError(row_number=0, error=str(e))]
+
 
             # Persist refreshed token state, if changed.
+            # Note: Cannot persist task.adaptor_config in async context due to greenlet constraints
+            # The adapted config will be updated on next task run via task_config initialization
             refreshed_oauth = gmail_adapter.get_oauth_config()
             if refreshed_oauth or oauth_changed:
-                updated_config = dict(task.adaptor_config or {})
-                updated_config["gmail_oauth"] = refreshed_oauth or oauth_config
-                task.adaptor_config = updated_config
-                self.db.add(task)
+                logger.debug("Gmail OAuth config updated but not persisted in async context",
+                           oauth_changed=oauth_changed)
 
             # Fetch emails
             emails = await gmail_adapter.fetch_data(
@@ -823,6 +1200,7 @@ class IngestionService:
                 max_results=task_config.get("max_results", 25),
                 source_type=gmail_source_type,
                 link_regex=download_link_regex,
+                allowed_extensions=task_config.get("allowed_extensions"),  # e.g., ['xlsx', 'csv']
             )
 
             # Process each email
@@ -891,7 +1269,12 @@ class IngestionService:
 
                         try:
                             document_row = self._build_document_payload(row_data, field_mappings)
-                            result = await self._upsert_document(document_row)
+                            if dedup_service:
+                                result = await self._upsert_document_with_dedup_tracking(
+                                    document_row, identifier_column, dedup_service, run_id
+                                )
+                            else:
+                                result = await self._upsert_document(document_row, identifier_column)
                             if result == "inserted":
                                 rows_inserted += 1
                                 email_inserted += 1
@@ -902,7 +1285,8 @@ class IngestionService:
                                 email_inserted += 1
 
                         except Exception as e:
-                            logger.error("Error upserting document from Gmail", error=str(e))
+                            import traceback
+                            logger.error("Error upserting document from Gmail", error=str(e), traceback=traceback.format_exc())
                             errors.append(
                                 RowError(row_number=row_data.get("row_number", 0), error=f"Database error: {str(e)}")
                             )
@@ -915,7 +1299,7 @@ class IngestionService:
                         message_id=email_message_id,
                         subject=email_subject,
                         sender=email_sender,
-                        task_id=task.id,
+                        task_id=task_id,
                         rows_inserted=email_inserted,
                         rows_skipped=email_skipped,
                         rows_failed=email_failed,
@@ -932,10 +1316,10 @@ class IngestionService:
                     logger.warning("Could not mark email as processed", error=str(e))
 
         except IngestionCanceledError:
-            logger.info("Gmail task ingestion canceled", task_id=task.id, run_id=run_id)
+            logger.info("Gmail task ingestion canceled", task_id=task_id, run_id=run_id)
             raise
         except Exception as e:
-            logger.error("Gmail task ingestion failed", error=str(e), task_id=task.id)
+            logger.error("Gmail task ingestion failed", error=str(e), task_id=task_id)
             rows_failed += 1
             errors.append(RowError(row_number=0, error=f"Gmail adapter error: {str(e)}"))
         finally:
@@ -981,7 +1365,10 @@ class IngestionService:
             List of dicts with 'filename' and 'data' keys.
         """
         file_items = []
-        async with httpx.AsyncClient(follow_redirects=True, timeout=60.0) as client:
+        async with httpx.AsyncClient(
+            follow_redirects=True,
+            timeout=float(settings.http_client_timeout_seconds),
+        ) as client:
             for url in urls:
                 if await self._is_run_stop_requested(run_id):
                     raise IngestionCanceledError()
@@ -1026,6 +1413,8 @@ class IngestionService:
         run_id: UUID,
         payload: dict,
         field_mappings: dict,
+        identifier_column: Optional[str] = None,
+        dedup_service: Optional[DeduplicationService] = None,
     ) -> tuple:
         """Ingest from webhook payload.
 
@@ -1063,7 +1452,7 @@ class IngestionService:
                                 mapped_data[target] = row_data[source_column]
                         row_data = {**row_data, **mapped_data}
 
-                    result = await self._upsert_document(row_data)
+                    result = await self._upsert_document(row_data, identifier_column) if not dedup_service else await self._upsert_document_with_dedup_tracking(row_data, identifier_column, dedup_service, run_id)
                     if result == "inserted":
                         rows_inserted += 1
                     elif result == "updated":
@@ -1089,21 +1478,26 @@ class IngestionService:
         run_id: UUID,
         file_data: bytes,
         field_mappings: dict,
+        identifier_column: Optional[str] = None,
+        dedup_service: Optional[DeduplicationService] = None,
     ) -> tuple:
         """Ingest from uploaded file using task configuration.
 
         Returns:
             Tuple of (rows_inserted, rows_updated, rows_failed, errors).
         """
-        logger.info("Ingesting from file via task", task_id=task.id)
+        # Capture ORM attributes immediately to avoid lazy-loading in async context
+        task_id = task.id
+        adaptor_config = dict(task.adaptor_config or {})
+        logger.info("Ingesting from file via task", task_id=task_id)
 
         rows_inserted = 0
         rows_updated = 0
         rows_failed = 0
         errors = []
-
+        
         try:
-            task_config = dict(task.adaptor_config or {})
+            task_config = adaptor_config
             sheet_name = task_config.get("sheet_name", "Sheet1")
 
             filename = task_config.get("uploaded_filename", "uploaded.xlsx")
@@ -1121,7 +1515,12 @@ class IngestionService:
 
                 try:
                     document_row = self._build_document_payload(row_data, field_mappings)
-                    result = await self._upsert_document(document_row)
+                    if dedup_service:
+                        result = await self._upsert_document_with_dedup_tracking(
+                            document_row, identifier_column, dedup_service, run_id
+                        )
+                    else:
+                        result = await self._upsert_document(document_row, identifier_column)
                     if result == "inserted":
                         rows_inserted += 1
                     elif result == "updated":

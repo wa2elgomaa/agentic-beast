@@ -266,6 +266,103 @@ async def resume_ingestion_task(task_id: UUID) -> None:
         raise
 
 
+async def schedule_test_task(
+    task: IngestionTask,
+    job_callback: Callable,
+) -> None:
+    """Schedule periodic test execution for an ingestion task.
+
+    Tests run at the configured interval_minutes to verify task execution is working.
+
+    Args:
+        task: IngestionTask to schedule tests for.
+        job_callback: Async callback function to execute. Should accept task_id as param.
+
+    Raises:
+        Exception: If scheduling fails.
+    """
+    try:
+        if not task.test_execution_enabled or not task.test_execution_interval_minutes:
+            # Unschedule if test execution is disabled
+            job_id = f"test_task_{task.id}"
+            scheduler = await get_scheduler()
+            try:
+                scheduler.remove_job(job_id)
+                logger.info("Test task unscheduled", task_id=task.id)
+            except:
+                pass
+            return
+
+        scheduler = await get_scheduler()
+        job_id = f"test_task_{task.id}"
+
+        # Remove existing job if present
+        try:
+            scheduler.remove_job(job_id)
+            logger.info("Removed existing test job", job_id=job_id)
+        except:
+            pass  # Job doesn't exist
+
+        # Schedule recurring test at configured interval
+        logger.info(
+            "Scheduling test task",
+            task_id=task.id,
+            interval_minutes=task.test_execution_interval_minutes,
+        )
+
+        # Convert minutes to cron expression: */N * * * * means every N minutes
+        interval_minutes = task.test_execution_interval_minutes
+        if interval_minutes >= 60:
+            # For intervals >= 1 hour, use hour cron
+            cron_expr = f"0 */{max(1, interval_minutes // 60)} * * *"
+        else:
+            # For intervals < 1 hour, use minute cron
+            cron_expr = f"*/{max(1, interval_minutes)} * * * *"
+
+        scheduler.add_job(
+            job_callback,
+            trigger=CronTrigger.from_crontab(cron_expr, timezone=settings.apscheduler_timezone),
+            args=[str(task.id)],
+            id=job_id,
+            name=f"Test task: {task.name}",
+            replace_existing=True,
+        )
+
+        logger.info("Test task scheduled successfully", task_id=task.id, job_id=job_id)
+
+    except Exception as e:
+        logger.error("Failed to schedule test task", error=str(e), task_id=task.id)
+        raise
+
+
+async def unschedule_test_task(task_id: UUID) -> None:
+    """Remove a scheduled test task.
+
+    Args:
+        task_id: UUID of the ingestion task.
+
+    Raises:
+        Exception: If unscheduling fails.
+    """
+    try:
+        scheduler = await get_scheduler()
+
+        job_id = f"test_task_{task_id}"
+
+        try:
+            scheduler.remove_job(job_id)
+            logger.info("Test task unscheduled", task_id=task_id, job_id=job_id)
+        except Exception as e:
+            if "No job with id" in str(e):
+                logger.warning("Test job not found", task_id=task_id, job_id=job_id)
+            else:
+                raise
+
+    except Exception as e:
+        logger.error("Failed to unschedule test task", error=str(e), task_id=task_id)
+        raise
+
+
 class SchedulerService:
     """Service wrapper for APScheduler operations (for dependency injection)."""
 
@@ -303,3 +400,13 @@ class SchedulerService:
     async def resume_task(task_id: UUID) -> None:
         """Resume a task."""
         await resume_ingestion_task(task_id)
+
+    @staticmethod
+    async def schedule_test(task: IngestionTask, job_callback: Callable) -> None:
+        """Schedule periodic test execution for a task."""
+        await schedule_test_task(task, job_callback)
+
+    @staticmethod
+    async def unschedule_test(task_id: UUID) -> None:
+        """Unschedule test execution for a task."""
+        await unschedule_test_task(task_id)

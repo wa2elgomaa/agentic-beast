@@ -14,7 +14,8 @@ import {
 import SchemaMapper from '@/components/admin/SchemaMapper'
 import TaskRunHistory from '@/components/admin/TaskRunHistory'
 import TaskSettingsForm from '@/components/admin/TaskSettingsForm'
-import { AlertCircle, Link as LinkIcon, Play, Settings } from 'lucide-react'
+import GmailCredentialStatus from '@/components/admin/GmailCredentialStatus'
+import { AlertCircle, Link as LinkIcon, Play, Settings, Lock } from 'lucide-react'
 import Link from 'next/link'
 
 export default function TaskDetailPage() {
@@ -30,7 +31,7 @@ export default function TaskDetailPage() {
     const [isRunning, setIsRunning] = useState(false)
     const [cancelingRunId, setCancelingRunId] = useState<string | null>(null)
     const [isLinkingGmail, setIsLinkingGmail] = useState(false)
-    const [activeTab, setActiveTab] = useState<'schema' | 'runs' | 'settings'>('schema')
+    const [activeTab, setActiveTab] = useState<'schema' | 'runs' | 'settings' | 'gmail-credentials'>('schema')
     const [showPendingRunsModal, setShowPendingRunsModal] = useState(false)
 
     useEffect(() => {
@@ -242,6 +243,18 @@ export default function TaskDetailPage() {
                     <Settings size={14} />
                     Settings
                 </button>
+                {task?.adaptor_type === 'gmail' && (
+                    <button
+                        onClick={() => setActiveTab('gmail-credentials')}
+                        className={`flex items-center gap-1.5 px-4 py-3 font-medium border-b-2 transition-colors ${activeTab === 'gmail-credentials'
+                            ? 'border-blue-600 text-blue-600 dark:text-blue-400'
+                            : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-300'
+                        }`}
+                    >
+                        <Lock size={14} />
+                        Gmail Credentials
+                    </button>
+                )}
             </div>
 
             {/* Content */}
@@ -249,8 +262,10 @@ export default function TaskDetailPage() {
                 <SchemaMapper task={task} initialMapping={schemaMapping} onUpdated={loadData} />
             ) : activeTab === 'runs' ? (
                 <TaskRunHistory runs={runs} onRefresh={loadData} onCancelRun={handleCancelRun} cancelingRunId={cancelingRunId} />
-            ) : (
+            ) : activeTab === 'settings' ? (
                 <TaskSettingsForm task={task} onUpdated={loadData} />
+            ) : (
+                <GmailCredentialStatus taskId={taskId} />
             )}
         </div>
     )

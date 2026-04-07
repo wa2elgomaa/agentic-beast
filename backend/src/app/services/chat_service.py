@@ -9,6 +9,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.orchestrator import get_orchestrator
+from app.config import settings
 from app.logging import get_logger
 from app.models.conversation import Conversation, Message
 from app.schemas.chat import ChatMessageMetadata, MessageResponse
@@ -134,7 +135,7 @@ class ChatService:
 
     async def list_conversations(
         self,
-        limit: int = 100,
+        limit: int = settings.db_max_rows_per_query,
         offset: int = 0,
         user_id: Optional[uuid.UUID] = None,
     ) -> List[Conversation]:
@@ -174,7 +175,7 @@ class ChatService:
     async def get_conversation_messages(
         self,
         conversation_id: uuid.UUID,
-        limit: int = 50,
+        limit: int = settings.db_default_limit,
         offset: int = 0,
     ) -> List[Message]:
         """Retrieve messages for a conversation.
@@ -233,9 +234,14 @@ class ChatService:
     async def get_conversation_context(
         self,
         conversation_id: uuid.UUID,
-        limit: int = 10,
-    ) -> List[Dict[str, str]]:
-        """Return the latest messages formatted for LLM context."""
+        limit: int = settings.db_default_limit,
+    ) -> List[Dict[str, Any]]:
+        """Return the latest messages formatted for LLM context.
+
+        For assistant messages that have operation_data (i.e. analytics results),
+        the dict also includes ``prior_sql`` and ``prior_rows`` so that downstream
+        agents can build follow-up queries without re-discovering the context.
+        """
         query = (
             select(Message)
             .where(Message.conversation_id == conversation_id)
@@ -244,7 +250,23 @@ class ChatService:
         )
         result = await self.db_session.execute(query)
         messages = list(reversed(result.scalars().all()))
-        return [{"role": msg.role, "content": msg.content} for msg in messages]
+
+        history: List[Dict[str, Any]] = []
+        for msg in messages:
+            item: Dict[str, Any] = {"role": msg.role, "content": msg.content}
+            if msg.role == "assistant" and msg.operation_data:
+                op = msg.operation_data
+                # Surface structured context so SQL-gen can reference prior query
+                if op.get("generated_sql"):
+                    item["prior_sql"] = op["generated_sql"]
+                if op.get("raw_rows") is not None:
+                    item["prior_rows"] = op["raw_rows"][:20]  # cap to keep prompt small
+                if op.get("metric"):
+                    item["prior_metric"] = op["metric"]
+                if op.get("query_category"):
+                    item["prior_query_category"] = op["query_category"]
+            history.append(item)
+        return history
 
 
     async def handle_user_message(
@@ -288,7 +310,8 @@ class ChatService:
         )
 
         # Prepare context for orchestrator
-        history = await self.get_conversation_context(conversation.id, limit=6)
+        # Fetch enough history to provide context for up to 3 prior analytics queries
+        history = await self.get_conversation_context(conversation.id, limit=10)
         context = {
             "conversation_id": str(conversation.id),
             "user_id": str(user_id) if user_id else None,
@@ -305,12 +328,46 @@ class ChatService:
                 store_content = json.dumps(result)
             else:
                 store_content = result
+
+            # Persist structured operation data so follow-up queries have context.
+            # Extract SQL + raw rows from analytics results — never store charts (too large).
+            op_data: Optional[Dict] = None
+            op_type: Optional[str] = None
+            if isinstance(result, dict):
+                op_type = (
+                    result.get("query_type")
+                    or result.get("operation_type")
+                    or result.get("intent")
+                )
+                if result.get("generated_sql") or result.get("result_data") is not None:
+                    op_data = {
+                        "generated_sql": result.get("generated_sql"),
+                        "metric": result.get("resolved_subject") or result.get("metric"),
+                        "query_category": result.get("query_type"),
+                        # Store raw rows (capped) for next-turn context injection
+                        "raw_rows": (
+                            result.get("raw_rows")
+                            or result.get("result_data", [])[:100]
+                            if isinstance(result.get("raw_rows") or result.get("result_data"), list)
+                            else []
+                        ),
+                        "row_count": (
+                            len(result.get("result_data", []))
+                            if isinstance(result.get("result_data"), list)
+                            else 0
+                        ),
+                        # Code interpreter extras (not stored in DB — surfaced in API response only)
+                        "chart_b64": result.get("chart_b64"),
+                        "code_output": result.get("code_output"),
+                    }
+
             # Add assistant message to conversation
             assistant_message = await self.add_message(
                 conversation.id,
                 role="assistant",
                 content=store_content,
-                operation_data=None,  # Can be populated by agents
+                operation=op_type,
+                operation_data=op_data,
             )
         except Exception as e:
             logger.error(
@@ -357,11 +414,13 @@ class ChatService:
 
         metadata = None
         if message.operation or message.operation_data:
+            op = message.operation_data or {}
             metadata = ChatMessageMetadata(
                 operation=message.operation,
-                citations=message.operation_data.get("citations")
-                if message.operation_data
-                else None,
+                citations=op.get("citations"),
+                chart_b64=op.get("chart_b64"),
+                code_output=op.get("code_output"),
+                generated_sql=op.get("generated_sql"),
             )
 
         return MessageResponse(

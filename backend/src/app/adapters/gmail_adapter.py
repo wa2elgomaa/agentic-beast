@@ -16,6 +16,18 @@ from app.logging import get_logger
 
 logger = get_logger(__name__)
 
+
+# Custom exceptions for credential handling
+class CredentialExpiredError(Exception):
+    """Raised when refresh token is invalid/expired (invalid_grant)."""
+    pass
+
+
+class TemporaryAuthError(Exception):
+    """Raised for transient auth errors (network, rate limit, etc)."""
+    pass
+
+
 # Gmail API scopes
 GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.readonly", "https://www.googleapis.com/auth/gmail.modify"]
 
@@ -23,59 +35,177 @@ GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.readonly", "https://www.g
 class GmailAdapter(DataAdapter):
     """Adapter for fetching analytics reports from Gmail."""
 
-    def __init__(self, oauth_config: Optional[Dict[str, Any]] = None):
-        """Initialize Gmail adapter."""
+    def __init__(
+        self,
+        oauth_config: Optional[Dict[str, Any]] = None,
+        credential_service: Optional[Any] = None,
+        task_id: Optional[str] = None,
+    ):
+        """Initialize Gmail adapter.
+        
+        Args:
+            oauth_config: OAuth configuration dict
+            credential_service: Optional GmailCredentialService for status tracking
+            task_id: Optional task UUID for credential tracking
+        """
         super().__init__(name="gmail_adapter")
         self.service = None
         self.credentials = None
         self.oauth_config = oauth_config or {}
+        self.credential_service = credential_service
+        self.task_id = task_id
 
-    async def connect(self) -> None:
-        """Establish connection to Gmail API."""
-        try:
-            logger.info("Connecting to Gmail API using OAuth user credentials")
+    async def connect(self, max_retries: int = 2) -> None:
+        """Establish connection to Gmail API with retry logic.
+        
+        Args:
+            max_retries: Number of retries for transient errors
+            
+        Raises:
+            CredentialExpiredError: If refresh token is invalid (invalid_grant)
+            TemporaryAuthError: If transient error occurs (retries exhausted)
+        """
+        import asyncio
+        from google.auth.exceptions import RefreshError
+        
+        for attempt in range(max_retries + 1):
+            try:
+                logger.info(
+                    "Connecting to Gmail API",
+                    attempt=attempt + 1,
+                    max_attempts=max_retries + 1,
+                )
 
-            refresh_token = self.oauth_config.get("refresh_token")
-            if not refresh_token:
-                raise ValueError("Missing Gmail OAuth refresh_token in task adaptor_config.gmail_oauth")
+                refresh_token = self.oauth_config.get("refresh_token")
+                if not refresh_token:
+                    raise ValueError("Missing Gmail OAuth refresh_token in task adaptor_config.gmail_oauth")
 
-            client_id = self.oauth_config.get("client_id") or settings.gmail_oauth_client_id
-            client_secret = self.oauth_config.get("client_secret") or settings.gmail_oauth_client_secret
-            token_uri = self.oauth_config.get("token_uri") or settings.gmail_oauth_token_uri
-            scopes = self.oauth_config.get("scopes") or GMAIL_SCOPES
+                client_id = self.oauth_config.get("client_id") or settings.gmail_oauth_client_id
+                client_secret = self.oauth_config.get("client_secret") or settings.gmail_oauth_client_secret
+                token_uri = self.oauth_config.get("token_uri") or settings.gmail_oauth_token_uri
+                scopes = self.oauth_config.get("scopes") or GMAIL_SCOPES
 
-            if not client_id or not client_secret:
-                raise ValueError("Missing Gmail OAuth client credentials (gmail_oauth_client_id/client_secret)")
+                if not client_id or not client_secret:
+                    raise ValueError("Missing Gmail OAuth client credentials")
 
-            self.credentials = Credentials(
-                token=self.oauth_config.get("access_token"),
-                refresh_token=refresh_token,
-                token_uri=token_uri,
-                client_id=client_id,
-                client_secret=client_secret,
-                scopes=scopes,
-            )
+                self.credentials = Credentials(
+                    token=self.oauth_config.get("access_token"),
+                    refresh_token=refresh_token,
+                    token_uri=token_uri,
+                    client_id=client_id,
+                    client_secret=client_secret,
+                    scopes=scopes,
+                )
 
-            # Ensure an access token is available and refreshed.
-            if not self.credentials.valid:
-                self.credentials.refresh(Request())
+                # Token refresh with error detection
+                if not self.credentials.valid:
+                    try:
+                        self.credentials.refresh(Request())
+                    except RefreshError as e:
+                        error_msg = str(e).lower()
+                        
+                        # Permanent failure: invalid_grant
+                        if "invalid_grant" in error_msg:
+                            logger.error(
+                                "Gmail token invalid or revoked",
+                                error=str(e),
+                                task_id=self.task_id,
+                            )
+                            
+                            # Record in credential service if available
+                            if self.credential_service and self.task_id:
+                                from app.services.gmail_credential_service import (
+                                    GmailCredentialHealthStatus,
+                                    ErrorCode,
+                                )
+                                
+                                await self.credential_service.update_credential_status(
+                                    task_id=self.task_id,
+                                    status=GmailCredentialHealthStatus.INVALID,
+                                    error_code=ErrorCode.INVALID_GRANT,
+                                    error_message="Refresh token is invalid or revoked",
+                                )
+                            
+                            raise CredentialExpiredError(
+                                "Gmail refresh token invalid/expired. User must re-authenticate."
+                            ) from e
+                        
+                        # Transient error: retry
+                        if attempt < max_retries:
+                            backoff = 2 ** attempt
+                            logger.warning(
+                                f"Token refresh failed (attempt {attempt + 1}), retrying in {backoff}s...",
+                                error=str(e),
+                            )
+                            await asyncio.sleep(backoff)
+                            continue
+                        else:
+                            # Retries exhausted
+                            logger.error(
+                                "Token refresh failed after retries",
+                                error=str(e),
+                                attempts=attempt + 1,
+                            )
+                            
+                            if self.credential_service and self.task_id:
+                                count = await self.credential_service.increment_failure_count(
+                                    self.task_id
+                                )
+                                logger.warning(
+                                    "Incremented credential failure count",
+                                    task_id=self.task_id,
+                                    consecutive_failures=count,
+                                )
+                            
+                            raise TemporaryAuthError(
+                                f"Token refresh failed after {max_retries + 1} attempts"
+                            ) from e
 
-            # Build Gmail service
-            self.service = build("gmail", "v1", credentials=self.credentials)
+                # Build Gmail service
+                self.service = build("gmail", "v1", credentials=self.credentials)
 
-            # Test connection
-            profile = self.service.users().getProfile(userId="me").execute()
-            logger.info("Gmail connection successful", email_address=profile.get("emailAddress"))
+                # Test connection
+                profile = self.service.users().getProfile(userId="me").execute()
+                email_address = profile.get("emailAddress")
+                logger.info(
+                    "Gmail connection successful",
+                    email_address=email_address,
+                    task_id=self.task_id,
+                )
 
-            self.health_status = AdapterHealthStatus(status=AdapterStatus.CONNECTED)
+                # Record success in credential service
+                if self.credential_service and self.task_id:
+                    from app.services.gmail_credential_service import GmailCredentialHealthStatus
+                    
+                    await self.credential_service.update_credential_status(
+                        task_id=self.task_id,
+                        status=GmailCredentialHealthStatus.ACTIVE,
+                        account_email=email_address,
+                    )
+                    await self.credential_service.reset_failure_count(self.task_id)
 
-        except Exception as e:
-            logger.error("Failed to connect to Gmail API", error=str(e))
-            self.health_status = AdapterHealthStatus(
-                status=AdapterStatus.ERROR,
-                error_message=str(e),
-            )
-            raise
+                self.health_status = AdapterHealthStatus(status=AdapterStatus.CONNECTED)
+                return
+
+            except (CredentialExpiredError, TemporaryAuthError):
+                # Re-raise our custom exceptions
+                raise
+            except Exception as e:
+                error_msg = str(e)
+                logger.error(
+                    "Gmail connection failed",
+                    error=error_msg,
+                    attempt=attempt + 1,
+                    task_id=self.task_id,
+                )
+                
+                if attempt == max_retries:
+                    # Last attempt failed
+                    self.health_status = AdapterHealthStatus(
+                        status=AdapterStatus.ERROR,
+                        error_message=error_msg,
+                    )
+                    raise TemporaryAuthError(f"Gmail connection error: {error_msg}") from e
 
     async def disconnect(self) -> None:
         """Close Gmail connection."""
@@ -83,6 +213,24 @@ class GmailAdapter(DataAdapter):
         self.credentials = None
         self.health_status = AdapterHealthStatus(status=AdapterStatus.DISCONNECTED)
         logger.info("Gmail connection closed")
+
+    def get_oauth_config(self) -> Optional[Dict[str, Any]]:
+        """Return updated OAuth config with potentially refreshed token.
+        
+        Returns:
+            Updated oauth_config dict with latest access_token/refresh_token
+        """
+        if not self.credentials:
+            return None
+
+        return {
+            "access_token": self.credentials.token,
+            "refresh_token": self.credentials.refresh_token,
+            "token_uri": self.credentials.token_uri,
+            "client_id": self.credentials.client_id,
+            "client_secret": self.credentials.client_secret,
+            "scopes": list(self.credentials.scopes or []),
+        }
 
     async def fetch_data(self, **kwargs) -> List[Dict[str, Any]]:
         """Fetch emails with Excel attachments.
@@ -98,19 +246,24 @@ class GmailAdapter(DataAdapter):
         try:
             self.health_status = AdapterHealthStatus(status=AdapterStatus.FETCHING)
 
-            base_query = kwargs.get("query") or settings.gmail_inbox_query
+            base_query = kwargs.get("query") or settings.gmail_inbox_query or "in:inbox"  # Default to inbox emails if no query specified
             sender_filter = kwargs.get("sender_filter")
             subject_pattern = kwargs.get("subject_pattern")
             max_results = int(kwargs.get("max_results") or 10)
             source_type = kwargs.get("source_type", "attachment")
             link_regex = kwargs.get("link_regex") or r"https?://\S+"
+            allowed_extensions = kwargs.get("allowed_extensions")  # List of file extensions to allow (e.g., ['xlsx', 'csv'])
 
             query_parts = [base_query]
             if sender_filter:
                 query_parts.append(f'from:"{sender_filter}"')
             query = " ".join(part for part in query_parts if part).strip()
+            
+            logger.info("Gmail API query", query=query, max_results=max_results, sender_filter=sender_filter)
 
             results = self.service.users().messages().list(userId="me", q=query, maxResults=max_results).execute()
+            
+            logger.info("Gmail API response", total_results=results.get("resultSizeEstimate", 0), message_count=len(results.get("messages", [])))
 
             messages = results.get("messages", [])
             email_records = []
@@ -146,7 +299,7 @@ class GmailAdapter(DataAdapter):
                         logger.warning("No download links found in email", subject=subject)
                 else:
                     # Default: attachment mode
-                    attachments = await self._extract_attachments(msg_id, msg_data.get("payload", {}))
+                    attachments = await self._extract_attachments(msg_id, msg_data.get("payload", {}), allowed_extensions)
                     if attachments:
                         email_records.append(
                             {
@@ -172,21 +325,7 @@ class GmailAdapter(DataAdapter):
             )
             raise
 
-    def get_oauth_config(self) -> Dict[str, Any]:
-        """Get refreshed OAuth config from active credentials."""
-        if not self.credentials:
-            return dict(self.oauth_config)
-        return {
-            "access_token": self.credentials.token,
-            "refresh_token": self.credentials.refresh_token,
-            "token_uri": self.credentials.token_uri,
-            "client_id": self.credentials.client_id,
-            "client_secret": self.credentials.client_secret or self.oauth_config.get("client_secret"),
-            "scopes": list(self.credentials.scopes or []),
-        }
-
-    @staticmethod
-    def _get_raw_body(payload: Dict) -> tuple:
+    def _get_raw_body(self, payload: Dict) -> tuple:
         """Extract (html_body, text_body) from an email payload, recursing through parts."""
         html_body = ""
         text_body = ""
@@ -269,16 +408,20 @@ class GmailAdapter(DataAdapter):
         except re.error:
             return pattern.lower() in (subject or "").lower()
 
-    async def _extract_attachments(self, message_id: str, payload: Dict) -> List[Dict[str, Any]]:
-        """Extract attachments from a message payload.
+    async def _extract_attachments(self, message_id: str, payload: Dict, allowed_extensions: List[str] = None) -> List[Dict[str, Any]]:
+        """Extract attachments from a message payload, optionally filtered by extension.
 
         Args:
             message_id: Gmail message ID.
             payload: Message payload dict.
+            allowed_extensions: List of file extensions to include (e.g., ['xlsx', 'csv']). None = all files.
 
         Returns:
             List of attachment dicts with data.
         """
+        import os
+        if allowed_extensions:
+            allowed_extensions = [ext.lower().lstrip('.') for ext in allowed_extensions]
         service = self.service
         if service is None:
             raise RuntimeError("Gmail adapter not connected")
@@ -289,6 +432,12 @@ class GmailAdapter(DataAdapter):
         for part in parts:
             if part["filename"]:
                 filename = part["filename"]
+                # Check extension filter if provided
+                if allowed_extensions:
+                    file_ext = os.path.splitext(filename)[1].lower().lstrip('.')
+                    if file_ext not in allowed_extensions:
+                        logger.info("Attachment skipped - extension not allowed", filename=filename, extension=file_ext)
+                        continue
                 attachment_id = part["body"].get("attachmentId")
 
                 if attachment_id:

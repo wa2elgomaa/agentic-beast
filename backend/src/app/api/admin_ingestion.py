@@ -5,6 +5,7 @@ from typing import Annotated, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status, Query
+from pydantic import BaseModel
 from sqlalchemy.exc import SQLAlchemyError
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
@@ -31,11 +32,17 @@ from app.schemas.ingestion import (
     GmailAuthUrlResponse,
     GmailExchangeCodeRequest,
     GmailExchangeCodeResponse,
+    CredentialStatusResponse,
+    CredentialAuditLogResponse,
 )
 from app.services.ingestion_task_service import get_ingestion_task_service
 from app.services.schema_mapping_service import get_schema_mapping_service
 from app.services.file_storage_service import get_file_storage_service
 from app.services.scheduler_service import SchedulerService
+from app.services.gmail_credential_service import (
+    get_gmail_credential_service,
+    GmailCredentialHealthStatus,
+)
 from app.adapters.gmail_adapter import GMAIL_SCOPES
 from app.tasks.celery_app import celery_app
 
@@ -336,6 +343,8 @@ async def save_schema_mapping(
             req.source_columns,
             req.field_mappings,
             req.template_id,
+            req.identifier_column,
+            req.dedup_config,
         )
         await db.commit()
         await db.refresh(mapping)
@@ -606,4 +615,367 @@ async def exchange_gmail_code(
         raise
     except Exception as e:
         logger.error("Failed to exchange Gmail OAuth code", error=str(e), task_id=task_id)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Test Execution Endpoints
+
+class TestRunResponse(BaseModel):
+    """Response model for test run."""
+    id: str
+    task_id: str
+    executed_at: str
+    status: str  # 'success', 'failed', 'running'
+    duration_ms: int
+    error_message: Optional[str] = None
+    logs: Optional[str] = None
+
+
+class TestConfigUpdate(BaseModel):
+    """Request model for updating test configuration."""
+    test_execution_enabled: bool
+    test_execution_interval_minutes: int
+
+
+@router.post("/tasks/{task_id}/test-run", status_code=status.HTTP_202_ACCEPTED)
+async def run_test_now(
+    task_id: UUID,
+    _admin: Annotated[User, Depends(get_current_admin)] = None,
+    db: Annotated[AsyncSession, Depends(get_db_session)] = None,
+):
+    """Queue a test run for a specific ingestion task.
+
+    This will execute the ingestion task immediately, regardless of schedule,
+    to verify the configuration is working correctly.
+    """
+    try:
+        service = get_ingestion_task_service(db)
+        task = await service.get_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        # Queue task for immediate execution
+        celery_app.send_task(
+            "app.tasks.ingestion_tasks.run_ingestion_task",
+            args=[str(task_id)],
+        )
+
+        logger.info("Test run queued", task_id=task_id, triggered_by=_admin.id)
+        return {"task_id": task_id, "status": "queued"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to queue test run", error=str(e), task_id=task_id)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/tasks/{task_id}/test-runs")
+async def get_test_runs(
+    task_id: UUID,
+    limit: int = Query(50, le=500),
+    offset: int = Query(0, ge=0),
+    _admin: Annotated[User, Depends(get_current_admin)] = None,
+    db: Annotated[AsyncSession, Depends(get_db_session)] = None,
+):
+    """Get test execution history for a task."""
+    try:
+        from sqlalchemy import select, desc
+        from app.models import CronTestRun
+
+        stmt = (
+            select(CronTestRun)
+            .where(CronTestRun.task_id == task_id)
+            .order_by(desc(CronTestRun.executed_at))
+            .offset(offset)
+            .limit(limit)
+        )
+        result = await db.execute(stmt)
+        test_runs = result.scalars().all()
+
+        return {
+            "test_runs": [
+                {
+                    "id": str(run.id),
+                    "task_id": str(run.task_id),
+                    "executed_at": run.executed_at.isoformat(),
+                    "status": run.status,
+                    "duration_ms": run.duration_ms or 0,
+                    "error_message": run.error_message,
+                    "logs": run.logs,
+                }
+                for run in test_runs
+            ],
+            "limit": limit,
+            "offset": offset,
+        }
+
+    except Exception as e:
+        logger.error("Failed to get test runs", error=str(e), task_id=task_id)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.patch("/tasks/{task_id}/test-config")
+async def update_test_config(
+    task_id: UUID,
+    req: TestConfigUpdate,
+    _admin: Annotated[User, Depends(get_current_admin)] = None,
+    db: Annotated[AsyncSession, Depends(get_db_session)] = None,
+):
+    """Update test execution configuration for a task."""
+    try:
+        service = get_ingestion_task_service(db)
+        task = await service.get_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        # Update test configuration
+        task.test_execution_enabled = req.test_execution_enabled
+        task.test_execution_interval_minutes = req.test_execution_interval_minutes
+
+        db.add(task)
+        await db.commit()
+
+        logger.info(
+            "Test configuration updated",
+            task_id=task_id,
+            enabled=req.test_execution_enabled,
+            interval_minutes=req.test_execution_interval_minutes,
+        )
+
+        return {
+            "task_id": task_id,
+            "test_execution_enabled": task.test_execution_enabled,
+            "test_execution_interval_minutes": task.test_execution_interval_minutes,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to update test config", error=str(e), task_id=task_id)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# Gmail Credential Management Endpoints
+# ============================================================================
+
+
+@router.get("/tasks/{task_id}/gmail/credential-status", response_model=CredentialStatusResponse)
+async def get_credential_status(
+    task_id: UUID,
+    _admin: Annotated[User, Depends(get_current_admin)] = None,
+    db: Annotated[AsyncSession, Depends(get_db_session)] = None,
+) -> CredentialStatusResponse:
+    """Get current Gmail credential status and health for a task."""
+    try:
+        from app.models import GmailCredentialStatus
+        from sqlalchemy import select
+
+        # Verify task exists
+        service = get_ingestion_task_service(db)
+        task = await service.get_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        # Get credential status
+        credential_service = get_gmail_credential_service(db)
+        status = await credential_service.get_credential_status(task_id)
+
+        if not status:
+            # Return default pending status if none exists yet
+            status = await credential_service.get_or_create_credential_status(task_id)
+
+        return CredentialStatusResponse(
+            task_id=status.task_id,
+            status=status.status,
+            health_score=status.health_score,
+            account_email=status.account_email,
+            consecutive_failures=status.consecutive_failures,
+            max_consecutive_failures=status.max_consecutive_failures,
+            last_used_at=status.last_used_at.isoformat() if status.last_used_at else None,
+            auth_established_at=status.auth_established_at.isoformat() if status.auth_established_at else None,
+            token_refreshed_at=status.token_refreshed_at.isoformat() if status.token_refreshed_at else None,
+            last_error_code=status.last_error_code,
+            last_error_message=status.last_error_message,
+            created_at=status.created_at.isoformat(),
+            updated_at=status.updated_at.isoformat(),
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to get credential status", error=str(e), task_id=task_id)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/tasks/{task_id}/gmail/audit-log", response_model=CredentialAuditLogResponse)
+async def get_credential_audit_log(
+    task_id: UUID,
+    limit: int = Query(50, le=500),
+    offset: int = Query(0, ge=0),
+    _admin: Annotated[User, Depends(get_current_admin)] = None,
+    db: Annotated[AsyncSession, Depends(get_db_session)] = None,
+) -> CredentialAuditLogResponse:
+    """Get Gmail credential audit log for a task."""
+    try:
+        from app.models import GmailCredentialAuditLog
+        from sqlalchemy import select, desc, func
+
+        # Verify task exists
+        service = get_ingestion_task_service(db)
+        task = await service.get_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        # Get audit logs with total count
+        credential_service = get_gmail_credential_service(db)
+
+        # Get paginated logs
+        logs = await credential_service.get_audit_log(task_id, limit=limit)
+        
+        # Get total count
+        count_stmt = select(func.count(GmailCredentialAuditLog.id)).where(
+            GmailCredentialAuditLog.task_id == task_id
+        )
+        count_result = await db.execute(count_stmt)
+        total = count_result.scalar() or 0
+
+        return CredentialAuditLogResponse(
+            audit_log=[
+                {
+                    "id": log.id,
+                    "task_id": log.task_id,
+                    "event_type": log.event_type,
+                    "account_email": log.account_email,
+                    "error_code": log.error_code,
+                    "error_message": log.error_message,
+                    "action_by": log.action_by,
+                    "created_at": log.created_at.isoformat(),
+                }
+                for log in logs
+            ],
+            limit=limit,
+            offset=offset,
+            total=total,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to get audit log", error=str(e), task_id=task_id)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/tasks/{task_id}/gmail/re-authenticate")
+async def re_authenticate_gmail(
+    task_id: UUID,
+    _admin: Annotated[User, Depends(get_current_admin)] = None,
+    db: Annotated[AsyncSession, Depends(get_db_session)] = None,
+):
+    """Trigger Gmail re-authentication by returning OAuth URL."""
+    try:
+        # Verify task exists and is Gmail type
+        service = get_ingestion_task_service(db)
+        task = await service.get_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        if task.adaptor_type != AdaptorType.GMAIL:
+            raise HTTPException(
+                status_code=400,
+                detail="Task is not a Gmail ingestion task"
+            )
+
+        # Generate new OAuth URL using the same flow as initial auth
+        # Embed task_id into state so callback page can identify the task
+        nonce = secrets.token_urlsafe(32)
+        combined_state = f"{task_id}:{nonce}"
+        
+        # Use stored redirect URI from task config, or default to configured one
+        redirect_uri = (task.adaptor_config or {}).get("oauth_redirect_uri") or settings.gmail_oauth_redirect_uri
+
+        flow = Flow.from_client_config(
+            _build_google_client_config(),
+            scopes=GMAIL_SCOPES,
+            state=combined_state,
+            redirect_uri=redirect_uri
+        )
+        auth_uri, _ = flow.authorization_url(
+            access_type="offline",
+            include_granted_scopes="true",
+            prompt="consent",
+        )
+
+        # Update task config with state and code_verifier for callback
+        config = dict(task.adaptor_config or {})
+        config["oauth_state"] = combined_state
+        config["oauth_redirect_uri"] = redirect_uri
+        if flow.code_verifier:
+            config["oauth_code_verifier"] = flow.code_verifier
+        task.adaptor_config = config
+        db.add(task)
+        await db.commit()
+
+        logger.info("Gmail re-authentication initiated", task_id=task_id, initiated_by=_admin.id)
+
+        return {
+            "task_id": str(task_id),
+            "auth_url": auth_uri,
+            "state": combined_state,
+            "message": "Complete the authentication to re-authorize Gmail access",
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to initiate re-authentication", error=str(e), task_id=task_id)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/tasks/{task_id}/gmail/credentials")
+async def clear_gmail_credentials(
+    task_id: UUID,
+    _admin: Annotated[User, Depends(get_current_admin)] = None,
+    db: Annotated[AsyncSession, Depends(get_db_session)] = None,
+):
+    """Clear stored Gmail credentials (admin action)."""
+    try:
+        # Verify task exists and is Gmail type
+        service = get_ingestion_task_service(db)
+        task = await service.get_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        if task.adaptor_type != AdaptorType.GMAIL:
+            raise HTTPException(
+                status_code=400,
+                detail="Task is not a Gmail ingestion task"
+            )
+
+        # Clear credentials from adaptor_config
+        task.adaptor_config = task.adaptor_config or {}
+        if "gmail_oauth" in task.adaptor_config:
+            del task.adaptor_config["gmail_oauth"]
+
+        db.add(task)
+        await db.commit()
+
+        # Clear credential status
+        credential_service = get_gmail_credential_service(db)
+        await credential_service.clear_credentials(task_id, cleared_by=_admin.id)
+        await db.commit()
+
+        logger.info("Gmail credentials cleared", task_id=task_id, cleared_by=_admin.id)
+
+        return {
+            "task_id": str(task_id),
+            "status": "cleared",
+            "message": "Gmail credentials have been cleared. Re-authentication required for next run.",
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to clear credentials", error=str(e), task_id=task_id)
         raise HTTPException(status_code=500, detail=str(e))

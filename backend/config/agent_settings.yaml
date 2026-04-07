@@ -1,0 +1,101 @@
+agents:
+  analytics:
+    description: "SQL analytics query agent"
+    lm_timeout_seconds: 45
+    sql_max_retries: 2
+    sql_retry_backoff_multiplier: 1.5
+    default_row_limit: 20
+    max_row_limit: 200
+    model: "gpt-4o-mini"
+    temperature: 0.1
+    max_tokens: 2000
+  
+  tagging:
+    description: "Content tagging agent"
+    lm_timeout_seconds: 30
+    max_tags: 10
+    min_tags: 3
+    model: "gpt-4o-mini"
+    temperature: 0.3
+    max_tokens: 500
+  
+  recommendation:
+    description: "Content recommendation agent"
+    lm_timeout_seconds: 90
+    max_results: 20
+    model: "gpt-4o-mini"
+    temperature: 0.5
+    max_tokens: 1000
+  
+  intent_classifier:
+    description: "Intent classification agent"
+    lm_timeout_seconds: 15
+    model: "gpt-4o-mini"
+    temperature: 0.1
+    max_tokens: 200
+  
+  router:
+    description: "Query routing agent"
+    lm_timeout_seconds: 20
+    model: "gpt-4o-mini"
+    temperature: 0.1
+    max_tokens: 300
+
+code_interpreter:
+  description: "Python sandbox code execution"
+  timeout_seconds: 30
+  max_code_lines: 30
+  max_code_length_chars: 5000
+  matplotlib_backend: "Agg"
+  allowed_imports: 
+    - "pandas"
+    - "matplotlib.pyplot"
+    - "json"
+    - "math"
+    - "numpy"
+  restricted_python_enabled: true
+
+database:
+  description: "Database query constraints"
+  statement_timeout_ms: 10000
+  max_rows_per_query: 200
+  default_limit: 20
+  query_cache_ttl_seconds: 300
+  allowed_tables:
+    - "documents"
+
+value_guard:
+  description: "Numeric value validation"
+  enabled: true
+  threshold: 100  # Only validate numbers >= 100
+
+retry_policy:
+  max_retries: 3
+  base_delay_seconds: 1.0
+  max_delay_seconds: 60.0
+  backoff_multiplier: 2.0
+  jitter_enabled: true
+
+text_sanitization:
+  max_length_default: 800
+  max_length_errors: 600
+  max_length_descriptions: 1200
+  remove_non_printable: true
+  keep_whitespace: true
+
+api_timeouts:
+  http_client_timeout_seconds: 60.0
+  external_api_timeout_seconds: 30.0
+
+follow_up_detection:
+  description: "Autonomous follow-up query detection (LLM-based)"
+  enabled: true
+  use_conversation_context: true
+  confidence_threshold: 0.6
+
+few_shot:
+  description: "Few-shot example generation"
+  dynamic_generation_enabled: true
+  num_examples_per_intent: 3
+  cache_examples_locally: true
+  fallback_to_stored: true

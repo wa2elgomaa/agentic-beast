@@ -16,9 +16,11 @@ import logging
 import re
 from typing import Any, Optional
 
-import httpx
-
 _logger = logging.getLogger(__name__)
+
+from app.config import settings
+from app.agents.response_agent import _format_number, _build_view_url, _safe_str  # noqa: E402
+from app.utilities.json_chat import generate_json_object
 
 from pydantic import BaseModel, field_validator
 
@@ -254,20 +256,26 @@ def _rows_to_result_data(rows: list[dict], query_category: str = "metrics") -> l
                 or r.get("content_id")
                 or "Unknown"
             )
-            # Ensure title falls back to full content when title is empty
+
+            # Build canonical fields: title from title then content; description from content column
             raw_title = (r.get("title") or "").strip()
             if raw_title:
-                title_field = raw_title
+                title_field = _safe_str(raw_title)
             else:
-                title_field = r.get("content") or r.get("content_id") or None
+                title_field = _safe_str(r.get("content") or "")
+
+            content_field = _safe_str(r.get("content") or "")
+            view_url = _build_view_url(_safe_str(r.get("platform")), r.get("content_id"))
+            formatted_value = _format_number(r.get("value", 0))
 
             result.append(
                 {
                     "label": str(label),
-                    "value": str(r.get("value", 0)),
+                    "value": formatted_value,
                     "platform": r.get("platform"),
-                    "content": r.get("content_id") or r.get("content"),
+                    "content": content_field,
                     "title": title_field,
+                    "view_url": view_url,
                 }
             )
     return result
@@ -402,7 +410,7 @@ async def run_analytics_query(
             start_date=time_from,
             end_date=time_to,
             group_by="platform",
-            limit=20,
+            limit=settings.db_default_limit,
         )
         try:
             db_result = json.loads(raw)
@@ -468,166 +476,214 @@ async def run_analytics_query(
 # SQL-generation pipeline  (new primary path)
 # ===========================================================================
 
-MAX_SQL_RETRIES: int = 1
+MAX_SQL_RETRIES: int = settings.sql_generation_max_retries
 """How many times to re-ask the LLM for a corrected SQL before returning error."""
 
 # ---------------------------------------------------------------------------
-# Schema context injected into every SQL-generation prompt
+# Dynamic prompt builders (schema + intent registry driven)
 # ---------------------------------------------------------------------------
 
-from app.nlp.column_mapper import WHITELISTED_DIMENSIONS, WHITELISTED_METRICS  # noqa: E402
 
-_SCHEMA_CONTEXT = f"""
-Table: documents (PostgreSQL)
+def _ensure_registries_loaded() -> None:
+    from app.config import get_schema_registry, initialize_registries, settings  # noqa: PLC0415
 
-Allowed metric columns (numeric, use for aggregation/ordering):
-{', '.join(sorted(WHITELISTED_METRICS))}
+    try:
+        get_schema_registry()
+    except RuntimeError:
+        initialize_registries(config_dir=settings.config_dir)
 
-Allowed dimension columns (use for GROUP BY / WHERE / ORDER BY):
-{', '.join(sorted(WHITELISTED_DIMENSIONS))}
 
-Other useful columns: title (text), content (text), content_id (text),
-  published_date (date), platform (text)
+def _build_schema_context() -> str:
+    """Build schema context dynamically from SchemaRegistry."""
+    from app.config import get_schema_registry  # noqa: PLC0415
 
-Display label rule:
-    ALWAYS include COALESCE(NULLIF(title, ''), LEFT(content, 200)) AS display_label
-  in SELECT when fetching individual content rows.
-""".strip()
+    _ensure_registries_loaded()
+    schema = get_schema_registry()
 
-_SQL_GEN_SYSTEM_PROMPT = f"""You are an expert PostgreSQL query generator for a social media analytics platform.
-Your ONLY output is a raw JSON object — no markdown, no explanation, no code fences.
+    metric_lines = []
+    for metric, cfg in sorted(schema.metrics.items()):
+        aliases = ", ".join(cfg.get("aliases", [])[:4])
+        agg = ",".join(cfg.get("aggregations", ["sum"]))
+        metric_lines.append(f"- {metric} (aggs: {agg}; aliases: {aliases})")
 
-{_SCHEMA_CONTEXT}
+    dimension_lines = []
+    for dim, cfg in sorted(schema.dimensions.items()):
+        aliases = ", ".join(cfg.get("aliases", [])[:4])
+        dimension_lines.append(f"- {dim} (aliases: {aliases})")
 
-Output schema (ALL fields required):
-{{
-  "sql": "SELECT ... FROM documents WHERE ... LIMIT :max_rows",
-  "params": {{"param_name": "value", ...}},
-  "metric": "<metric_column_name or null>",
-  "operation": "<sum|average|max|min|top_n|count|compare>",
-  "query_category": "<metrics|publishing_insights|compare>"
-}}
+    table_name = schema.table_name
+    default_limit = schema.constraints.get("default_limit", 10)
+    max_limit = schema.constraints.get("max_limit", 100)
 
-Rules:
-1. ONLY SELECT from the 'documents' table. Never use INSERT/UPDATE/DELETE/DROP/ALTER/CREATE.
-2. Use :param_name placeholders for ALL user-supplied filter values — NEVER interpolate strings.
-3. ALWAYS include LIMIT :max_rows in SQL; set params.max_rows to an appropriate integer (default 10).
-4. For top-N: ORDER BY <metric_col> DESC LIMIT :max_rows — set params.max_rows = N.
-5. For publishing insights (best day/time to post):
-   SELECT TRIM(TO_CHAR(published_date, 'Day')) AS day_of_week,
-          AVG(COALESCE(engagements, 0)) AS avg_interactions,
-          COUNT(*) AS sample_size
-   FROM documents [WHERE ...]
-   GROUP BY day_of_week ORDER BY avg_interactions DESC LIMIT :max_rows
-   Set query_category = 'publishing_insights', metric = 'engagements', operation = 'average'.
-6. For platform filter: LOWER(platform) = LOWER(:platform)
-7. For keyword/topic filter: (title ILIKE :keyword OR content ILIKE :keyword)
-   Wrap the value: params.keyword = '%<term>%'
-8. For date range: published_date BETWEEN :start_date::date AND :end_date::date
-9. For compare (group by platform): GROUP BY platform ORDER BY <agg> DESC
-10. query_category must be exactly: metrics | publishing_insights | compare
-11. If the user asks about best time/day to post — always use publishing_insights path (rule 5).
-12. PostgreSQL GROUP BY & alias rules:
-     - When you SELECT non-aggregated expressions (for example COALESCE(title, LEFT(content, 200)), platform, content_id),
-         you MUST include the exact SAME expressions in the GROUP BY clause. Do NOT rely on column aliases in the same SELECT.
-         Example: GROUP BY COALESCE(title, LEFT(content, 200)), platform, content_id
-     - Always repeat the full expression in GROUP BY; do NOT use the alias `display_label` in GROUP BY.
-     - Alias aggregated columns as `metric_value` (e.g., SUM(video_views) AS metric_value) and ORDER BY metric_value DESC.
-     - Aggregated expressions must NOT appear in GROUP BY.
-13. Use explicit PostgreSQL casting where needed (e.g., :start_date::date) and avoid vendor-neutral shorthands that break Postgres.
-""".strip()
+    metrics_text = "\n".join(metric_lines)
+    dimensions_text = "\n".join(dimension_lines)
 
-_SQL_GEN_FEW_SHOT: list[dict] = [
-    {
-        "role": "user",
-        "content": "Show me the top 5 videos by view count.",
-    },
-    {
-        "role": "assistant",
-        "content": json.dumps({
-                "sql": (
-                "SELECT COALESCE(NULLIF(title, ''), LEFT(content, 200)) AS display_label, "
-                "platform, content_id, SUM(video_views) AS metric_value "
-                "FROM documents "
-                "GROUP BY COALESCE(NULLIF(title, ''), LEFT(content, 200)), platform, content_id "
-                "ORDER BY metric_value DESC LIMIT :max_rows"
+    return (
+        f"Table: {table_name} (PostgreSQL)\n\n"
+        "Allowed metric columns (numeric, use for aggregation/ordering):\n"
+        f"{metrics_text}\n\n"
+        "Allowed dimension columns (use for GROUP BY / WHERE / ORDER BY):\n"
+        f"{dimensions_text}\n\n"
+        "Other useful columns: title (text), content (text), content_id (text), "
+        "published_date (date), platform (text)\n"
+        "CRITICAL: When grouping (GROUP BY), EVERY non-aggregated column in SELECT must be in GROUP BY.\n"
+        "Example correct query: SELECT platform, content_id, MAX(title), SUM(metric) FROM documents "
+        "GROUP BY platform, content_id  (title will be aggregated automatically).\n"
+        "Example INCORRECT: SELECT platform, published_date, SUM(metric) FROM documents GROUP BY platform "
+        "(missing published_date in GROUP BY).\n"
+        f"Default limit: {default_limit}; absolute max limit: {max_limit}."
+    )
+
+
+def _build_sql_gen_system_prompt() -> str:
+    schema_context = _build_schema_context()
+    return (
+        "You are an expert PostgreSQL query generator for a social media analytics platform. "
+        "Your ONLY output is a raw JSON object — no markdown, no explanation, no code fences.\n\n"
+        f"{schema_context}\n\n"
+        "Output schema (ALL fields required):\n"
+        "{\n"
+        '  "sql": "SELECT ... FROM documents WHERE ... LIMIT :max_rows",\n'
+        '  "params": {"param_name": "value", ...},\n'
+        '  "metric": "<metric_column_name or null>",\n'
+        '  "operation": "<sum|average|max|min|top_n|count|compare>",\n'
+        '  "query_category": "<metrics|publishing_insights|compare>"\n'
+        "}\n\n"
+        "Rules:\n"
+        "1. ONLY SELECT from the documents table. Never use INSERT/UPDATE/DELETE/DROP/ALTER/CREATE.\n"
+        "2. Use :param_name placeholders for ALL user-supplied filter values — NEVER interpolate strings.\n"
+        "3. ALWAYS include LIMIT :max_rows in SQL and set params.max_rows.\n"
+        "4. For top-N: ORDER BY metric_value DESC LIMIT :max_rows and include title/content/content_id/platform.\n"
+        "5. For publishing insights, aggregate by day using published_date and engagements.\n"
+        "6. For platform filter: LOWER(platform) = LOWER(:platform).\n"
+        "7. For keyword filter: (title ILIKE :keyword OR content ILIKE :keyword), with %term%.\n"
+        "8. For date range: published_date BETWEEN :start_date::date AND :end_date::date.\n"
+        "9. For compare queries: GROUP BY platform and ORDER BY metric_value DESC.\n"
+        "10. query_category must be one of metrics | publishing_insights | compare.\n"
+        "11. CRITICAL GROUP BY RULE: Every non-aggregated column in SELECT must be in GROUP BY. "
+        "   Aggregated columns (SUM, MAX, AVG, MIN, COUNT) do NOT go in GROUP BY.\n"
+        "12. CONTEXTUAL FILTERING: When you see [PRIOR QUERY CONTEXT] with a TOP RESULT content_id:\n"
+        "    - If user says 'first', 'top', 'the one with most...', use WHERE content_id = :top_content_id\n"
+        "    - Example: User says 'compare top video across platforms' → WHERE content_id = :top_content_id GROUP BY platform\n"
+        "    - Extract the content_id value from the prior context and pass it in params.\n"
+        "13. Alias aggregated values as metric_value whenever practical."
+    )
+
+
+def _build_sql_gen_few_shot() -> list[dict[str, str]]:
+    """Build few-shot examples from intent registry examples + schema defaults."""
+    from app.config import get_intent_registry, get_schema_registry  # noqa: PLC0415
+
+    _ensure_registries_loaded()
+    intents = get_intent_registry()
+    schema = get_schema_registry()
+
+    metric_default = "video_views" if "video_views" in schema.metrics else next(iter(schema.metrics.keys()), "video_views")
+    compare_metric = "organic_reach" if "organic_reach" in schema.metrics else metric_default
+
+    examples = intents.get_intent_example_queries("analytics")
+    top_example = examples[0] if examples else "Show me top 5 content by views"
+    publishing_example = examples[1] if len(examples) > 1 else "When is the best day to post on Instagram?"
+    compare_example = examples[2] if len(examples) > 2 else "Compare performance by platform"
+
+    return [
+        {"role": "user", "content": top_example},
+        {
+            "role": "assistant",
+            "content": json.dumps(
+                {
+                    "sql": (
+                        "SELECT platform, content_id, "
+                        "MAX(NULLIF(title, '')) AS title, MAX(content) AS content, "
+                        f"SUM({metric_default}) AS metric_value "
+                        "FROM documents "
+                        "GROUP BY platform, content_id "
+                        "ORDER BY metric_value DESC LIMIT :max_rows"
+                    ),
+                    "params": {"max_rows": 5},
+                    "metric": metric_default,
+                    "operation": "top_n",
+                    "query_category": "metrics",
+                }
             ),
-            "params": {"max_rows": 5},
-            "metric": "video_views",
-            "operation": "top_n",
-            "query_category": "metrics",
-        }),
-    },
-    {
-        "role": "user",
-        "content": "When should I post on Instagram?",
-    },
-    {
-        "role": "assistant",
-        "content": json.dumps({
-            "sql": (
-                "SELECT TRIM(TO_CHAR(published_date, 'Day')) AS day_of_week, "
-                "AVG(COALESCE(engagements, 0)) AS avg_interactions, "
-                "COUNT(*) AS sample_size "
-                "FROM documents "
-                "WHERE LOWER(platform) = LOWER(:platform) "
-                "GROUP BY TRIM(TO_CHAR(published_date, 'Day')) "
-                "ORDER BY avg_interactions DESC LIMIT :max_rows"
+        },
+        {"role": "user", "content": publishing_example},
+        {
+            "role": "assistant",
+            "content": json.dumps(
+                {
+                    "sql": (
+                        "SELECT TRIM(TO_CHAR(published_date, 'Day')) AS day_of_week, "
+                        "AVG(COALESCE(engagements, 0)) AS avg_interactions, "
+                        "COUNT(*) AS sample_size "
+                        "FROM documents "
+                        "WHERE LOWER(platform) = LOWER(:platform) "
+                        "GROUP BY TRIM(TO_CHAR(published_date, 'Day')) "
+                        "ORDER BY avg_interactions DESC LIMIT :max_rows"
+                    ),
+                    "params": {"platform": "Instagram", "max_rows": 7},
+                    "metric": "engagements",
+                    "operation": "average",
+                    "query_category": "publishing_insights",
+                }
             ),
-            "params": {"platform": "Instagram", "max_rows": 7},
-            "metric": "engagements",
-            "operation": "average",
-            "query_category": "publishing_insights",
-        }),
-    },
-    {
-        "role": "user",
-        "content": "Compare organic reach on Instagram and TikTok.",
-    },
-    {
-        "role": "assistant",
-        "content": json.dumps({
-            "sql": (
-                "SELECT platform, SUM(organic_reach) AS metric_value "
-                "FROM documents "
-                "WHERE LOWER(platform) IN ('instagram', 'tiktok') "
-                "GROUP BY platform "
-                "ORDER BY metric_value DESC LIMIT :max_rows"
+        },
+        {"role": "user", "content": compare_example},
+        {
+            "role": "assistant",
+            "content": json.dumps(
+                {
+                    "sql": (
+                        f"SELECT platform, SUM({compare_metric}) AS metric_value "
+                        "FROM documents "
+                        "GROUP BY platform "
+                        "ORDER BY metric_value DESC LIMIT :max_rows"
+                    ),
+                    "params": {"max_rows": 10},
+                    "metric": compare_metric,
+                    "operation": "compare",
+                    "query_category": "compare",
+                }
             ),
-            "params": {"max_rows": 10},
-            "metric": "organic_reach",
-            "operation": "compare",
-            "query_category": "compare",
-        }),
-    },
-    {
-        "role": "user",
-        "content": "Give me top 3 videos featuring Donald Trump last month.",
-    },
-    {
-        "role": "assistant",
-        "content": json.dumps({
-                "sql": (
-                "SELECT COALESCE(NULLIF(title, ''), LEFT(content, 200)) AS display_label, "
-                "platform, content_id, SUM(video_views) AS metric_value "
-                "FROM documents "
-                "WHERE (title ILIKE :keyword OR content ILIKE :keyword) "
-                "AND published_date BETWEEN :start_date::date AND :end_date::date "
-                "GROUP BY COALESCE(NULLIF(title, ''), LEFT(content, 200)), platform, content_id "
-                "ORDER BY metric_value DESC LIMIT :max_rows"
+        },
+        # Contextual follow-up example: referencing prior results
+        {
+            "role": "user",
+            "content": (
+                "[PRIOR QUERY CONTEXT]\n"
+                "The user's last analytics query used this SQL:\n"
+                "SELECT platform, content_id, MAX(NULLIF(title, '')) AS title, SUM(video_views) AS metric_value "
+                "FROM documents GROUP BY platform, content_id ORDER BY metric_value DESC LIMIT :max_rows\n"
+                "Metric analysed: video_views\n"
+                "Columns returned: platform, content_id, title, metric_value\n"
+                "RESULTS (ranked by display order):\n"
+                "  [1st/TOP] {\"platform\": \"Instagram\", \"content_id\": \"abc123\", \"title\": \"Viral Post\", \"metric_value\": \"50000\"}\n"
+                "  [2nd] {\"platform\": \"TikTok\", \"content_id\": \"def456\", \"title\": \"Trending Clip\", \"metric_value\": \"35000\"}\n"
+                "  [3rd] {\"platform\": \"YouTube\", \"content_id\": \"ghi789\", \"title\": \"Featured Video\", \"metric_value\": \"28000\"}\n"
+                "KEY REFERENCE: The TOP RESULT has content_id='abc123'.\n"
+                "When the user says 'first', 'top', or 'most...', use this content_id in WHERE clause.\n"
+                "Example: WHERE content_id = 'abc123' then GROUP BY platform to show across platforms.\n"
+                "\n"
+                "User follow-up: compare the first video on all platforms"
             ),
-            "params": {
-                "keyword": "%Donald Trump%",
-                "start_date": "2026-03-01",
-                "end_date": "2026-03-31",
-                "max_rows": 3,
-            },
-            "metric": "video_views",
-            "operation": "top_n",
-            "query_category": "metrics",
-        }),
-    },
-]
+        },
+        {
+            "role": "assistant",
+            "content": json.dumps(
+                {
+                    "sql": (
+                        "SELECT platform, SUM(video_views) AS metric_value "
+                        "FROM documents WHERE content_id = :top_content_id "
+                        "GROUP BY platform ORDER BY metric_value DESC LIMIT :max_rows"
+                    ),
+                    "params": {"top_content_id": "abc123", "max_rows": 10},
+                    "metric": "video_views",
+                    "operation": "compare",
+                    "query_category": "compare",
+                }
+            ),
+        },
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -639,7 +695,7 @@ async def generate_analytics_sql(
     conversation_history: list[dict] | None = None,
     error_hint: str | None = None,
 ) -> dict[str, Any]:
-    """Ask Ollama (preferably deepseek-coder) to generate a parameterized SELECT.
+    """Ask configured provider to generate a parameterized SELECT JSON object.
 
     Args:
         message:              User's natural-language analytics query.
@@ -651,21 +707,62 @@ async def generate_analytics_sql(
            "operation": str, "query_category": str}``
 
     Raises:
-        UnsupportedQueryError: If Ollama is unreachable or returns invalid JSON.
+        UnsupportedQueryError: If provider is unreachable or returns invalid JSON.
     """
     from app.config import settings  # noqa: PLC0415
     from app.nlp.intent_parser import UnsupportedQueryError  # noqa: PLC0415
 
-    # Prefer the dedicated SQL model; fall back to general model
-    sql_model = settings.ollama_sql_model.strip() or settings.ollama_model
-    url = f"{settings.ollama_base_url.rstrip('/')}/api/chat"
+    # Prefer dedicated SQL model by provider; fall back to provider default model.
+    if settings.ai_provider in ("openai", "strands"):
+        sql_model = (settings.openai_sql_model or "").strip() or settings.openai_model
+    else:
+        sql_model = (settings.ollama_sql_model or "").strip() or settings.ollama_model
 
     messages: list[dict] = [
-        {"role": "system", "content": _SQL_GEN_SYSTEM_PROMPT},
-        *_SQL_GEN_FEW_SHOT,
+        {"role": "system", "content": _build_sql_gen_system_prompt()},
+        *_build_sql_gen_few_shot(),
     ]
 
-    # Include recent conversation context (truncated to avoid token overflow)
+    # Inject structured prior-query context for chained questions.
+    # e.g. "Break them down by platform?" needs to know the previous SQL and metric.
+    prior_context_block: str | None = None
+    if conversation_history:
+        for h in reversed(conversation_history):
+            if h.get("role") == "assistant" and h.get("prior_sql"):
+                prior_sql = h["prior_sql"]
+                prior_metric = h.get("prior_metric", "")
+                prior_rows = h.get("prior_rows", [])
+                # Build a ranked, explicitly-labeled sample for contextual filtering
+                col_sample = ""
+                if prior_rows:
+                    cols = list(prior_rows[0].keys())
+                    col_sample = f"\nColumns returned: {', '.join(cols)}\n"
+                    col_sample += "RESULTS (ranked by display order):\n"
+
+                    # Format first 3 rows with explicit ranking
+                    for idx, row in enumerate(prior_rows[:3], start=1):
+                        row_formatted = {c: str(row.get(c, ""))[:40] for c in cols}
+                        rank_label = "[1st/TOP]" if idx == 1 else f"[{idx}nd]" if idx == 2 else f"[{idx}rd]"
+                        col_sample += f"  {rank_label} {json.dumps(row_formatted)}\n"
+
+                    # Extract first result's content_id for explicit guidance
+                    first_row = prior_rows[0]
+                    first_content_id = first_row.get("content_id", "")
+                    if first_content_id:
+                        col_sample += f"\nKEY REFERENCE: The TOP RESULT has content_id='{first_content_id}'.\n"
+                        col_sample += "When the user says 'first', 'top', or 'the one with most...', use this content_id in a WHERE clause.\n"
+                        col_sample += f"Example: WHERE content_id = '{first_content_id}' then GROUP BY platform to show across platforms."
+
+                prior_context_block = (
+                    f"[PRIOR QUERY CONTEXT]\n"
+                    f"The user's last analytics query used this SQL:\n{prior_sql}\n"
+                    f"Metric analysed: {prior_metric}{col_sample}\n"
+                    f"Use this as the basis for the follow-up question below. "
+                    f"Modify or extend the SQL to answer the follow-up — do NOT start from scratch."
+                )
+                break  # only need the most recent analytics turn
+
+    # Include recent plain conversation messages for textual continuity
     if conversation_history:
         for h in conversation_history[-4:]:
             role = h.get("role", "user")
@@ -674,9 +771,12 @@ async def generate_analytics_sql(
 
     # Inject error hint so the LLM can self-correct
     user_content = message
+    if prior_context_block:
+        user_content = f"{prior_context_block}\n\nUser follow-up: {message}"
     if error_hint:
+        base = user_content  # may already include prior_context_block
         user_content = (
-            f"{message}\n\n"
+            f"{base}\n\n"
             f"[CORRECTION NEEDED] Your previous SQL failed with this error:\n"
             f"{error_hint}\n"
             "Please fix the SQL and return corrected JSON."
@@ -684,30 +784,15 @@ async def generate_analytics_sql(
 
     messages.append({"role": "user", "content": user_content})
 
-    payload = {
-        "model": sql_model,
-        "format": "json",
-        "stream": False,
-        "messages": messages,
-    }
-
     try:
-        async with httpx.AsyncClient(timeout=45.0) as client:
-            resp = await client.post(url, json=payload)
-            resp.raise_for_status()
-            data = resp.json()
-    except httpx.HTTPStatusError as exc:
-        raise UnsupportedQueryError(
-            f"Ollama SQL gen HTTP error {exc.response.status_code}"
-        ) from exc
-    except httpx.RequestError as exc:
-        raise UnsupportedQueryError(f"Ollama unreachable: {exc}") from exc
-
-    raw = data.get("message", {}).get("content", "{}")
-    try:
-        result = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise UnsupportedQueryError("Ollama SQL gen returned non-JSON") from exc
+        result = await generate_json_object(
+            messages=messages,
+            model=sql_model,
+            timeout_seconds=float(settings.agent_analytics_timeout_seconds),
+            purpose="analytics_sql_generation",
+        )
+    except Exception as exc:
+        raise UnsupportedQueryError(str(exc)) from exc
 
     raw_sql = result.get("sql") or ""
     if isinstance(raw_sql, dict):
@@ -720,7 +805,7 @@ async def generate_analytics_sql(
         )
     sql = str(raw_sql).strip()
     if not sql:
-        raise UnsupportedQueryError("Ollama SQL gen returned empty sql field")
+        raise UnsupportedQueryError("SQL generation returned empty sql field")
 
     # The model sometimes returns params as a JSON-encoded string rather than an
     # object — coerce it to a plain dict in either case.

@@ -14,6 +14,7 @@ from typing import Any
 from strands import tool
 from sqlalchemy import and_, func, select
 
+from app.config import settings
 from app.db.session import AsyncSessionLocal
 import logging
 from app.models.document import Document
@@ -133,7 +134,7 @@ async def query_metrics_db(
     start_date: str | None = None,
     end_date: str | None = None,
     group_by: str | None = None,
-    limit: int = 20,
+    limit: int = settings.db_default_limit,
 ) -> str:
     return await query_metrics_db_impl(
         metric=metric,
@@ -155,7 +156,7 @@ async def query_metrics_db_impl(
     start_date: str | None = None,
     end_date: str | None = None,
     group_by: str | None = None,
-    limit: int = 20,
+    limit: int = settings.db_default_limit,
 ) -> str:
     """Aggregate a metric from database records using safe SQL.
 
@@ -167,7 +168,7 @@ async def query_metrics_db_impl(
         start_date: Optional YYYY-MM-DD inclusive lower bound.
         end_date: Optional YYYY-MM-DD inclusive upper bound.
         group_by: Optional comma-separated dimensions from group_by_dimensions.
-        limit: Max rows to return (1..100).
+        limit: Max rows to return (bounded by configured DB row limits).
     """
     metric_key = (metric or "").strip().lower()
     metric_col = METRIC_COLUMNS.get(metric_key)
@@ -191,7 +192,7 @@ async def query_metrics_db_impl(
     if agg_fn is None:
         return json.dumps({"error": f"Unsupported aggregation '{aggregation}'", "allowed": sorted(agg_map.keys())})
 
-    bounded_limit = max(1, min(limit, 100))
+    bounded_limit = max(1, min(limit, settings.db_max_rows_per_query))
     start = _parse_date(start_date)
     end = _parse_date(end_date)
 
@@ -263,7 +264,7 @@ async def get_top_content_db(
     start_date: str | None = None,
     end_date: str | None = None,
     keyword: str | None = None,
-    limit: int = 10,
+    limit: int = settings.db_default_limit,
 ) -> str:
     return await get_top_content_db_impl(
         metric=metric,
@@ -281,7 +282,7 @@ async def get_top_content_db_impl(
     start_date: str | None = None,
     end_date: str | None = None,
     keyword: str | None = None,
-    limit: int = 10,
+    limit: int = settings.db_default_limit,
 ) -> str:
     """Rank top content by a metric using SQL aggregation."""
     metric_key = (metric or "").strip().lower()
@@ -294,7 +295,7 @@ async def get_top_content_db_impl(
             }
         )
 
-    bounded_limit = max(1, min(limit, 50))
+    bounded_limit = max(1, min(limit, settings.db_max_rows_per_query))
     start = _parse_date(start_date)
     end = _parse_date(end_date)
 
@@ -314,16 +315,19 @@ async def get_top_content_db_impl(
         )
 
     value_col = func.sum(metric_col).label("metric_value")
+    title_col = func.max(func.coalesce(Document.title, "")).label("title")
+    content_col = func.max(Document.content).label("content")
     stmt = select(
         Document.platform,
         Document.content_id,
-        func.coalesce(Document.title, "").label("title"),
+        title_col,
+        content_col,
         value_col,
     )
     if filters:
         stmt = stmt.where(and_(*filters))
     stmt = (
-        stmt.group_by(Document.platform, Document.content_id, Document.title)
+        stmt.group_by(Document.platform, Document.content_id)
         .order_by(value_col.desc())
         .limit(bounded_limit)
     )
@@ -337,7 +341,8 @@ async def get_top_content_db_impl(
             "platform": row[0],
             "content_id": row[1],
             "title": row[2],
-            "value": _safe_float(row[3]),
+            "content": row[3],
+            "value": _safe_float(row[4]),
         }
         for row in raw_rows
     ]
@@ -354,20 +359,20 @@ async def get_top_content_db_impl(
 @tool
 async def get_publishing_insights_db(
     platform: str | None = None,
-    days: int = 90,
+    days: int = settings.publishing_insights_default_days,
 ) -> str:
     return await get_publishing_insights_db_impl(platform=platform, days=days)
 
 
 async def get_publishing_insights_db_impl(
     platform: str | None = None,
-    days: int = 90,
+    days: int = settings.publishing_insights_default_days,
 ) -> str:
     """Compute best publish day by average interactions from SQL data.
 
     If *platform* is None or 'all', aggregates across every platform.
     """
-    bounded_days = max(7, min(days, 365))
+    bounded_days = max(settings.publishing_insights_min_days, min(days, settings.publishing_insights_max_days))
     start = date.today() - timedelta(days=bounded_days)
 
     day_label = func.to_char(Document.published_date, "Day").label("day_of_week")

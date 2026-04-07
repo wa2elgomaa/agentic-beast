@@ -1,7 +1,7 @@
 'use client'
 
 import { OrchestratorResponse } from '@/types'
-import { FileCode, Clock, Copy, BarChart3 } from 'lucide-react'
+import { FileCode, Clock, Copy, BarChart3, ExternalLink } from 'lucide-react'
 import { useState } from 'react'
 import SingleResultCard from './SingleResultCard'
 import { formatNumber } from '@/lib/api'
@@ -22,6 +22,7 @@ export default function QueryDocumentsView({ data, metadata }: QueryDocumentsVie
         profile_name: 'Profile',
         author_name: 'Author',
         view_on_platform: 'View on Platform',
+        view_url: 'View URL',
         video_views: 'Video Views',
         total_impressions: 'Total Impressions',
         organic_impressions: 'Organic Impressions',
@@ -141,7 +142,8 @@ export default function QueryDocumentsView({ data, metadata }: QueryDocumentsVie
                                     const metaFields = ['id', 'sheet_name', 'row_number', 'distance']
                                     const highlightFields = ['platform', 'content_type', 'media_type', 'date', 'profile_name', 'author_name']
                                     const metricFields = ['video_views', 'total_impressions', 'total_reactions', 'total_comments', 'total_shares', 'total_interactions', 'total_reach', 'engagements']
-                                    const contentFields = ['title', 'description', 'content']
+                                    const contentFields = ['title']
+                                    const outboundUrl = String(result.view_url || result.view_on_platform || '').trim()
 
                                     // Color schemes for cards (cycle through them)
                                     const colorSchemes = [
@@ -175,7 +177,20 @@ export default function QueryDocumentsView({ data, metadata }: QueryDocumentsVie
                                                         </span>
                                                     ))}
                                                 </div>
-                                                <span className="text-xs text-gray-500 font-mono bg-white px-2 py-1 rounded">#{idx + 1}</span>
+                                                {outboundUrl ? (
+                                                    <a
+                                                        href={outboundUrl}
+                                                        target="_blank"
+                                                        rel="noopener noreferrer"
+                                                        className="inline-flex items-center gap-1.5 text-xs font-medium bg-white px-2 py-1 rounded text-blue-700 hover:text-blue-900 border border-blue-200"
+                                                        title="Open link in new tab"
+                                                    >
+                                                        <ExternalLink size={12} />
+                                                        Link
+                                                    </a>
+                                                ) : (
+                                                    <span className="text-xs text-gray-500 font-mono bg-white px-2 py-1 rounded">#{idx + 1}</span>
+                                                )}
                                             </div>
 
                                             {/* Content Fields */}
@@ -228,7 +243,9 @@ export default function QueryDocumentsView({ data, metadata }: QueryDocumentsVie
                                                 !metaFields.includes(key) &&
                                                 !highlightFields.includes(key) &&
                                                 !metricFields.includes(key) &&
-                                                !contentFields.includes(key)
+                                                !contentFields.includes(key) &&
+                                                key !== 'view_url' &&
+                                                key !== 'view_on_platform'
                                             ).length > 0 && (<>
                                                 {/* <details className="text-xs bg-white/50 rounded-lg p-3">
                                                     <summary className="cursor-pointer text-gray-700 hover:text-gray-900 font-semibold mb-2 flex items-center gap-2">
@@ -247,7 +264,9 @@ export default function QueryDocumentsView({ data, metadata }: QueryDocumentsVie
                                                             !metaFields.includes(key) &&
                                                             !highlightFields.includes(key) &&
                                                             !metricFields.includes(key) &&
-                                                            !contentFields.includes(key)
+                                                            !contentFields.includes(key) &&
+                                                            key !== 'view_url' &&
+                                                            key !== 'view_on_platform'
                                                         ).map(([key, value]) => (
                                                             <div key={key} className="flex items-start gap-2 p-2 bg-white rounded">
                                                                 <span className="font-semibold text-gray-700 min-w-[120px]">
@@ -279,15 +298,16 @@ export default function QueryDocumentsView({ data, metadata }: QueryDocumentsVie
                                                 )}
 
                                             {/* View Link */}
-                                            {validEntries.find(([key]) => key === 'view_on_platform') && (
+                                            {(outboundUrl !== '') && (
                                                 <div className="mt-3 pt-3 border-t border-white/50">
                                                     <a
-                                                        href={String(result.view_on_platform)}
+                                                        href={outboundUrl}
                                                         target="_blank"
                                                         rel="noopener noreferrer"
                                                         className={`inline-flex items-center gap-2 px-4 py-2 ${colors.badge} text-white text-sm font-medium rounded-lg hover:shadow-lg transition-all`}
                                                     >
-                                                        🔗 View on Platform
+                                                        <ExternalLink size={14} />
+                                                        View on Platform
                                                     </a>
                                                 </div>
                                             )}

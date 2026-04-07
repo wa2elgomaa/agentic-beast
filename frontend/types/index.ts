@@ -39,6 +39,8 @@ export interface AnalyticsResultDataItem {
   platform: string
   content: string
   title: string
+  description?: string
+  view_url?: string
   published_at?: string
   views: string
 }
@@ -49,6 +51,22 @@ export interface AnalyticsResponseContent {
   result_data: AnalyticsResultDataItem[]
   insight_summary: string
   verification: string
+  chart_b64?: string
+  code_output?: string
+  generated_sql?: string
+}
+
+// ============================================================================
+// Chat API Metadata
+// ============================================================================
+
+export interface ChatMessageMetadata {
+  operation?: string
+  citations?: Record<string, any>[]
+  agents_involved?: string[]
+  chart_b64?: string
+  code_output?: string
+  generated_sql?: string
 }
 
 // ============================================================================
@@ -112,6 +130,9 @@ export interface Message {
   content: string
   timestamp: Date
   
+  // Chat API metadata (chart, code output, SQL from code interpreter)
+  metadata?: ChatMessageMetadata
+
   // Operation-specific data (camelCase for frontend)
   operation?: OperationType
   operationData?: OrchestratorResponse['data']
@@ -276,6 +297,8 @@ export interface IngestionTaskRun {
   rows_updated: number
   rows_failed: number
   error_message?: string
+  error_type?: string  // data_error | auth_error | network_error
+  error_code?: string  // invalid_grant, unauthorized, etc.
   run_metadata?: Record<string, any>
   created_at: string
 }
@@ -297,6 +320,8 @@ export interface TaskSchemaMapping {
   template_id?: string
   source_columns: string[]
   field_mappings: Record<string, string>
+  identifier_column?: string
+  dedup_config?: Record<string, any>
   created_at: string
   updated_at: string
 }
@@ -341,7 +366,9 @@ export interface IngestionTaskUpdateInput {
 export interface SchemaMappingUpdateInput {
   source_columns: string[]
   field_mappings: Record<string, string>
+  identifier_column?: string
   template_id?: string
+  dedup_config?: Record<string, any>
 }
 
 export interface SaveAsTemplateInput {

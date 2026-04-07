@@ -28,8 +28,9 @@ class Document(Base):
     doc_metadata: Mapped[Optional[dict]] = mapped_column(JSONB)
     embedding: Mapped[Optional[list]] = mapped_column(Vector(384))
 
-    # Profile & Post Information  
+    # Profile & Post Information
     published_date: Mapped[Optional[date]] = mapped_column(Date)
+    published_time: Mapped[Optional[time]] = mapped_column(Time)
     reported_at: Mapped[Optional[date]] = mapped_column(Date)
     reported_time: Mapped[Optional[time]] = mapped_column(Time)
     profile_name: Mapped[Optional[str]] = mapped_column(Text)
@@ -85,6 +86,13 @@ class Document(Base):
     # Labels & Categorization
     labels: Mapped[Optional[str]] = mapped_column(Text)
     label_groups: Mapped[Optional[str]] = mapped_column(Text)
+
+    # Content Deduplication & Cross-Platform Matching
+    identifier_cleaned: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    identifier_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+
+    # Differential Metrics (deltas from previous ingestion)
+    metric_deltas: Mapped[Optional[dict]] = mapped_column(JSONB)
 
     # Timestamps
     # Per-row stable UUID for external content identifier mapping

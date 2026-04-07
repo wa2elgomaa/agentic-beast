@@ -24,6 +24,8 @@ from typing import Optional
 import pandas as pd
 from strands import tool
 
+from app.config import settings
+
 # ---------------------------------------------------------------------------
 # Data loading
 # ---------------------------------------------------------------------------
@@ -187,7 +189,7 @@ def _query_metrics_impl(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     group_by: Optional[str] = None,
-    top_n: int = 10,
+    top_n: int = settings.db_default_limit,
 ) -> str:
     """Aggregate a numeric metric from the analytics Excel data.
 
@@ -257,6 +259,7 @@ def _query_metrics_impl(
 
     values = _numeric(filtered, metric_norm)
     grand_total = float(values.sum())
+    top_n = max(1, min(top_n, settings.analytics_top_n_max))
 
     rows = []
     if group_by:
@@ -298,7 +301,7 @@ def _get_top_content_impl(
     keyword: Optional[str] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
-    top_n: int = 5,
+    top_n: int = settings.db_default_limit,
 ) -> str:
     """Return the top N individual posts ranked by a metric.
 
@@ -319,8 +322,7 @@ def _get_top_content_impl(
             Case-insensitive substring match.
         start_date: Inclusive start date in YYYY-MM-DD format.
         end_date: Inclusive end date in YYYY-MM-DD format.
-        top_n: Number of top posts to return (max 20).
-        top_n: Number of top posts to return (max 20).
+        top_n: Number of top posts to return (bounded by configured analytics limits).
 
     Returns:
         JSON string with a list of posts, each containing: rank, platform,
@@ -366,7 +368,7 @@ def _get_top_content_impl(
     if filtered.empty:
         return json.dumps({"error": "No rows match the given filters."})
 
-    top_n = min(top_n, 20)
+    top_n = max(1, min(top_n, settings.analytics_top_n_max))
     filtered = filtered.copy()
     filtered["_metric_val"] = _numeric(filtered, metric_norm)
     top = filtered.nlargest(top_n, "_metric_val")

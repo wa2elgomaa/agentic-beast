@@ -40,10 +40,12 @@ DATA_DICTIONARY: dict[str, str] = {
     "total shares": "total_shares",
     # Video
     "video views": "video_views",
+    "video views count": "video_views",
     "views": "video_views",
     "video view time": "total_video_view_time_sec",
     "total video view time": "total_video_view_time_sec",
     "avg video view time": "avg_video_view_time_sec",
+    "avg. video view time": "avg_video_view_time_sec",
     "average video view time": "avg_video_view_time_sec",
     "completion rate": "completion_rate",
     # Dimensions
@@ -59,6 +61,7 @@ DATA_DICTIONARY: dict[str, str] = {
     "author name": "author_name",
     "date": "published_date",
     "published date": "published_date",
+    "published time": "published_time",
     "labels": "labels",
     "tags": "labels",
 }

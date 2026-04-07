@@ -91,6 +91,24 @@ export default function ChatMessage({ message, onSelectSuggestion }: ChatMessage
                 />
               )}
 
+              {/* Code Interpreter: chart image */}
+              {!isUser && message.metadata?.chart_b64 && (
+                <div className="mt-4">
+                  <img
+                    src={`data:image/png;base64,${message.metadata.chart_b64}`}
+                    alt="Analysis chart"
+                    className="rounded-lg border border-gray-200 max-w-full shadow-sm"
+                  />
+                </div>
+              )}
+
+              {/* Code Interpreter: code output (non-chart text) */}
+              {!isUser && message.metadata?.code_output && !message.metadata?.chart_b64 && (
+                <div className="mt-3 bg-gray-900 text-green-300 rounded-lg p-4 text-sm font-mono whitespace-pre-wrap overflow-x-auto">
+                  {message.metadata.code_output}
+                </div>
+              )}
+
               {/* Query Suggestions */}
               {!isUser && message.operationData?.suggestions && onSelectSuggestion && (
                 <QuerySuggestions

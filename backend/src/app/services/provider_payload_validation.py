@@ -6,10 +6,14 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
+from app.config import settings
 
-def _sanitize_text(value: Any, max_len: int = 800) -> str:
+
+def _sanitize_text(value: Any, max_len: int | None = None) -> str:
     if value is None:
         return ""
+    if max_len is None:
+        max_len = settings.text_sanitize_max_length_default
     normalized = str(value).replace("\r", " ").replace("\n", " ")
     normalized = "".join(ch for ch in normalized if ch.isprintable() or ch.isspace())
     normalized = " ".join(normalized.split())
@@ -33,7 +37,7 @@ class ProviderResultDataItem(BaseModel):
     @field_validator("label", "value", "platform", "content", "title", "published_at", mode="before")
     @classmethod
     def _normalize_text(cls, value: Any) -> str:
-        return _sanitize_text(value, max_len=600)
+        return _sanitize_text(value, max_len=settings.text_sanitize_max_length_errors)
 
 
 class ProviderSynthesisPayload(BaseModel):
@@ -50,7 +54,7 @@ class ProviderSynthesisPayload(BaseModel):
     @field_validator("query_type", "resolved_subject", "insight_summary", "verification", mode="before")
     @classmethod
     def _normalize_top_level_text(cls, value: Any) -> str:
-        return _sanitize_text(value, max_len=1200)
+        return _sanitize_text(value, max_len=settings.text_sanitize_max_length_descriptions)
 
 
 def validate_provider_payload(
@@ -82,6 +86,9 @@ def validate_provider_payload(
             resolved_subject=default_query_type,
             result_data=[],
             insight_summary="Unable to validate provider response payload.",
-            verification=f"{fallback_verification}; validation_error={_sanitize_text(exc, max_len=600)}",
+            verification=(
+                f"{fallback_verification}; "
+                f"validation_error={_sanitize_text(exc, max_len=settings.text_sanitize_max_length_errors)}"
+            ),
         )
         return fallback.model_dump(mode="json")

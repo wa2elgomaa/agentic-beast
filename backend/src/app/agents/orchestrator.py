@@ -26,14 +26,14 @@ import json
 import re
 from typing import Any, Dict, Optional
 
-import httpx
-
+from app.agents.autonomous_router import route_analytics_query
 from app.agents.analytics_agent import get_strands_analytics_agent
 from app.agents.ingestion_agent import get_strands_ingestion_agent
 from app.agents.tagging_agent import get_strands_tagging_agent
 from app.config import settings
 from app.logging import get_logger
 from app.tools.classify_tool import handle_intent
+from app.utilities.json_chat import generate_json_object
 
 logger = get_logger(__name__)
 
@@ -41,7 +41,6 @@ POLITE_REJECTION = (
     "I’m sorry, but I can’t process this request right now. "
     "Please rephrase your request and try again."
 )
-
 # ------------------------------------------------------------------
 # Intent -> agent mapping
 # ------------------------------------------------------------------
@@ -122,37 +121,35 @@ def _value_guard(llm_text: str, db_rows: list[dict]) -> bool:
 
 
 # ------------------------------------------------------------------
-# Direct-Ollama helpers for tag suggestions & article recommendations
+# Direct JSON helpers for tag suggestions & article recommendations
 # (avoids Strands tool-calling which requires function-calling support)
 # ------------------------------------------------------------------
 
 async def _run_tag_suggestions(message: str) -> dict[str, Any]:
-    """Return tag suggestions via direct Ollama call (no tool-calling required)."""
-    url = f"{settings.ollama_base_url.rstrip('/')}/api/chat"
-    model = (settings.ollama_intent_model or "").strip() or settings.ollama_model
-    payload = {
-        "model": model,
-        "format": "json",
-        "stream": False,
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "You are a CMS tagging assistant. "
-                    "Given content or a topic, suggest 5-10 relevant tags.\n"
-                    'Output ONLY valid JSON: {"tags": ["tag1", "tag2", ...]}'
-                ),
-            },
-            {"role": "user", "content": message},
-        ],
-    }
+    """Return tag suggestions via provider-aware JSON call."""
+    if settings.ai_provider in ("openai", "strands"):
+        model = (settings.openai_tag_model or "").strip() or (settings.openai_intent_model or "").strip() or settings.openai_model
+    else:
+        model = (settings.ollama_intent_model or "").strip() or settings.ollama_model
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a CMS tagging assistant. "
+                "Given content or a topic, suggest 5-10 relevant tags.\n"
+                'Output ONLY valid JSON: {"tags": ["tag1", "tag2", ...]}'
+            ),
+        },
+        {"role": "user", "content": message},
+    ]
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(url, json=payload)
-            resp.raise_for_status()
-            data = resp.json()
-        raw = data.get("message", {}).get("content", "{}")
-        result = json.loads(raw)
+        result = await generate_json_object(
+            messages=messages,
+            model=model,
+            timeout_seconds=float(settings.agent_tagging_timeout_seconds),
+            purpose="tag_suggestions",
+        )
         tags = result.get("tags", [])
         if not isinstance(tags, list):
             tags = []
@@ -173,32 +170,30 @@ async def _run_tag_suggestions(message: str) -> dict[str, Any]:
 
 
 async def _run_article_recommendations(message: str) -> dict[str, Any]:
-    """Return article recommendations via direct Ollama call."""
-    url = f"{settings.ollama_base_url.rstrip('/')}/api/chat"
-    model = (settings.ollama_intent_model or "").strip() or settings.ollama_model
-    payload = {
-        "model": model,
-        "format": "json",
-        "stream": False,
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "You are a content recommendation assistant. "
-                    "Given a topic or query, recommend 3-5 article topics or search terms the user should explore.\n"
-                    'Output ONLY valid JSON: {"recommendations": [{"title": "...", "reason": "..."}, ...]}'
-                ),
-            },
-            {"role": "user", "content": message},
-        ],
-    }
+    """Return article recommendations via provider-aware JSON call."""
+    if settings.ai_provider in ("openai", "strands"):
+        model = (settings.openai_recommendation_model or "").strip() or (settings.openai_intent_model or "").strip() or settings.openai_model
+    else:
+        model = (settings.ollama_intent_model or "").strip() or settings.ollama_model
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a content recommendation assistant. "
+                "Given a topic or query, recommend 3-5 article topics or search terms the user should explore.\n"
+                'Output ONLY valid JSON: {"recommendations": [{"title": "...", "reason": "..."}, ...]}'
+            ),
+        },
+        {"role": "user", "content": message},
+    ]
     try:
-        async with httpx.AsyncClient(timeout=90.0) as client:
-            resp = await client.post(url, json=payload)
-            resp.raise_for_status()
-            data = resp.json()
-        raw = data.get("message", {}).get("content", "{}")
-        result = json.loads(raw)
+        result = await generate_json_object(
+            messages=messages,
+            model=model,
+            timeout_seconds=float(settings.agent_recommendation_timeout_seconds),
+            purpose="article_recommendations",
+        )
         recs = result.get("recommendations", [])
         if not isinstance(recs, list):
             recs = []
@@ -275,6 +270,27 @@ class AgentOrchestrator:
 
                 conversation_history = context.get("conversation_history")
 
+                # Route via autonomous LLM router (replaces static regex heuristics)
+                route_decision = await route_analytics_query(
+                    message=message,
+                    conversation_history=conversation_history,
+                )
+
+                if route_decision.get("target") == "code_interpreter":
+                    from app.agents.code_interpreter_agent import run_code_interpreter  # noqa: PLC0415
+                    logger.info(
+                        "Routing to code interpreter (autonomous router)",
+                        message_snippet=message[:80],
+                        router_confidence=route_decision.get("confidence"),
+                        router_mode=route_decision.get("mode"),
+                        router_reasoning=route_decision.get("reasoning"),
+                    )
+                    result = await run_code_interpreter(
+                        message,
+                        conversation_history=conversation_history,
+                    )
+                    return result
+
                 # Primary path: SQL generation → dbquery_tool → response_agent
                 result = await run_sql_analytics_pipeline(
                     message,
@@ -301,40 +317,13 @@ class AgentOrchestrator:
                 return result
 
             # ------------------------------------------------------------------
-            # Tag suggestions — direct Ollama (no Strands tool-calling)
+            # Tag suggestions — direct JSON call (no Strands tool-calling)
             # ------------------------------------------------------------------
             if intent in _TAGGING_INTENTS:
                 return await _run_tag_suggestions(message)
 
             # ------------------------------------------------------------------
-            # Article recommendations / document Q&A — direct Ollama
-            # ------------------------------------------------------------------
-            if intent in _DOC_QA_INTENTS:
-                return await _run_article_recommendations(message)
-
-            specialist = _resolve_agent_for_intent(intent)
-            if specialist is None:
-                logger.warning("Unsupported intent after classification", intent=intent)
-                return POLITE_REJECTION
-
-            return await _run_strands_agent(specialist, message)
-
-        except Exception as e:
-            logger.error("Agent execution failed", error=str(e))
-            return {
-                "error": "agent_error",
-                "message": (
-                    "Something went wrong while processing your request. "
-                    "Please try again, or rephrase your question."
-                ),
-            }
-            # Tag suggestions — direct Ollama (no Strands tool-calling)
-            # ------------------------------------------------------------------
-            if intent in _TAGGING_INTENTS:
-                return await _run_tag_suggestions(message)
-
-            # ------------------------------------------------------------------
-            # Article recommendations / document Q&A — direct Ollama
+            # Article recommendations / document Q&A — direct JSON call
             # ------------------------------------------------------------------
             if intent in _DOC_QA_INTENTS:
                 return await _run_article_recommendations(message)
