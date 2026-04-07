@@ -4,6 +4,7 @@ from .conversation import Conversation, Message
 from .document import Base, Document
 from .password_reset import PasswordResetToken
 from .processed_email import ProcessedEmail
+from .failed_email_queue import FailedEmailQueue
 from .summary import Summary, TimeOfDayMetric
 from .tag import Tag
 from .user import User
@@ -32,6 +33,7 @@ __all__ = [
 	"Message",
 	"PasswordResetToken",
 	"ProcessedEmail",
+	"FailedEmailQueue",
 	"Summary",
 	"TimeOfDayMetric",
 	"Tag",

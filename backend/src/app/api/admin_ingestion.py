@@ -3,6 +3,7 @@
 import secrets
 from typing import Annotated, Optional
 from uuid import UUID
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status, Query
 from pydantic import BaseModel
@@ -43,10 +44,64 @@ from app.services.gmail_credential_service import (
     get_gmail_credential_service,
     GmailCredentialHealthStatus,
 )
+from app.services.failed_email_service import FailedEmailService
 from app.adapters.gmail_adapter import GMAIL_SCOPES
 from app.tasks.celery_app import celery_app
 
 logger = get_logger(__name__)
+
+# ============================================================================
+# Pydantic Schemas for Failed Email Endpoints
+# ============================================================================
+
+
+class FailedEmailResponse(BaseModel):
+    """Response model for a failed email in the retry queue."""
+
+    id: UUID
+    task_id: UUID
+    message_id: str
+    subject: Optional[str]
+    sender: Optional[str]
+    failure_reason: str  # auth_error | extraction_error | row_error | file_error
+    error_message: Optional[str]
+    error_count: int
+    last_attempted_at: Optional[datetime]
+    next_retry_at: Optional[datetime]
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class FailedEmailListResponse(BaseModel):
+    """Response model for list of failed emails."""
+
+    total: int
+    failed_emails: list[FailedEmailResponse]
+    ready_for_auto_retry: int  # Count of emails due for retry now
+    manual_intervention_required: int  # Count of emails past auto-retry limits
+
+
+class FailedEmailRetryResponse(BaseModel):
+    """Response model for manual retry action."""
+
+    message_id: str
+    status: str  # "scheduled" or "immediate"
+    message: str
+    error_count: int
+    next_retry_at: Optional[datetime]
+
+
+class RetryScheduleDisplayResponse(BaseModel):
+    """Response model for retry schedule information."""
+
+    backoff_schedule: dict  # { "1st_failure": "1 hour", "2nd_failure": "4 hours", ... }
+    total_failed_emails: int
+    ready_for_auto_retry: int
+    manual_intervention_required: int
+
 
 router = APIRouter(prefix="/admin/ingestion", tags=["admin-ingestion"])
 
@@ -978,4 +1033,261 @@ async def clear_gmail_credentials(
         raise
     except Exception as e:
         logger.error("Failed to clear credentials", error=str(e), task_id=task_id)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# Failed Email Management Endpoints
+# ============================================================================
+
+
+@router.get(
+    "/tasks/{task_id}/failed-emails",
+    response_model=FailedEmailListResponse,
+    dependencies=[Depends(get_current_admin)],
+)
+async def list_failed_emails(
+    task_id: UUID,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=500),
+) -> FailedEmailListResponse:
+    """List failed emails in the retry queue for a specific task.
+
+    Args:
+        task_id: ID of the ingestion task
+        db: Database session
+        skip: Number of records to skip
+        limit: Maximum number of records to return
+
+    Returns:
+        List of failed emails with retry status and schedule info
+    """
+    try:
+        from sqlalchemy import select
+
+        # Verify task exists
+        from app.models import IngestionTask
+
+        stmt = select(IngestionTask).where(IngestionTask.id == task_id)
+        result = await db.execute(stmt)
+        task = result.scalar_one_or_none()
+
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        # Get service and fetch failed emails
+        failed_email_service = FailedEmailService(db)
+        failed_emails_list = await failed_email_service.get_failed_emails(task_id)
+
+        # Get stats
+        stats = await failed_email_service.get_manual_retry_counts(task_id)
+
+        # Convert to response models (simple limit/skip on client side)
+        failed_email_responses = [
+            FailedEmailResponse(
+                id=fe.id,
+                task_id=fe.task_id,
+                message_id=fe.message_id,
+                subject=fe.subject,
+                sender=fe.sender,
+                failure_reason=fe.failure_reason,
+                error_message=fe.error_message,
+                error_count=fe.error_count,
+                last_attempted_at=fe.last_attempted_at,
+                next_retry_at=fe.next_retry_at,
+                created_at=fe.created_at,
+                updated_at=fe.updated_at,
+            )
+            for fe in failed_emails_list[skip : skip + limit]
+        ]
+
+        return FailedEmailListResponse(
+            total=len(failed_emails_list),
+            failed_emails=failed_email_responses,
+            ready_for_auto_retry=stats["ready_for_auto_retry"],
+            manual_intervention_required=stats["manual_intervention_required"],
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to list failed emails", error=str(e), task_id=task_id)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post(
+    "/tasks/{task_id}/failed-emails/{email_id}/retry",
+    response_model=FailedEmailRetryResponse,
+    dependencies=[Depends(get_current_admin)],
+)
+async def manual_retry_failed_email(
+    task_id: UUID,
+    email_id: UUID,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> FailedEmailRetryResponse:
+    """Manually trigger retry for a specific failed email.
+
+    This allows bypassing the exponential backoff schedule for immediate retry.
+
+    Args:
+        task_id: ID of the ingestion task
+        email_id: ID of the failed email record in the queue
+
+    Returns:
+        Status and next retry information
+    """
+    try:
+        from app.models import FailedEmailQueue
+
+        # Get the failed email record
+        failed_email = await db.get(FailedEmailQueue, email_id)
+
+        if not failed_email:
+            raise HTTPException(status_code=404, detail="Failed email not found")
+
+        if failed_email.task_id != task_id:
+            raise HTTPException(status_code=403, detail="Failed email not associated with this task")
+
+        # Schedule immediate retry by setting next_retry_at to now
+        from datetime import datetime as dt
+
+        failed_email.next_retry_at = dt.utcnow()
+        failed_email.updated_at = dt.utcnow()
+        db.add(failed_email)
+        await db.commit()
+
+        logger.info(
+            "Manual retry scheduled for failed email",
+            email_id=email_id,
+            message_id=failed_email.message_id,
+            task_id=task_id,
+        )
+
+        return FailedEmailRetryResponse(
+            message_id=failed_email.message_id,
+            status="scheduled",
+            message="Email scheduled for immediate retry",
+            error_count=failed_email.error_count,
+            next_retry_at=failed_email.next_retry_at,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            "Failed to schedule manual retry",
+            error=str(e),
+            task_id=task_id,
+            email_id=email_id,
+        )
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete(
+    "/tasks/{task_id}/failed-emails/{email_id}",
+    dependencies=[Depends(get_current_admin)],
+    status_code=204,
+)
+async def remove_failed_email(
+    task_id: UUID,
+    email_id: UUID,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> None:
+    """Remove a failed email from the retry queue (admin action).
+
+    This prevents the email from being automatically retried in the future.
+
+    Args:
+        task_id: ID of the ingestion task
+        email_id: ID of the failed email record in the queue
+    """
+    try:
+        from app.models import FailedEmailQueue
+
+        # Get the failed email record
+        failed_email = await db.get(FailedEmailQueue, email_id)
+
+        if not failed_email:
+            raise HTTPException(status_code=404, detail="Failed email not found")
+
+        if failed_email.task_id != task_id:
+            raise HTTPException(status_code=403, detail="Failed email not associated with this task")
+
+        # Delete from queue
+        await db.delete(failed_email)
+        await db.commit()
+
+        logger.info(
+            "Failed email removed from retry queue",
+            email_id=email_id,
+            message_id=failed_email.message_id,
+            task_id=task_id,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            "Failed to remove failed email",
+            error=str(e),
+            task_id=task_id,
+            email_id=email_id,
+        )
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get(
+    "/tasks/{task_id}/failed-emails/retry-schedule",
+    response_model=RetryScheduleDisplayResponse,
+    dependencies=[Depends(get_current_admin)],
+)
+async def get_failed_emails_retry_schedule(
+    task_id: UUID,
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> RetryScheduleDisplayResponse:
+    """Get information about retry schedule and failed emails for a task.
+
+    Shows the exponential backoff schedule and counts of emails in each category.
+
+    Args:
+        task_id: ID of the ingestion task
+
+    Returns:
+        Retry schedule information and statistics
+    """
+    try:
+        from sqlalchemy import select
+
+        # Verify task exists
+        from app.models import IngestionTask
+
+        stmt = select(IngestionTask).where(IngestionTask.id == task_id)
+        result = await db.execute(stmt)
+        task = result.scalar_one_or_none()
+
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        # Get service and fetch stats
+        failed_email_service = FailedEmailService(db)
+        stats = await failed_email_service.get_manual_retry_counts(task_id)
+
+        backoff_schedule = {
+            "1st_failure": "1 hour",
+            "2nd_failure": "4 hours",
+            "3rd_and_beyond": "365 days (manual intervention recommended)",
+        }
+
+        return RetryScheduleDisplayResponse(
+            backoff_schedule=backoff_schedule,
+            total_failed_emails=stats["total_failed"],
+            ready_for_auto_retry=stats["ready_for_auto_retry"],
+            manual_intervention_required=stats["manual_intervention_required"],
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to get retry schedule", error=str(e), task_id=task_id)
         raise HTTPException(status_code=500, detail=str(e))

@@ -148,6 +148,10 @@ class IngestionTaskRun(Base):
     total_deltas_calculated: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     deduplication_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
+    # Failed email tracking
+    failed_emails_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    retry_emails_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
     # Metadata
     run_metadata: Mapped[Optional[dict]] = mapped_column(JSONB)  # e.g. {"file_name": "...", "email_subject": "..."}
     

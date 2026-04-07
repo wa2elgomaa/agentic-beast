@@ -218,7 +218,7 @@ export default function CreateTaskWizard() {
                             const exts = formData.adaptor_config.allowed_extensions || []
                             const updated = e.target.checked
                               ? [...new Set([...exts, 'xlsx'])]
-                              : exts.filter(x => x !== 'xlsx')
+                              : exts.filter((x: string) => x !== 'xlsx')
                             handleConfigChange('allowed_extensions', updated)
                           }}
                           className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
@@ -234,7 +234,7 @@ export default function CreateTaskWizard() {
                             const exts = formData.adaptor_config.allowed_extensions || []
                             const updated = e.target.checked
                               ? [...new Set([...exts, 'csv'])]
-                              : exts.filter(x => x !== 'csv')
+                              : exts.filter((x: string) => x !== 'csv')
                             handleConfigChange('allowed_extensions', updated)
                           }}
                           className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"

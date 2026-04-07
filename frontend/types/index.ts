@@ -2,7 +2,9 @@
 // Operation Types
 // ============================================================================
 
-export type OperationType = 
+export type UUID = string
+
+export type OperationType =
   | 'query_documents'
   | 'suggest_tags_for_article_id'
   | 'suggest_tags_for_article_body'
@@ -296,6 +298,8 @@ export interface IngestionTaskRun {
   rows_inserted: number
   rows_updated: number
   rows_failed: number
+  failed_emails_count?: number  // Count of emails that failed processing
+  retry_emails_count?: number  // Count of emails queued for retry
   error_message?: string
   error_type?: string  // data_error | auth_error | network_error
   error_code?: string  // invalid_grant, unauthorized, etc.
@@ -399,4 +403,37 @@ export interface GmailExchangeCodeResponse {
   task_id: string
   connected_email: string
   message: string
+}
+
+// ============================================================================
+// Failed Email Retry Types
+// ============================================================================
+
+export interface FailedEmail {
+  id: string
+  task_id: string
+  message_id: string
+  subject?: string
+  sender?: string
+  failure_reason: 'auth_error' | 'extraction_error' | 'row_error' | 'file_error'
+  error_message?: string
+  error_count: number
+  last_attempted_at?: string
+  next_retry_at?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface FailedEmailListResponse {
+  total: number
+  failed_emails: FailedEmail[]
+  ready_for_auto_retry: number
+  manual_intervention_required: number
+}
+
+export interface RetryScheduleDisplayResponse {
+  backoff_schedule: Record<string, string>
+  total_failed_emails: number
+  ready_for_auto_retry: number
+  manual_intervention_required: number
 }

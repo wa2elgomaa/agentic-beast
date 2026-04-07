@@ -469,6 +469,84 @@ class GmailAdapter(DataAdapter):
 
         return attachments
 
+    async def fetch_single_email(
+        self,
+        message_id: str,
+        source_type: str = "attachment",
+        link_regex: Optional[str] = None,
+        allowed_extensions: Optional[List[str]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Fetch a single email by message_id for retry processing.
+
+        Used when retrying a failed email. Fetches the email again following the
+        same retrieval logic as fetch_data.
+
+        Args:
+            message_id: Gmail message ID
+            source_type: "attachment" or "download_link"
+            link_regex: Regex pattern for link extraction
+            allowed_extensions: List of allowed file extensions
+
+        Returns:
+            Email record dict, or None if email not found or no attachments/links
+        """
+        if not self.service:
+            raise RuntimeError("Gmail adapter not connected")
+
+        logger.info("Fetching single email for retry", message_id=message_id)
+
+        try:
+            # Fetch the message
+            msg_data = self.service.users().messages().get(userId="me", id=message_id, format="full").execute()
+
+            # Extract email metadata
+            headers = msg_data["payload"].get("headers", [])
+            subject = next((h["value"] for h in headers if h["name"] == "Subject"), "")
+            from_addr = next((h["value"] for h in headers if h["name"] == "From"), "")
+            date = next((h["value"] for h in headers if h["name"] == "Date"), "")
+
+            if source_type == "download_link":
+                html_body, text_body = self._get_raw_body(msg_data.get("payload", {}))
+                link_regex = link_regex or r"https?://\S+"
+                download_links = self._extract_links_from_body(html_body, text_body, link_regex)
+
+                if download_links:
+                    return {
+                        "message_id": message_id,
+                        "subject": subject,
+                        "from": from_addr,
+                        "date": date,
+                        "download_links": download_links,
+                    }
+                return None
+            else:
+                # Default: attachment mode
+                attachments = await self._extract_attachments(
+                    message_id, msg_data.get("payload", {}), allowed_extensions
+                )
+
+                if attachments:
+                    return {
+                        "message_id": message_id,
+                        "subject": subject,
+                        "from": from_addr,
+                        "date": date,
+                        "attachments": attachments,
+                    }
+                return None
+
+        except Exception as e:
+            logger.error(
+                "Error fetching single email for retry",
+                message_id=message_id,
+                error=str(e),
+            )
+            self.health_status = AdapterHealthStatus(
+                status=AdapterStatus.ERROR,
+                error_message=str(e),
+            )
+            raise
+
     async def get_status(self) -> AdapterHealthStatus:
         """Get adapter health status."""
         return self.health_status

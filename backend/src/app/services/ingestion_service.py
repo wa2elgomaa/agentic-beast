@@ -1,40 +1,43 @@
 """Service for orchestrating data ingestion pipeline."""
 
-from datetime import date, datetime, time
-import uuid
-from typing import List, Optional
-from uuid import UUID
 import hashlib
 import json
+import uuid
+from datetime import date, datetime, time
+from uuid import UUID
 
 import httpx
 from sqlalchemy import and_, insert, select, update
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.sql import func
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.db.session import AsyncSessionLocal
+from sqlalchemy.sql import func
 
 from app.adapters.gmail_adapter import (
-    GmailAdapter,
     CredentialExpiredError,
+    GmailAdapter,
     TemporaryAuthError,
 )
-from app.services.gmail_credential_service import (
-    get_gmail_credential_service,
-    GmailCredentialHealthStatus,
-    ErrorCode,
-)
 from app.config import settings
+from app.db.session import AsyncSessionLocal
 from app.logging import get_logger
-from app.models import Document, IngestionTask, IngestionTaskRun, IngestionDeduplication, ProcessedEmail, RunStatus, TaskSchemaMapping
+from app.models import (
+    Document,
+    IngestionTask,
+    IngestionTaskRun,
+    ProcessedEmail,
+    RunStatus,
+)
 from app.processors.excel_processor import ExcelProcessor
 from app.schemas.ingestion import IngestResult, RowError
 from app.services.content_normalizer import ContentNormalizer
 from app.services.deduplication_service import DeduplicationService
+from app.services.email_processing_result import EmailProcessingResult
 from app.services.embedding_service import get_embedding_service
-from app.services.summary_service import get_summary_service
+from app.services.gmail_credential_service import (
+    get_gmail_credential_service,
+)
 from app.services.schema_mapping_service import SchemaMappingService
-from app.services.file_storage_service import get_file_storage_service
+from app.services.summary_service import get_summary_service
 
 logger = get_logger(__name__)
 
@@ -101,7 +104,7 @@ class IngestionService:
         return value
 
     @staticmethod
-    def _coerce_reported_time(reported_time_value: Optional[object]) -> Optional[time]:
+    def _coerce_reported_time(reported_time_value: object | None) -> time | None:
         """Extract time-of-day from various source formats.
 
         Tries:
@@ -225,10 +228,10 @@ class IngestionService:
 
         # Populate reported_time: try source field first, fallback to reported_at, then to ingestion time
         reported_time_value = None
-        if "reported_time" in mapped_data and mapped_data["reported_time"]:
+        if mapped_data.get("reported_time"):
             # Already mapped from source
             reported_time_value = self._coerce_reported_time(mapped_data["reported_time"])
-        elif "reported_at" in source_row and source_row["reported_at"]:
+        elif source_row.get("reported_at"):
             # Try to extract time from reported_at
             reported_time_value = self._coerce_reported_time(source_row["reported_at"])
         if not reported_time_value:
@@ -271,7 +274,7 @@ class IngestionService:
 
         # beast_uuid handling: use mapped content identifier if provided, else preserve existing or generate
         # If mapping indicated a content identifier target, it will have been mapped into payload already.
-        if "beast_uuid" in payload and payload["beast_uuid"]:
+        if payload.get("beast_uuid"):
             # attempt to keep provided uuid (could be string)
             try:
                 payload["beast_uuid"] = uuid.UUID(str(payload["beast_uuid"]))
@@ -322,14 +325,30 @@ class IngestionService:
     async def _record_processed_email(
         self,
         message_id: str,
-        subject: Optional[str] = None,
-        sender: Optional[str] = None,
-        task_id: Optional[UUID] = None,
+        subject: str | None = None,
+        sender: str | None = None,
+        task_id: UUID | None = None,
         rows_inserted: int = 0,
+        rows_updated: int = 0,
         rows_skipped: int = 0,
         rows_failed: int = 0,
+        is_success: bool = True,
+        is_retryable: bool = False,
     ) -> None:
-        """Persist a ProcessedEmail record. Silently ignores duplicate inserts."""
+        """Persist a ProcessedEmail record. Silently ignores duplicate inserts.
+
+        Args:
+            message_id: Gmail message ID
+            subject: Email subject for audit
+            sender: Email sender for audit
+            task_id: Task ID if processed from a task
+            rows_inserted: Rows inserted from this email
+            rows_updated: Rows updated from this email
+            rows_skipped: Rows skipped from this email
+            rows_failed: Rows that failed from this email
+            is_success: Whether email was successfully processed (True = all rows succeeded or 0 rows with no errors)
+            is_retryable: Whether email should be queued for retry
+        """
         from sqlalchemy.dialects.postgresql import insert as pg_insert
 
         stmt = (
@@ -340,16 +359,22 @@ class IngestionService:
                 subject=subject,
                 sender=sender,
                 rows_inserted=rows_inserted,
+                rows_updated=rows_updated,
                 rows_skipped=rows_skipped,
                 rows_failed=rows_failed,
+                is_success=is_success,
+                is_retryable=is_retryable,
                 processed_at=func.now(),
             )
             .on_conflict_do_nothing(index_elements=["message_id"])
         )
         await self.db.execute(stmt)
 
-    async def ingest_from_gmail(self) -> IngestResult:
+    async def ingest_from_gmail(self, identifier_column: str | None = None) -> IngestResult:
         """Fetch and ingest data from Gmail attachments.
+
+        Args:
+            identifier_column: Optional column name for cross-platform deduplication.
 
         Returns:
             Ingestion result with counts and errors.
@@ -407,7 +432,7 @@ class IngestionService:
                     # Insert/upsert rows
                     for row_data in excel_rows:
                         try:
-                            result = await self._upsert_document(row_data)
+                            result = await self._upsert_document(row_data, identifier_column=identifier_column)
                             if result == "inserted":
                                 rows_inserted += 1
                                 email_inserted += 1
@@ -422,7 +447,7 @@ class IngestionService:
                             errors.append(
                                 RowError(
                                     row_number=row_data.get("row_number", 0),
-                                    error=f"Database error: {str(e)}",
+                                    error=f"Database error: {e!s}",
                                 )
                             )
                             rows_failed += 1
@@ -453,7 +478,7 @@ class IngestionService:
 
         except Exception as e:
             logger.error("Gmail ingestion failed", error=str(e))
-            errors.append(RowError(row_number=0, error=f"Gmail adapter error: {str(e)}"))
+            errors.append(RowError(row_number=0, error=f"Gmail adapter error: {e!s}"))
 
         # Trigger summary recomputation
         if rows_inserted > 0 or rows_updated > 0:
@@ -477,12 +502,13 @@ class IngestionService:
             errors=errors,
         )
 
-    async def ingest_from_file(self, file_data: bytes, filename: str) -> IngestResult:
+    async def ingest_from_file(self, file_data: bytes, filename: str, identifier_column: str | None = None) -> IngestResult:
         """Ingest data from uploaded file.
 
         Args:
             file_data: Raw file bytes.
             filename: Original filename.
+            identifier_column: Optional column name for cross-platform deduplication.
 
         Returns:
             Ingestion result.
@@ -504,7 +530,7 @@ class IngestionService:
             # Insert/upsert rows
             for row_data in excel_rows:
                 try:
-                    result = await self._upsert_document(row_data, identifier_column=None)
+                    result = await self._upsert_document(row_data, identifier_column=identifier_column)
                     if result == "inserted":
                         rows_inserted += 1
                     elif result == "updated":
@@ -515,14 +541,14 @@ class IngestionService:
                     errors.append(
                         RowError(
                             row_number=row_data.get("row_number", 0),
-                            error=f"Database error: {str(e)}",
+                            error=f"Database error: {e!s}",
                         )
                     )
                     rows_failed += 1
 
         except Exception as e:
             logger.error("File ingestion failed", error=str(e))
-            errors.append(RowError(row_number=0, error=f"File processing error: {str(e)}"))
+            errors.append(RowError(row_number=0, error=f"File processing error: {e!s}"))
 
         # Trigger summary recomputation
         if rows_inserted > 0 or rows_updated > 0:
@@ -546,7 +572,7 @@ class IngestionService:
             errors=errors,
         )
 
-    async def _upsert_document(self, row_data: dict, identifier_column: Optional[str] = None) -> str:
+    async def _upsert_document(self, row_data: dict, identifier_column: str | None = None) -> str:
         """Insert or append document record with full history tracking.
 
         Implements append-only history: instead of updating, creates new row
@@ -568,6 +594,18 @@ class IngestionService:
             if "is_current" not in row_data:
                 row_data["is_current"] = True
 
+            # Convert NULL numeric values to 0 for accurate metric calculations
+            numeric_fields = [
+                "organic_interactions", "total_interactions", "total_reactions", "total_comments",
+                "total_shares", "engagements", "total_reach", "paid_reach", "organic_reach",
+                "total_impressions", "paid_impressions", "organic_impressions", "reach_engagement_rate",
+                "total_likes", "video_length_sec", "video_views", "total_video_view_time_sec",
+                "avg_video_view_time_sec", "completion_rate"
+            ]
+            for field in numeric_fields:
+                if field in row_data and row_data[field] is None:
+                    row_data[field] = 0
+
             # Attempt cross-platform matching if identifier_column is configured
             existing = None
             if identifier_column:
@@ -584,7 +622,7 @@ class IngestionService:
                         stmt = select(Document).where(
                             and_(
                                 Document.identifier_hash == identifier_hash,
-                                Document.is_current == True,
+                                Document.is_current,
                             )
                         )
                         result = await self.db.execute(stmt)
@@ -609,7 +647,7 @@ class IngestionService:
                     and_(
                         Document.sheet_name == row_data.get("sheet_name"),
                         Document.row_number == row_data.get("row_number"),
-                        Document.is_current == True,
+                        Document.is_current,
                     )
                 )
                 result = await self.db.execute(stmt)
@@ -652,9 +690,8 @@ class IngestionService:
                 if metric_deltas:
                     row_data["metric_deltas"] = metric_deltas
 
-                # Apply deduplication strategies to metric fields
-                dedup_config = task_schema_mapping.dedup_config if task_schema_mapping else None
-                row_data = self._apply_dedup_strategies(row_data, existing_data, dedup_config)
+                # Note: Deduplication strategies are applied in _upsert_document_with_dedup_tracking
+                # This method (_upsert_document) is the simple path without dedup strategies
 
                 # Reuse existing beast_uuid if available, otherwise generate new
                 if existing.beast_uuid:
@@ -727,14 +764,14 @@ class IngestionService:
                     await self._safe_execute(upd_stmt)
                     return "updated"
 
-    def _calculate_metric_deltas(self, existing_data: dict, new_data: dict) -> Optional[dict]:
+    def _calculate_metric_deltas(self, existing_data: dict, new_data: dict) -> dict | None:
         """Calculate metric deltas (differences) between old and new values.
 
         Returns:
             Dict of {metric_name: delta} for metrics that changed, or None if no deltas.
         """
         # Metric columns to track (from Document model)
-        METRIC_COLUMNS = {
+        metric_columns = {
             "video_views", "total_reach", "engagements", "shares", "comments",
             "likes", "total_impressions", "profile_views", "followers_gained",
             "followers_lost", "total_followers", "message_count", "message_reach",
@@ -742,7 +779,7 @@ class IngestionService:
         }
 
         deltas = {}
-        for metric in METRIC_COLUMNS:
+        for metric in metric_columns:
             if metric in existing_data and metric in new_data:
                 prev_val = existing_data.get(metric) or 0
                 new_val = new_data.get(metric) or 0
@@ -761,7 +798,7 @@ class IngestionService:
         self,
         row_data: dict,
         existing_data: dict,
-        dedup_config: Optional[dict],
+        dedup_config: dict | None,
     ) -> dict:
         """Apply deduplication strategies to metric fields in row_data.
 
@@ -785,7 +822,7 @@ class IngestionService:
             return row_data
 
         # Metric columns to track
-        METRIC_COLUMNS = {
+        metric_columns = {
             "video_views", "total_reach", "engagements", "shares", "comments",
             "likes", "total_impressions", "profile_views", "followers_gained",
             "followers_lost", "total_followers", "message_count", "message_reach",
@@ -797,7 +834,7 @@ class IngestionService:
         field_strategies = dedup_config.get("field_strategies", {})
 
         applied_strategies = {}
-        for metric in METRIC_COLUMNS:
+        for metric in metric_columns:
             # Only process if this field is marked as metric
             if not is_metric.get(metric, False):
                 continue
@@ -843,7 +880,7 @@ class IngestionService:
     async def _upsert_document_with_dedup_tracking(
         self,
         row_data: dict,
-        identifier_column: Optional[str],
+        identifier_column: str | None,
         dedup_service: DeduplicationService,
         run_id: UUID,
     ) -> str:
@@ -901,42 +938,12 @@ class IngestionService:
 
         return result
 
-    def _calculate_metric_deltas(self, existing_data: dict, new_data: dict) -> Optional[dict]:
-        """Calculate metric deltas (differences) between old and new values.
-
-        Returns:
-            Dict of {metric_name: delta} for metrics that changed, or None if no deltas.
-        """
-        # Metric columns to track (from Document model)
-        METRIC_COLUMNS = {
-            "video_views", "total_reach", "engagements", "shares", "comments",
-            "likes", "total_impressions", "profile_views", "followers_gained",
-            "followers_lost", "total_followers", "message_count", "message_reach",
-            "message_engagement", "clicks", "utm_source", "utm_medium", "utm_campaign"
-        }
-
-        deltas = {}
-        for metric in METRIC_COLUMNS:
-            if metric in existing_data and metric in new_data:
-                prev_val = existing_data.get(metric) or 0
-                new_val = new_data.get(metric) or 0
-
-                # Skip non-numeric values
-                if not isinstance(prev_val, (int, float)) or not isinstance(new_val, (int, float)):
-                    continue
-
-                delta = new_val - prev_val
-                if delta != 0:
-                    deltas[metric] = delta
-
-        return deltas if deltas else None
-
     async def ingest_task(
         self,
         task_id: UUID,
         run_id: UUID,
-        file_bytes: Optional[bytes] = None,
-        webhook_payload: Optional[dict] = None,
+        file_bytes: bytes | None = None,
+        webhook_payload: dict | None = None,
     ) -> IngestResult:
         """Ingest data for a task-based ingestion run.
 
@@ -956,26 +963,20 @@ class IngestionService:
         rows_inserted = 0
         rows_updated = 0
         rows_failed = 0
-        total_duplicates = 0
-        total_deltas = 0
-        errors = []
+        errors: list[RowError] = []
 
         try:
             # Get task
             stmt = select(IngestionTask).where(IngestionTask.id == task_id)
             result = await self.db.execute(stmt)
             task = result.scalar_one_or_none()
-            task_dedup_enabled = None
-            task_adaptor_type= None
-            identifier_column= None
             if not task:
                 raise ValueError(f"Task not found: {task_id}")
 
-            # Capture task attributes immediately to avoid lazy-loading in async context
-            if task:
-                task_adaptor_config = dict(task.adaptor_config or {})
-                task_adaptor_type = task.adaptor_type
-                task_dedup_enabled = task.deduplication_enabled
+            # Note: Capture ORM attributes in individual async methods to avoid lazy-loading
+            # Each ingestion method (_ingest_from_gmail_task, etc.) captures needed attributes
+            task_adaptor_type = task.adaptor_type
+            task_dedup_enabled = task.deduplication_enabled
 
             # Get schema mapping
             schema_service = SchemaMappingService(self.db)
@@ -1071,13 +1072,209 @@ class IngestionService:
             logger.error("Task-based ingestion failed", error=str(e), task_id=task_id)
             raise
 
+    async def _process_single_email(
+        self,
+        email: dict,
+        task_id: UUID,
+        run_id: UUID,
+        field_mappings: dict,
+        identifier_column: str | None,
+        dedup_service: DeduplicationService | None,
+        gmail_adapter: GmailAdapter,
+        sheet_name: str = "Sheet1",
+        gmail_source_type: str = "attachment",
+    ) -> EmailProcessingResult:
+        """Process a single email with per-email error handling.
+
+        This method extracts one email's files, parses rows, and upserts documents.
+        Errors are caught and classified for retry determination.
+
+        Args:
+            email: Email dict from gmail_adapter.fetch_data()
+            task_id: Ingestion task ID
+            run_id: Current run ID
+            field_mappings: Schema field mappings
+            identifier_column: Optional identifier column for deduplication
+            dedup_service: Optional deduplication service
+            gmail_adapter: Connected Gmail adapter for file extraction
+            sheet_name: Excel sheet name to parse
+            gmail_source_type: "attachment" or "download_link"
+
+        Returns:
+            EmailProcessingResult with outcome classification and error details
+        """
+        email_message_id = email.get("message_id", "")
+        email_subject = email.get("subject", "")
+        email_sender = email.get("from", "")
+
+        # Initialize result object
+        result = EmailProcessingResult(
+            message_id=email_message_id,
+            subject=email_subject,
+            sender=email_sender,
+        )
+
+        try:
+            # Skip already-processed emails
+            if email_message_id and await self._is_email_processed(email_message_id):
+                logger.info(
+                    "Skipping already-processed email",
+                    message_id=email_message_id,
+                    subject=email_subject,
+                )
+                result.is_success = True
+                return result
+
+            logger.info("Processing Gmail email", subject=email_subject)
+
+            # Extract files from email
+            try:
+                if gmail_source_type == "download_link":
+                    file_items = await self._download_files_from_links(
+                        run_id,
+                        email.get("download_links", []),
+                        result.errors,
+                    )
+                else:
+                    # Attachment mode
+                    file_items = [
+                        {"filename": a["filename"], "data": a["data"]}
+                        for a in email.get("attachments", [])
+                    ]
+            except Exception as e:
+                logger.error(
+                    "Error extracting files from email",
+                    message_id=email_message_id,
+                    error=str(e),
+                )
+                result.error_type = "extraction_error"
+                result.error_message = str(e)
+                result.is_success = False
+                return result
+
+            # Process each file in the email
+            for file_item in file_items:
+                if await self._is_run_stop_requested(run_id):
+                    raise IngestionCanceledError(
+                        result.rows_inserted, result.rows_updated, result.rows_failed
+                    )
+
+                filename = file_item["filename"]
+                content_type = file_item.get("content_type", "")
+
+                if not self._is_supported_report_file(filename, content_type):
+                    logger.warning(
+                        "Skipping unsupported file",
+                        filename=filename,
+                        content_type=content_type,
+                    )
+                    continue
+
+                # Parse file rows
+                try:
+                    doc_rows, parse_errors = ExcelProcessor.parse_tabular_rows(
+                        file_item["data"],
+                        filename=filename,
+                        sheet_name=sheet_name,
+                    )
+                except Exception as e:
+                    logger.error(
+                        "Error parsing file",
+                        filename=filename,
+                        message_id=email_message_id,
+                        error=str(e),
+                    )
+                    result.error_type = "file_error"
+                    result.error_message = f"Failed to parse {filename}: {str(e)}"
+                    result.is_success = False
+                    continue
+
+                result.errors.extend(parse_errors)
+                result.rows_failed += len(parse_errors)
+
+                # Process each row from the file
+                for row_data in doc_rows:
+                    if await self._is_run_stop_requested(run_id):
+                        raise IngestionCanceledError(
+                            result.rows_inserted, result.rows_updated, result.rows_failed
+                        )
+
+                    try:
+                        document_row = self._build_document_payload(row_data, field_mappings)
+
+                        # Upsert with dedup tracking if available
+                        if dedup_service:
+                            upsert_result = await self._upsert_document_with_dedup_tracking(
+                                document_row, identifier_column, dedup_service, run_id
+                            )
+                        else:
+                            upsert_result = await self._upsert_document(
+                                document_row, identifier_column
+                            )
+
+                        if upsert_result == "inserted":
+                            result.rows_inserted += 1
+                        elif upsert_result == "skipped":
+                            result.rows_skipped += 1
+                        else:  # updated
+                            result.rows_updated += 1
+
+                    except Exception as e:
+                        import traceback
+
+                        logger.error(
+                            "Error upserting document from Gmail",
+                            message_id=email_message_id,
+                            error=str(e),
+                            traceback=traceback.format_exc(),
+                        )
+                        result.errors.append(
+                            {
+                                "row_number": row_data.get("row_number", 0),
+                                "error": f"Database error: {str(e)}",
+                            }
+                        )
+                        result.rows_failed += 1
+                        result.error_type = "row_error"
+
+            # Determine overall success classification
+            # Success: at least some rows inserted/updated, or 0 rows with no errors
+            if result.rows_inserted > 0 or result.rows_updated > 0:
+                result.is_success = True
+                result.has_partial_success = True
+            elif result.rows_failed > 0:
+                result.is_success = False
+            else:
+                # 0 rows processed, no errors
+                result.is_success = True
+
+            return result
+
+        except IngestionCanceledError:
+            logger.info(
+                "Email processing canceled",
+                message_id=email_message_id,
+                run_id=run_id,
+            )
+            raise
+        except Exception as e:
+            logger.error(
+                "Unexpected error processing email",
+                message_id=email_message_id,
+                error=str(e),
+            )
+            result.error_type = "row_error"
+            result.error_message = f"Unexpected error: {str(e)}"
+            result.is_success = False
+            return result
+
     async def _ingest_from_gmail_task(
         self,
         task: IngestionTask,
         run_id: UUID,
         field_mappings: dict,
-        identifier_column: Optional[str] = None,
-        dedup_service: Optional[DeduplicationService] = None,
+        identifier_column: str | None = None,
+        dedup_service: DeduplicationService | None = None,
     ) -> tuple:
         """Ingest from Gmail using task configuration.
 
@@ -1092,7 +1289,7 @@ class IngestionService:
         rows_inserted = 0
         rows_updated = 0
         rows_failed = 0
-        errors = []
+        errors: list[RowError] = []
 
         gmail_adapter = None
         try:
@@ -1123,7 +1320,7 @@ class IngestionService:
             # Connect to Gmail
             # Initialize credential service for tracking
             credential_service = get_gmail_credential_service(self.db)
-            
+
             # Create adapter with credential service integration
             gmail_adapter = GmailAdapter(
                 oauth_config=oauth_config,
@@ -1140,7 +1337,7 @@ class IngestionService:
                     task_id=task.id,
                     error=str(e),
                 )
-                
+
                 # Mark run as auth error
                 stmt = (
                     update(IngestionTaskRun)
@@ -1155,9 +1352,9 @@ class IngestionService:
                 )
                 await self.db.execute(stmt)
                 await self.db.commit()
-                
+
                 return 0, 0, 1, [RowError(row_number=0, error=str(e))]
-            
+
             except TemporaryAuthError as e:
                 # Transient auth failure
                 logger.warning(
@@ -1165,7 +1362,7 @@ class IngestionService:
                     task_id=task.id,
                     error=str(e),
                 )
-                
+
                 # Mark run as auth error but allow retry
                 stmt = (
                     update(IngestionTaskRun)
@@ -1180,7 +1377,7 @@ class IngestionService:
                 )
                 await self.db.execute(stmt)
                 await self.db.commit()
-                
+
                 return 0, 0, 1, [RowError(row_number=0, error=str(e))]
 
 
@@ -1212,108 +1409,82 @@ class IngestionService:
                 email_subject = email.get("subject", "")
                 email_sender = email.get("from", "")
 
-                # Skip already-processed emails
-                if email_message_id and await self._is_email_processed(email_message_id):
-                    logger.info(
-                        "Skipping already-processed email",
-                        message_id=email_message_id,
-                        subject=email_subject,
-                    )
-                    continue
-
-                logger.info("Processing Gmail email", subject=email_subject)
-                email_inserted = 0
-                email_skipped = 0
-                email_failed = 0
-
-                if gmail_source_type == "download_link":
-                    file_items = await self._download_files_from_links(
-                        run_id,
-                        email.get("download_links", []),
-                        errors,
-                    )
-                else:
-                    file_items = [
-                        {"filename": a["filename"], "data": a["data"]}
-                        for a in email.get("attachments", [])
-                    ]
-
-                for file_item in file_items:
-                    if await self._is_run_stop_requested(run_id):
-                        raise IngestionCanceledError(rows_inserted, rows_updated, rows_failed)
-
-                    filename = file_item["filename"]
-                    content_type = file_item.get("content_type", "")
-                    if not self._is_supported_report_file(filename, content_type):
-                        logger.warning(
-                            "Skipping unsupported downloaded file",
-                            filename=filename,
-                            content_type=content_type,
-                        )
-                        continue
-
-                    # Parse document preserving raw source columns, then apply task mapping.
-                    doc_rows, parse_errors = ExcelProcessor.parse_tabular_rows(
-                        file_item["data"],
-                        filename=filename,
-                        sheet_name=sheet_name,
-                    )
-
-                    errors.extend(parse_errors)
-                    rows_failed += len(parse_errors)
-
-                    # Apply field mappings and upsert
-                    for row_data in doc_rows:
-                        if await self._is_run_stop_requested(run_id):
-                            raise IngestionCanceledError(rows_inserted, rows_updated, rows_failed)
-
-                        try:
-                            document_row = self._build_document_payload(row_data, field_mappings)
-                            if dedup_service:
-                                result = await self._upsert_document_with_dedup_tracking(
-                                    document_row, identifier_column, dedup_service, run_id
-                                )
-                            else:
-                                result = await self._upsert_document(document_row, identifier_column)
-                            if result == "inserted":
-                                rows_inserted += 1
-                                email_inserted += 1
-                            elif result == "skipped":
-                                email_skipped += 1
-                            else:
-                                rows_updated += 1
-                                email_inserted += 1
-
-                        except Exception as e:
-                            import traceback
-                            logger.error("Error upserting document from Gmail", error=str(e), traceback=traceback.format_exc())
-                            errors.append(
-                                RowError(row_number=row_data.get("row_number", 0), error=f"Database error: {str(e)}")
-                            )
-                            rows_failed += 1
-                            email_failed += 1
-
-                # Record email as processed in DB and remove UNREAD label
-                if email_message_id:
-                    await self._record_processed_email(
-                        message_id=email_message_id,
-                        subject=email_subject,
-                        sender=email_sender,
-                        task_id=task_id,
-                        rows_inserted=email_inserted,
-                        rows_skipped=email_skipped,
-                        rows_failed=email_failed,
-                    )
                 try:
-                    gmail_service = gmail_adapter.service
-                    if gmail_service is not None:
-                        await gmail_service.users().messages().modify(
-                            userId="me",
-                            id=email_message_id,
-                            body={"removeLabelIds": ["UNREAD"]},
-                        ).execute()
+                    # Per-email savepoint: isolate this email's processing
+                    async with self.db.begin_nested():
+                        # Process single email with error classification
+                        email_result = await self._process_single_email(
+                            email=email,
+                            task_id=task_id,
+                            run_id=run_id,
+                            field_mappings=field_mappings,
+                            identifier_column=identifier_column,
+                            dedup_service=dedup_service,
+                            gmail_adapter=gmail_adapter,
+                            sheet_name=sheet_name,
+                            gmail_source_type=gmail_source_type,
+                        )
+
+                        # Accumulate results
+                        rows_inserted += email_result.rows_inserted
+                        rows_updated += email_result.rows_updated
+                        rows_failed += email_result.rows_failed
+                        errors.extend(
+                            [
+                                RowError(
+                                    row_number=e.get("row_number", 0),
+                                    error=e.get("error", "Unknown error"),
+                                )
+                                for e in email_result.errors
+                            ]
+                        )
+
+                        # Record email processing outcome
+                        if email_message_id:
+                            # Determine email success and retry status
+                            is_email_success = email_result.is_success
+                            is_email_retryable = email_result.is_retryable
+
+                            await self._record_processed_email(
+                                message_id=email_message_id,
+                                subject=email_subject,
+                                sender=email_sender,
+                                task_id=task_id,
+                                rows_inserted=email_result.rows_inserted,
+                                rows_updated=email_result.rows_updated,
+                                rows_skipped=email_result.rows_skipped,
+                                rows_failed=email_result.rows_failed,
+                                is_success=is_email_success,
+                                is_retryable=is_email_retryable,
+                            )
+
+                            # Try to remove UNREAD label
+                            try:
+                                gmail_service = gmail_adapter.service
+                                if gmail_service is not None:
+                                    await gmail_service.users().messages().modify(
+                                        userId="me",
+                                        id=email_message_id,
+                                        body={"removeLabelIds": ["UNREAD"]},
+                                    ).execute()
+                            except Exception as e:
+                                logger.warning(
+                                    "Could not mark email as processed",
+                                    message_id=email_message_id,
+                                    error=str(e),
+                                )
+
                 except Exception as e:
-                    logger.warning("Could not mark email as processed", error=str(e))
+                    # Email processing failed (extraction error, etc.)
+                    logger.error(
+                        "Failed to process email in transaction",
+                        message_id=email_message_id,
+                        error=str(e),
+                    )
+                    rows_failed += 1
+                    errors.append(RowError(row_number=0, error=f"Email processing error: {str(e)}"))
+                    # Continue to next email - one email failure doesn't block others
+                    continue
 
         except IngestionCanceledError:
             logger.info("Gmail task ingestion canceled", task_id=task_id, run_id=run_id)
@@ -1321,7 +1492,7 @@ class IngestionService:
         except Exception as e:
             logger.error("Gmail task ingestion failed", error=str(e), task_id=task_id)
             rows_failed += 1
-            errors.append(RowError(row_number=0, error=f"Gmail adapter error: {str(e)}"))
+            errors.append(RowError(row_number=0, error=f"Gmail adapter error: {e!s}"))
         finally:
             if gmail_adapter is not None:
                 try:
@@ -1352,9 +1523,9 @@ class IngestionService:
     async def _download_files_from_links(
         self,
         run_id: UUID,
-        urls: List[str],
-        errors: List[RowError],
-    ) -> List[dict]:
+        urls: list[str],
+        errors: list[RowError],
+    ) -> list[dict]:
         """Download files from a list of URLs and return as file items.
 
         Args:
@@ -1403,7 +1574,7 @@ class IngestionService:
 
                 except Exception as e:
                     logger.error("Failed to download file from URL", url=url, error=str(e))
-                    errors.append(RowError(row_number=0, error=f"Download failed [{url}]: {str(e)}"))
+                    errors.append(RowError(row_number=0, error=f"Download failed [{url}]: {e!s}"))
 
         return file_items
 
@@ -1413,8 +1584,8 @@ class IngestionService:
         run_id: UUID,
         payload: dict,
         field_mappings: dict,
-        identifier_column: Optional[str] = None,
-        dedup_service: Optional[DeduplicationService] = None,
+        identifier_column: str | None = None,
+        dedup_service: DeduplicationService | None = None,
     ) -> tuple:
         """Ingest from webhook payload.
 
@@ -1460,7 +1631,7 @@ class IngestionService:
 
                 except Exception as e:
                     logger.error("Error upserting webhook document", error=str(e))
-                    errors.append(RowError(row_number=0, error=f"Database error: {str(e)}"))
+                    errors.append(RowError(row_number=0, error=f"Database error: {e!s}"))
                     rows_failed += 1
 
         except IngestionCanceledError:
@@ -1468,7 +1639,7 @@ class IngestionService:
             raise
         except Exception as e:
             logger.error("Webhook ingestion failed", error=str(e), task_id=task.id)
-            errors.append(RowError(row_number=0, error=f"Webhook processing error: {str(e)}"))
+            errors.append(RowError(row_number=0, error=f"Webhook processing error: {e!s}"))
 
         return rows_inserted, rows_updated, rows_failed, errors
 
@@ -1478,8 +1649,8 @@ class IngestionService:
         run_id: UUID,
         file_data: bytes,
         field_mappings: dict,
-        identifier_column: Optional[str] = None,
-        dedup_service: Optional[DeduplicationService] = None,
+        identifier_column: str | None = None,
+        dedup_service: DeduplicationService | None = None,
     ) -> tuple:
         """Ingest from uploaded file using task configuration.
 
@@ -1495,7 +1666,7 @@ class IngestionService:
         rows_updated = 0
         rows_failed = 0
         errors = []
-        
+
         try:
             task_config = adaptor_config
             sheet_name = task_config.get("sheet_name", "Sheet1")
@@ -1528,7 +1699,7 @@ class IngestionService:
 
                 except Exception as e:
                     logger.error("Error upserting file document", error=str(e))
-                    errors.append(RowError(row_number=row_data.get("row_number", 0), error=f"Database error: {str(e)}"))
+                    errors.append(RowError(row_number=row_data.get("row_number", 0), error=f"Database error: {e!s}"))
                     rows_failed += 1
 
         except IngestionCanceledError:
@@ -1536,7 +1707,7 @@ class IngestionService:
             raise
         except Exception as e:
             logger.error("File task ingestion failed", error=str(e), task_id=task.id)
-            errors.append(RowError(row_number=0, error=f"File processing error: {str(e)}"))
+            errors.append(RowError(row_number=0, error=f"File processing error: {e!s}"))
 
         return rows_inserted, rows_updated, rows_failed, errors
 
