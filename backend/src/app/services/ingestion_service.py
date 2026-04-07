@@ -599,6 +599,18 @@ class IngestionService:
             if "is_current" not in row_data:
                 row_data["is_current"] = True
 
+            # Protect required NOT NULL fields from being set to None
+            if not row_data.get("text") or row_data.get("text") == "None":
+                # Generate fallback text from available fields
+                fallback_text = " ".join(
+                    part for part in [
+                        str(row_data.get("title") or "").strip(),
+                        str(row_data.get("content") or "").strip(),
+                        str(row_data.get("description") or "").strip(),
+                    ] if part
+                )
+                row_data["text"] = fallback_text or f"Row {row_data.get('row_number', 0)}"
+
             # Convert NULL numeric values to 0 for accurate metric calculations
             numeric_fields = [
                 "organic_interactions", "total_interactions", "total_reactions", "total_comments",
