@@ -375,6 +375,103 @@ class IngestionService:
         )
         await self.db.execute(stmt)
 
+    async def fetch_emails_for_preview(
+        self,
+        task_id: UUID,
+    ) -> list[dict]:
+        """Fetch emails from Gmail for preview/selection without processing.
+
+        Only works for Gmail adaptor tasks. Returns empty list for other adaptors.
+
+        Args:
+            task_id: UUID of the ingestion task.
+
+        Returns:
+            List of dicts with: message_id, subject, from, attachment_count.
+        """
+        # Get task
+        stmt = select(IngestionTask).where(IngestionTask.id == task_id)
+        result = await self.db.execute(stmt)
+        task = result.scalar_one_or_none()
+        if not task:
+            raise ValueError(f"Task not found: {task_id}")
+
+        # Only fetch emails for Gmail adaptor
+        if task.adaptor_type != "gmail":
+            logger.info("Email preview not available for non-Gmail adaptor", adaptor_type=task.adaptor_type)
+            return []
+
+        task_config = dict(task.adaptor_config or {})
+
+        try:
+            # Prepare OAuth config
+            oauth_config = dict(task_config.get("gmail_oauth", {}))
+            from app.config import settings
+
+            if not oauth_config.get("client_id") and settings.gmail_oauth_client_id:
+                oauth_config["client_id"] = settings.gmail_oauth_client_id
+            if not oauth_config.get("client_secret") and settings.gmail_oauth_client_secret:
+                oauth_config["client_secret"] = settings.gmail_oauth_client_secret
+            if not oauth_config.get("token_uri") and settings.gmail_oauth_token_uri:
+                oauth_config["token_uri"] = settings.gmail_oauth_token_uri
+
+            # Initialize Gmail adapter
+            credential_service = get_gmail_credential_service(self.db)
+            gmail_adapter = GmailAdapter(
+                oauth_config=oauth_config,
+                credential_service=credential_service,
+                task_id=str(task.id),
+            )
+
+            # Connect to Gmail
+            await gmail_adapter.connect()
+
+            try:
+                # Fetch emails
+                emails = await gmail_adapter.fetch_data(
+                    query=task_config.get("gmail_query", ""),
+                    sender_filter=task_config.get("sender_filter"),
+                    subject_pattern=task_config.get("subject_pattern"),
+                    max_results=task_config.get("max_results", 25),
+                    source_type=task_config.get("gmail_source_type", "attachment"),
+                    link_regex=task_config.get("download_link_regex") or r"https?://\S+",
+                    allowed_extensions=task_config.get("allowed_extensions"),
+                )
+
+                # Transform to preview format: message_id, subject, from, attachment_count
+                preview_emails = []
+                for email in emails:
+                    attachment_count = 0
+                    if "attachments" in email:
+                        attachment_count = len(email.get("attachments", []))
+                    elif "download_links" in email:
+                        attachment_count = len(email.get("download_links", []))
+
+                    preview_emails.append({
+                        "message_id": email.get("message_id", ""),
+                        "subject": email.get("subject", ""),
+                        "from": email.get("from", ""),
+                        "attachment_count": attachment_count,
+                    })
+
+                logger.info(
+                    "Fetched emails for preview",
+                    task_id=task_id,
+                    email_count=len(preview_emails)
+                )
+                return preview_emails
+
+            finally:
+                await gmail_adapter.disconnect()
+
+        except Exception as e:
+            logger.error(
+                "Failed to fetch emails for preview",
+                task_id=task_id,
+                error=str(e)
+            )
+            raise
+
     async def ingest_from_gmail(self, identifier_column: str | None = None) -> IngestResult:
         """Fetch and ingest data from Gmail attachments.
 
@@ -954,6 +1051,46 @@ class IngestionService:
                 )
 
         return result
+
+    async def create_email_subtasks(
+        self,
+        task_id: UUID,
+        parent_run_id: UUID,
+        selected_message_ids: list[str],
+    ) -> list[tuple[UUID, str]]:
+        """Create child IngestionTaskRun records for each selected email.
+
+        Args:
+            task_id: UUID of the parent ingestion task.
+            parent_run_id: UUID of the parent task run.
+            selected_message_ids: List of Gmail message IDs to process as sub-tasks.
+
+        Returns:
+            List of tuples: (child_run_id, message_id) for Celery task queueing.
+        """
+        child_runs = []
+
+        for message_id in selected_message_ids:
+            # Create child run
+            child_run = IngestionTaskRun(
+                task_id=task_id,
+                parent_run_id=parent_run_id,
+                status=RunStatus.PENDING,
+                run_metadata={"selected_message_id": message_id},
+            )
+            self.db.add(child_run)
+            await self.db.flush()  # Flush to get the ID
+
+            child_runs.append((child_run.id, message_id))
+            logger.info(
+                "Created child task run",
+                child_run_id=child_run.id,
+                parent_run_id=parent_run_id,
+                message_id=message_id,
+            )
+
+        await self.db.commit()
+        return child_runs
 
     async def ingest_task(
         self,

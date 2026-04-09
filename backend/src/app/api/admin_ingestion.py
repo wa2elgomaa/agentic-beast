@@ -272,6 +272,140 @@ async def trigger_run(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/tasks/{task_id}/preview-emails")
+async def preview_emails(
+    task_id: UUID,
+    _admin: Annotated[User, Depends(get_current_admin)] = None,
+    db: Annotated[AsyncSession, Depends(get_db_session)] = None,
+):
+    """Preview emails for a Gmail task without processing them.
+
+    Only works for Gmail adaptor tasks. Used for email selection UI.
+
+    Returns:
+        List of emails with: message_id, subject, from, attachment_count.
+    """
+    try:
+        from app.services.ingestion_service import get_ingestion_service
+        ingestion_service = get_ingestion_service(db)
+        emails = await ingestion_service.fetch_emails_for_preview(task_id)
+        return {"emails": emails, "email_count": len(emails)}
+    except ValueError as e:
+        logger.error("Task not found", error=str(e))
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error("Failed to preview emails", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/tasks/{task_id}/run-with-selections", response_model=IngestionTaskRunResponse, status_code=status.HTTP_202_ACCEPTED)
+async def trigger_run_with_selections(
+    task_id: UUID,
+    request: dict,
+    _admin: Annotated[User, Depends(get_current_admin)] = None,
+    db: Annotated[AsyncSession, Depends(get_db_session)] = None,
+) -> IngestionTaskRunResponse:
+    """Manually trigger a task run with selected emails (Gmail only).
+
+    Request body:
+        {
+            "selected_message_ids": ["msg_id_1", "msg_id_2", ...]
+        }
+    """
+    try:
+        selected_message_ids = request.get("selected_message_ids", [])
+        if not isinstance(selected_message_ids, list) or not selected_message_ids:
+            raise ValueError("selected_message_ids must be a non-empty list")
+
+        service = get_ingestion_task_service(db)
+
+        # Create parent run
+        parent_run = await service.create_run(task_id)
+        await db.commit()
+
+        # Create child runs and queue Celery tasks
+        from app.services.ingestion_service import get_ingestion_service
+        ingestion_service = get_ingestion_service(db)
+
+        child_runs = await ingestion_service.create_email_subtasks(task_id, parent_run.id, selected_message_ids)
+
+        # Get task to fetch full email objects
+        from sqlalchemy import select
+        from app.models import IngestionTask
+        stmt = select(IngestionTask).where(IngestionTask.id == task_id)
+        result = await db.execute(stmt)
+        task = result.scalar_one_or_none()
+        if not task:
+            raise ValueError(f"Task not found: {task_id}")
+
+        # Prepare to fetch email objects
+        task_config = dict(task.adaptor_config or {})
+        oauth_config = dict(task_config.get("gmail_oauth", {}))
+
+        if not oauth_config.get("client_id") and settings.gmail_oauth_client_id:
+            oauth_config["client_id"] = settings.gmail_oauth_client_id
+        if not oauth_config.get("client_secret") and settings.gmail_oauth_client_secret:
+            oauth_config["client_secret"] = settings.gmail_oauth_client_secret
+        if not oauth_config.get("token_uri") and settings.gmail_oauth_token_uri:
+            oauth_config["token_uri"] = settings.gmail_oauth_token_uri
+
+        # Initialize Gmail adapter
+        from app.adapters.gmail_adapter import GmailAdapter
+        from app.services.gmail_credential_service import get_gmail_credential_service
+
+        credential_service = get_gmail_credential_service(db)
+        gmail_adapter = GmailAdapter(
+            oauth_config=oauth_config,
+            credential_service=credential_service,
+            task_id=str(task_id),
+        )
+
+        try:
+            await gmail_adapter.connect()
+
+            # Fetch full email objects
+            emails = await gmail_adapter.fetch_data(
+                query=task_config.get("gmail_query", ""),
+                sender_filter=task_config.get("sender_filter"),
+                subject_pattern=task_config.get("subject_pattern"),
+                max_results=task_config.get("max_results", 25),
+                source_type=task_config.get("gmail_source_type", "attachment"),
+                link_regex=task_config.get("download_link_regex") or r"https?://\S+",
+                allowed_extensions=task_config.get("allowed_extensions"),
+            )
+
+            # Map message_id to full email dict
+            email_by_id = {email.get("message_id"): email for email in emails}
+
+           # Queue Celery tasks for each child run
+            from app.tasks.ingestion_tasks import run_ingestion_task_single_email
+            for child_run_id, message_id in child_runs:
+                email_dict = email_by_id.get(message_id)
+                if email_dict:
+                    run_ingestion_task_single_email.apply_async(
+                        args=(str(child_run_id), email_dict, str(task_id)),
+                        task_id=f"single-email-{child_run_id}",
+                    )
+
+            logger.info(
+                "Email selection run triggered",
+                task_id=task_id,
+                parent_run_id=parent_run.id,
+                email_count=len(child_runs),
+            )
+
+        finally:
+            await gmail_adapter.disconnect()
+
+        return IngestionTaskRunResponse.model_validate(parent_run)
+    except ValueError as e:
+        logger.error("Validation error", error=str(e))
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("Failed to trigger run with selections", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/tasks/{task_id}/runs", response_model=list[IngestionTaskRunResponse])
 async def list_runs(
     task_id: UUID,

@@ -122,9 +122,10 @@ class IngestionTaskRun(Base):
     # Primary key
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     
-    # Foreign key
+    # Foreign keys
     task_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("ingestion_tasks.id", ondelete="CASCADE"), nullable=False)
-    
+    parent_run_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("ingestion_task_runs.id", ondelete="CASCADE"), nullable=True)
+
     # Execution metadata
     started_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP)
     completed_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP)
@@ -161,6 +162,8 @@ class IngestionTaskRun(Base):
     # Relationships
     task: Mapped["IngestionTask"] = relationship("IngestionTask", back_populates="runs")
     uploaded_files: Mapped[list["UploadedFile"]] = relationship("UploadedFile", back_populates="run", cascade="all, delete-orphan")
+    parent_run: Mapped[Optional["IngestionTaskRun"]] = relationship("IngestionTaskRun", remote_side=[id], back_populates="child_runs", foreign_keys=[parent_run_id])
+    child_runs: Mapped[list["IngestionTaskRun"]] = relationship("IngestionTaskRun", back_populates="parent_run", remote_side=[parent_run_id], cascade="all, delete-orphan")
 
     def __repr__(self) -> str:
         """String representation."""
