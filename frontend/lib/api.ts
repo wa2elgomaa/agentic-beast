@@ -624,6 +624,35 @@ export async function cancelIngestionTaskRun(taskId: string, runId: string): Pro
   return response.json()
 }
 
+export async function previewEmailsForTask(taskId: string): Promise<{ emails: any[]; email_count: number }> {
+  const response = await fetch(buildApiUrl(`${APIPrefix}/admin/ingestion/tasks/${taskId}/preview-emails`), {
+    method: 'GET',
+    headers: getAuthHeaders(),
+  })
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Unknown error' }))
+    throw new Error(error.detail || `HTTP ${response.status}`)
+  }
+
+  return response.json()
+}
+
+export async function runTaskWithSelections(taskId: string, selectedMessageIds: string[]): Promise<IngestionTaskRun> {
+  const response = await fetch(buildApiUrl(`${APIPrefix}/admin/ingestion/tasks/${taskId}/run-with-selections`), {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ selected_message_ids: selectedMessageIds }),
+  })
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Unknown error' }))
+    throw new Error(error.detail || `HTTP ${response.status}`)
+  }
+
+  return response.json()
+}
+
 // Schema Mapping
 export async function detectColumnsFromFile(file: File): Promise<SchemaDetectResponse> {
   const formData = new FormData()

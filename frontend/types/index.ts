@@ -305,6 +305,14 @@ export interface IngestionTaskRun {
   error_code?: string  // invalid_grant, unauthorized, etc.
   run_metadata?: Record<string, any>
   created_at: string
+  parent_run_id?: string  // For child runs in task hierarchy
+}
+
+export interface PreviewEmail {
+  message_id: string
+  subject: string
+  from: string
+  attachment_count: number
 }
 
 export interface SchemaMappingTemplate {
