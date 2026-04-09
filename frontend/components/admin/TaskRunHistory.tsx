@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import React, { useState } from 'react'
 import { IngestionTaskRun } from '@/types'
 import { CheckCircle2, AlertCircle, Clock, RefreshCw, XCircle, ChevronDown, ChevronUp, Eye, Download } from 'lucide-react'
 
@@ -221,7 +221,136 @@ function DetailModal({ run, isOpen, onClose }: DetailModalProps) {
 
 export default function TaskRunHistory({ runs, onRefresh, onCancelRun, cancelingRunId }: TaskRunHistoryProps) {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
+  const [expandedParentIds, setExpandedParentIds] = useState<Set<string>>(new Set())
   const selectedRun = runs.find(r => r.id === selectedRunId)
+
+  // Group runs: parent runs with their children
+  const parentRuns = runs.filter(r => !r.parent_run_id)
+
+  const getChildRuns = (parentId: string) => {
+    return runs.filter(r => r.parent_run_id === parentId)
+  }
+
+  const toggleExpandParent = (parentId: string) => {
+    const updated = new Set(expandedParentIds)
+    if (updated.has(parentId)) {
+      updated.delete(parentId)
+    } else {
+      updated.add(parentId)
+    }
+    setExpandedParentIds(updated)
+  }
+
+  // Render row data for both parent and child runs
+  const renderRunRow = (run: IngestionTaskRun, isChild: boolean = false, parentId?: string) => {
+    return (
+      <tr
+        key={run.id}
+        className={`border-b border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50 ${isChild ? 'bg-gray-50/50 dark:bg-gray-700/30' : ''}`}
+      >
+        <td className="px-6 py-4">
+          <div className="flex items-center gap-2" style={{ paddingLeft: isChild ? '20px' : '0' }}>
+            {/* Expand/collapse button for parent runs with children */}
+            {!isChild && getChildRuns(run.id).length > 0 && (
+              <button
+                onClick={() => toggleExpandParent(run.id)}
+                className="p-0 hover:bg-gray-200 dark:hover:bg-gray-600 rounded"
+                title={expandedParentIds.has(run.id) ? 'Collapse' : 'Expand'}
+              >
+                {expandedParentIds.has(run.id) ? (
+                  <ChevronUp size={16} className="text-gray-600 dark:text-gray-400" />
+                ) : (
+                  <ChevronDown size={16} className="text-gray-600 dark:text-gray-400" />
+                )}
+              </button>
+            )}
+            {isChild && <span className="w-4" />}
+
+            {getStatusIcon(run.status)}
+            <span className={`px-2.5 py-1 rounded-full text-xs font-medium capitalize ${getStatusColor(run.status)}`}>
+              {run.status}
+              {isChild && run.run_metadata?.selected_message_id && (
+                <span className="ml-1 text-xs text-gray-600 dark:text-gray-400">
+                  (Email)
+                </span>
+              )}
+            </span>
+          </div>
+        </td>
+        <td className="px-6 py-4 text-sm text-gray-600 dark:text-gray-400">
+          {run.started_at ? new Date(run.started_at).toLocaleString() : '-'}
+        </td>
+        <td className="px-6 py-4 text-sm text-gray-600 dark:text-gray-400">
+          {run.completed_at ? new Date(run.completed_at).toLocaleString() : '-'}
+        </td>
+        <td className="px-6 py-4 text-sm font-medium text-green-700 dark:text-green-300">{run.rows_inserted}</td>
+        <td className="px-6 py-4 text-sm font-medium text-blue-700 dark:text-blue-300">
+          <span title="Duplicates with changed metrics (appended as new version)" className="cursor-help">
+            {run.rows_updated}
+          </span>
+        </td>
+        <td className="px-6 py-4 text-sm font-medium text-red-700 dark:text-red-300">{run.rows_failed}</td>
+        <td className="px-6 py-4 text-sm font-medium">
+          {run.failed_emails_count ? (
+            <span title="Emails that failed during processing" className="cursor-help px-2 py-1 rounded-full bg-orange-100 dark:bg-orange-900 text-orange-800 dark:text-orange-200 text-xs font-medium">
+              {run.failed_emails_count}
+            </span>
+          ) : (
+            <span className="text-gray-400">-</span>
+          )}
+        </td>
+        <td className="px-6 py-4 text-sm text-gray-600 dark:text-gray-400 max-w-xs">
+          <div className="space-y-1">
+            {run.error_type && (
+              <div className="flex gap-1">
+                <span className={`px-2 py-1 rounded text-xs font-medium ${
+                  run.error_type === 'auth_error'
+                    ? 'bg-orange-100 dark:bg-orange-900 text-orange-800 dark:text-orange-200'
+                    : run.error_type === 'network_error'
+                    ? 'bg-purple-100 dark:bg-purple-900 text-purple-800 dark:text-purple-200'
+                    : 'bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200'
+                }`}>
+                {run.error_type}
+              </span>
+              {run.error_code && (
+                <span className="px-2 py-1 text-xs font-mono bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded">
+                  {run.error_code}
+                </span>
+              )}
+            </div>
+          )}
+          {run.error_message && (
+            <span title={run.error_message} className="text-red-600 dark:text-red-400 block truncate text-xs">
+              {run.error_message.length > 50 ? `${run.error_message.substring(0, 50)}...` : run.error_message}
+            </span>
+          )}
+          {!run.error_type && !run.error_message && <span>-</span>}
+        </div>
+        </td>
+        <td className="px-6 py-4 text-sm">
+          <div className="flex gap-2">
+            <button
+              onClick={() => setSelectedRunId(run.id)}
+              className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded transition-colors"
+              title="View detailed execution stats"
+            >
+              <Eye size={14} />
+              Details
+            </button>
+            {['pending', 'running'].includes(run.status) && onCancelRun ? (
+              <button
+                onClick={() => onCancelRun(run.id)}
+                disabled={cancelingRunId === run.id || Boolean(run.run_metadata?.cancel_requested)}
+                className="text-red-600 hover:text-red-700 disabled:opacity-50 font-medium text-xs"
+              >
+                {cancelingRunId === run.id || run.run_metadata?.cancel_requested ? 'Stopping...' : 'Stop'}
+              </button>
+            ) : null}
+          </div>
+        </td>
+      </tr>
+    )
+  }
 
   return (
     <div className="space-y-6">
@@ -257,88 +386,15 @@ export default function TaskRunHistory({ runs, onRefresh, onCancelRun, canceling
               </tr>
             </thead>
             <tbody>
-              {runs.map((run) => (
-                <tr key={run.id} className="border-b border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50">
-                  <td className="px-6 py-4">
-                    <div className="flex items-center gap-2">
-                      {getStatusIcon(run.status)}
-                      <span className={`px-2.5 py-1 rounded-full text-xs font-medium capitalize ${getStatusColor(run.status)}`}>
-                        {run.status}
-                      </span>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 text-sm text-gray-600 dark:text-gray-400">
-                    {run.started_at ? new Date(run.started_at).toLocaleString() : '-'}
-                  </td>
-                  <td className="px-6 py-4 text-sm text-gray-600 dark:text-gray-400">
-                    {run.completed_at ? new Date(run.completed_at).toLocaleString() : '-'}
-                  </td>
-                  <td className="px-6 py-4 text-sm font-medium text-green-700 dark:text-green-300">{run.rows_inserted}</td>
-                  <td className="px-6 py-4 text-sm font-medium text-blue-700 dark:text-blue-300">
-                    <span title="Duplicates with changed metrics (appended as new version)" className="cursor-help">
-                      {run.rows_updated}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 text-sm font-medium text-red-700 dark:text-red-300">{run.rows_failed}</td>
-                  <td className="px-6 py-4 text-sm font-medium">
-                    {run.failed_emails_count ? (
-                      <span title="Emails that failed during processing" className="cursor-help px-2 py-1 rounded-full bg-orange-100 dark:bg-orange-900 text-orange-800 dark:text-orange-200 text-xs font-medium">
-                        {run.failed_emails_count}
-                      </span>
-                    ) : (
-                      <span className="text-gray-400">-</span>
-                    )}
-                  </td>
-                  <td className="px-6 py-4 text-sm text-gray-600 dark:text-gray-400 max-w-xs">
-                    <div className="space-y-1">
-                      {run.error_type && (
-                        <div className="flex gap-1">
-                          <span className={`px-2 py-1 rounded text-xs font-medium ${
-                            run.error_type === 'auth_error'
-                              ? 'bg-orange-100 dark:bg-orange-900 text-orange-800 dark:text-orange-200'
-                              : run.error_type === 'network_error'
-                              ? 'bg-purple-100 dark:bg-purple-900 text-purple-800 dark:text-purple-200'
-                              : 'bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200'
-                          }`}>
-                            {run.error_type}
-                          </span>
-                          {run.error_code && (
-                            <span className="px-2 py-1 text-xs font-mono bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded">
-                              {run.error_code}
-                            </span>
-                          )}
-                        </div>
-                      )}
-                      {run.error_message && (
-                        <span title={run.error_message} className="text-red-600 dark:text-red-400 block truncate text-xs">
-                          {run.error_message.length > 50 ? `${run.error_message.substring(0, 50)}...` : run.error_message}
-                        </span>
-                      )}
-                      {!run.error_type && !run.error_message && <span>-</span>}
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 text-sm">
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => setSelectedRunId(run.id)}
-                        className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded transition-colors"
-                        title="View detailed execution stats"
-                      >
-                        <Eye size={14} />
-                        Details
-                      </button>
-                      {['pending', 'running'].includes(run.status) && onCancelRun ? (
-                        <button
-                          onClick={() => onCancelRun(run.id)}
-                          disabled={cancelingRunId === run.id || Boolean(run.run_metadata?.cancel_requested)}
-                          className="text-red-600 hover:text-red-700 disabled:opacity-50 font-medium text-xs"
-                        >
-                          {cancelingRunId === run.id || run.run_metadata?.cancel_requested ? 'Stopping...' : 'Stop'}
-                        </button>
-                      ) : null}
-                    </div>
-                  </td>
-                </tr>
+              {parentRuns.map((parentRun) => (
+                // Use fragment to render multiple tr rows without wrapper
+                <React.Fragment key={parentRun.id}>
+                  {renderRunRow(parentRun, false)}
+                  {/* Child runs (if any) and if expanded */}
+                  {expandedParentIds.has(parentRun.id) && getChildRuns(parentRun.id).map((childRun) =>
+                    renderRunRow(childRun, true, parentRun.id)
+                  )}
+                </React.Fragment>
               ))}
             </tbody>
           </table>

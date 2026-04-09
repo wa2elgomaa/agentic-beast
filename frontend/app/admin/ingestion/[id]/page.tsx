@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { IngestionTask, IngestionTaskRun, TaskSchemaMapping } from '@/types'
+import { IngestionTask, IngestionTaskRun, TaskSchemaMapping, PreviewEmail } from '@/types'
 import {
     cancelIngestionTaskRun,
     getGmailTaskAuthUrl,
@@ -10,12 +10,15 @@ import {
     getIngestionTaskRuns,
     getTaskSchemaMapping,
     triggerIngestionTaskRun,
+    previewEmailsForTask,
+    runTaskWithSelections,
 } from '@/lib/api'
 import SchemaMapper from '@/components/admin/SchemaMapper'
 import TaskRunHistory from '@/components/admin/TaskRunHistory'
 import TaskSettingsForm from '@/components/admin/TaskSettingsForm'
 import GmailCredentialStatus from '@/components/admin/GmailCredentialStatus'
 import FailedEmailsPanel from '@/components/admin/FailedEmailsPanel'
+import { EmailSelectionModal } from '@/components/admin/ingestion/EmailSelectionModal'
 import { AlertCircle, Link as LinkIcon, Play, Settings, Lock } from 'lucide-react'
 import Link from 'next/link'
 
@@ -34,6 +37,10 @@ export default function TaskDetailPage() {
     const [isLinkingGmail, setIsLinkingGmail] = useState(false)
     const [activeTab, setActiveTab] = useState<'schema' | 'runs' | 'settings' | 'gmail-credentials' | 'failed-emails'>('schema')
     const [showPendingRunsModal, setShowPendingRunsModal] = useState(false)
+    const [showEmailSelection, setShowEmailSelection] = useState(false)
+    const [emailsForSelection, setEmailsForSelection] = useState<PreviewEmail[]>([])
+    const [isLoadingEmails, setIsLoadingEmails] = useState(false)
+    const [emailLoadError, setEmailLoadError] = useState<string | null>(null)
 
     useEffect(() => {
         loadData()
@@ -64,11 +71,44 @@ export default function TaskDetailPage() {
         try {
             setIsRunning(true)
             setShowPendingRunsModal(false)
-            await triggerIngestionTaskRun(taskId)
-            // Reload runs
-            setTimeout(() => loadData(), 1000)
+
+            // For Gmail tasks, show email selection instead of running immediately
+            if (task?.adaptor_type === 'gmail') {
+                setIsLoadingEmails(true)
+                setEmailLoadError(null)
+                try {
+                    const result = await previewEmailsForTask(taskId)
+                    setEmailsForSelection(result.emails)
+                    setShowEmailSelection(true)
+                } catch (err) {
+                    setEmailLoadError(err instanceof Error ? err.message : 'Failed to load emails')
+                }
+                setIsLoadingEmails(false)
+            } else {
+                // For non-Gmail tasks, use existing flow
+                await triggerIngestionTaskRun(taskId)
+                // Reload runs
+                setTimeout(() => loadData(), 1000)
+            }
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Failed to trigger task')
+        } finally {
+            setIsRunning(false)
+        }
+    }
+
+    const handleEmailSelectionConfirm = async (selectedIds: string[]) => {
+        try {
+            setIsRunning(true)
+            setShowEmailSelection(false)
+            await runTaskWithSelections(taskId, selectedIds)
+            // Reload runs
+            setTimeout(() => {
+                loadData()
+                setActiveTab('runs')
+            }, 1000)
+        } catch (err) {
+            setError(err instanceof Error ? err.message : 'Failed to start task with selected emails')
         } finally {
             setIsRunning(false)
         }
@@ -213,6 +253,21 @@ export default function TaskDetailPage() {
                     </div>
                 </div>
             )}
+
+            {/* Email Selection Modal for Gmail tasks */}
+            <EmailSelectionModal
+                isOpen={showEmailSelection}
+                isLoading={isLoadingEmails}
+                emails={emailsForSelection}
+                error={emailLoadError || undefined}
+                onClose={() => {
+                    setShowEmailSelection(false)
+                    setEmailsForSelection([])
+                    setEmailLoadError(null)
+                }}
+                onSelect={handleEmailSelectionConfirm}
+                taskAdaptorType={task?.adaptor_type}
+            />
 
             {/* Tabs */}
             <div className="flex gap-2 border-b border-gray-200 dark:border-gray-700">
