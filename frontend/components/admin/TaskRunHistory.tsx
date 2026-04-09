@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react'
 import { IngestionTaskRun } from '@/types'
-import { CheckCircle2, AlertCircle, Clock, RefreshCw, XCircle, ChevronDown, ChevronUp, Eye, Download } from 'lucide-react'
+import { CheckCircle2, AlertCircle, Clock, RefreshCw, XCircle, Eye } from 'lucide-react'
 
 interface TaskRunHistoryProps {
   runs: IngestionTaskRun[]
@@ -13,6 +13,7 @@ interface TaskRunHistoryProps {
 
 interface DetailModalProps {
   run: IngestionTaskRun
+  childRuns: IngestionTaskRun[]
   isOpen: boolean
   onClose: () => void
 }
@@ -51,7 +52,7 @@ const getStatusColor = (status: string) => {
   }
 }
 
-function DetailModal({ run, isOpen, onClose }: DetailModalProps) {
+function DetailModal({ run, childRuns, isOpen, onClose }: DetailModalProps) {
   if (!isOpen) return null
 
   const successRate = run.rows_inserted + run.rows_updated > 0
@@ -64,7 +65,7 @@ function DetailModal({ run, isOpen, onClose }: DetailModalProps) {
 
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
         <div className="sticky top-0 flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
           <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Run Details</h2>
           <button
@@ -126,7 +127,49 @@ function DetailModal({ run, isOpen, onClose }: DetailModalProps) {
             </div>
           </div>
 
-          {/* Error Details */}
+          {/* Subtasks Table (if parent has child runs) */}
+          {childRuns.length > 0 && (
+            <div className="space-y-3">
+              <h3 className="font-semibold text-gray-900 dark:text-white">Email Processing Subtasks ({childRuns.length})</h3>
+              <div className="overflow-x-auto border border-gray-200 dark:border-gray-700 rounded-lg">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-700/50">
+                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400">Status</th>
+                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400">Email ID</th>
+                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400">Inserted</th>
+                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400">Appended</th>
+                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400">Failed</th>
+                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400">Completed</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {childRuns.map((subtask) => (
+                      <tr key={subtask.id} className="border-b border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/30">
+                        <td className="px-4 py-2">
+                          <div className="flex items-center gap-2">
+                            {getStatusIcon(subtask.status)}
+                            <span className={`px-2 py-0.5 rounded text-xs font-medium capitalize ${getStatusColor(subtask.status)}`}>
+                              {subtask.status}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="px-4 py-2 text-gray-600 dark:text-gray-400 font-mono text-xs">
+                          {subtask.run_metadata?.selected_message_id ? subtask.run_metadata.selected_message_id.substring(0, 12) : '-'}
+                        </td>
+                        <td className="px-4 py-2 text-green-600 dark:text-green-400 font-medium">{subtask.rows_inserted}</td>
+                        <td className="px-4 py-2 text-blue-600 dark:text-blue-400 font-medium">{subtask.rows_updated}</td>
+                        <td className="px-4 py-2 text-red-600 dark:text-red-400 font-medium">{subtask.rows_failed}</td>
+                        <td className="px-4 py-2 text-gray-600 dark:text-gray-400 text-xs">
+                          {subtask.completed_at ? new Date(subtask.completed_at).toLocaleTimeString() : '-'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
           {run.error_message && (
             <div className="bg-red-50 dark:bg-red-900/20 rounded-lg p-4 border border-red-200 dark:border-red-900">
               <h3 className="font-semibold text-red-900 dark:text-red-100 mb-2">Error Information</h3>
@@ -221,57 +264,33 @@ function DetailModal({ run, isOpen, onClose }: DetailModalProps) {
 
 export default function TaskRunHistory({ runs, onRefresh, onCancelRun, cancelingRunId }: TaskRunHistoryProps) {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
-  const [expandedParentIds, setExpandedParentIds] = useState<Set<string>>(new Set())
   const selectedRun = runs.find(r => r.id === selectedRunId)
+  const selectedRunChildren = selectedRun ? runs.filter(r => r.parent_run_id === selectedRun.id) : []
 
-  // Group runs: parent runs with their children
+  // Only show parent runs (no children in main table)
   const parentRuns = runs.filter(r => !r.parent_run_id)
 
   const getChildRuns = (parentId: string) => {
     return runs.filter(r => r.parent_run_id === parentId)
   }
 
-  const toggleExpandParent = (parentId: string) => {
-    const updated = new Set(expandedParentIds)
-    if (updated.has(parentId)) {
-      updated.delete(parentId)
-    } else {
-      updated.add(parentId)
-    }
-    setExpandedParentIds(updated)
-  }
+  // Render row data for parent runs only
+  const renderRunRow = (run: IngestionTaskRun) => {
+    const childCount = getChildRuns(run.id).length
 
-  // Render row data for both parent and child runs
-  const renderRunRow = (run: IngestionTaskRun, isChild: boolean = false, parentId?: string) => {
     return (
       <tr
         key={run.id}
-        className={`border-b border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50 ${isChild ? 'bg-gray-50/50 dark:bg-gray-700/30' : ''}`}
+        className="border-b border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50"
       >
         <td className="px-6 py-4">
-          <div className="flex items-center gap-2" style={{ paddingLeft: isChild ? '20px' : '0' }}>
-            {/* Expand/collapse button for parent runs with children */}
-            {!isChild && getChildRuns(run.id).length > 0 && (
-              <button
-                onClick={() => toggleExpandParent(run.id)}
-                className="p-0 hover:bg-gray-200 dark:hover:bg-gray-600 rounded"
-                title={expandedParentIds.has(run.id) ? 'Collapse' : 'Expand'}
-              >
-                {expandedParentIds.has(run.id) ? (
-                  <ChevronUp size={16} className="text-gray-600 dark:text-gray-400" />
-                ) : (
-                  <ChevronDown size={16} className="text-gray-600 dark:text-gray-400" />
-                )}
-              </button>
-            )}
-            {isChild && <span className="w-4" />}
-
+          <div className="flex items-center gap-2">
             {getStatusIcon(run.status)}
             <span className={`px-2.5 py-1 rounded-full text-xs font-medium capitalize ${getStatusColor(run.status)}`}>
               {run.status}
-              {isChild && run.run_metadata?.selected_message_id && (
+              {childCount > 0 && run.status === 'pending' && (
                 <span className="ml-1 text-xs text-gray-600 dark:text-gray-400">
-                  (Email)
+                  ({getChildRuns(run.id).filter(c => c.status === 'completed').length}/{childCount} emails)
                 </span>
               )}
             </span>
@@ -332,7 +351,7 @@ export default function TaskRunHistory({ runs, onRefresh, onCancelRun, canceling
             <button
               onClick={() => setSelectedRunId(run.id)}
               className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded transition-colors"
-              title="View detailed execution stats"
+              title={childCount > 0 ? "View details and email subtasks" : "View detailed execution stats"}
             >
               <Eye size={14} />
               Details
@@ -386,16 +405,7 @@ export default function TaskRunHistory({ runs, onRefresh, onCancelRun, canceling
               </tr>
             </thead>
             <tbody>
-              {parentRuns.map((parentRun) => (
-                // Use fragment to render multiple tr rows without wrapper
-                <React.Fragment key={parentRun.id}>
-                  {renderRunRow(parentRun, false)}
-                  {/* Child runs (if any) and if expanded */}
-                  {expandedParentIds.has(parentRun.id) && getChildRuns(parentRun.id).map((childRun) =>
-                    renderRunRow(childRun, true, parentRun.id)
-                  )}
-                </React.Fragment>
-              ))}
+              {parentRuns.map((parentRun) => renderRunRow(parentRun))}
             </tbody>
           </table>
         </div>
@@ -404,6 +414,7 @@ export default function TaskRunHistory({ runs, onRefresh, onCancelRun, canceling
       {selectedRun && (
         <DetailModal
           run={selectedRun}
+          childRuns={selectedRunChildren}
           isOpen={!!selectedRunId}
           onClose={() => setSelectedRunId(null)}
         />

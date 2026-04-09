@@ -334,7 +334,6 @@ class IngestionService:
         sender: str | None = None,
         task_id: UUID | None = None,
         rows_inserted: int = 0,
-        rows_updated: int = 0,
         rows_skipped: int = 0,
         rows_failed: int = 0,
         is_success: bool = True,
@@ -348,7 +347,6 @@ class IngestionService:
             sender: Email sender for audit
             task_id: Task ID if processed from a task
             rows_inserted: Rows inserted from this email
-            rows_updated: Rows updated from this email
             rows_skipped: Rows skipped from this email
             rows_failed: Rows that failed from this email
             is_success: Whether email was successfully processed (True = all rows succeeded or 0 rows with no errors)
@@ -364,7 +362,6 @@ class IngestionService:
                 subject=subject,
                 sender=sender,
                 rows_inserted=rows_inserted,
-                rows_updated=rows_updated,
                 rows_skipped=rows_skipped,
                 rows_failed=rows_failed,
                 is_success=is_success,
@@ -1605,7 +1602,6 @@ class IngestionService:
                                 sender=email_sender,
                                 task_id=task_id,
                                 rows_inserted=email_result.rows_inserted,
-                                rows_updated=email_result.rows_updated,
                                 rows_skipped=email_result.rows_skipped,
                                 rows_failed=email_result.rows_failed,
                                 is_success=is_email_success,

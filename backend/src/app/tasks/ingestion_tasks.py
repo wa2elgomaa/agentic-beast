@@ -329,7 +329,7 @@ def run_ingestion_task_single_email(self, run_id: str, email_dict: dict, task_id
                 # Get schema mapping
                 from app.services.schema_mapping_service import SchemaMappingService
                 schema_service = SchemaMappingService(db)
-                task_mapping = await schema_service.get_task_schema_mapping(task_id_obj)
+                task_mapping = await schema_service.get_task_mapping(str(task_id_obj))
                 field_mappings = task_mapping.field_mappings if task_mapping else {}
                 identifier_column = task_mapping.identifier_column if task_mapping else None
 
@@ -394,7 +394,6 @@ def run_ingestion_task_single_email(self, run_id: str, email_dict: dict, task_id
                             sender=sender,
                             task_id=task_id_obj,
                             rows_inserted=email_result.rows_inserted,
-                            rows_updated=email_result.rows_updated,
                             rows_skipped=email_result.rows_skipped,
                             rows_failed=email_result.rows_failed,
                             is_success=email_result.is_success,
@@ -429,6 +428,16 @@ def run_ingestion_task_single_email(self, run_id: str, email_dict: dict, task_id
                         failed=email_result.rows_failed,
                     )
 
+                    # Aggregate stats to parent run if this is a child task
+                    if run.parent_run_id:
+                        await task_service.aggregate_child_stats_to_parent(run.parent_run_id)
+                        await db.commit()
+                        logger.info(
+                            "Aggregated child stats to parent",
+                            run_id=run_id,
+                            parent_run_id=run.parent_run_id,
+                        )
+
                 finally:
                     try:
                         await gmail_adapter.disconnect()
@@ -448,6 +457,11 @@ def run_ingestion_task_single_email(self, run_id: str, email_dict: dict, task_id
                     await db.rollback()
                     async with AsyncSessionLocal() as db2:
                         task_service = get_ingestion_task_service(db2)
+
+                        # Get the run to check if it has a parent
+                        run = await task_service.get_run(UUID(run_id))
+                        parent_run_id = run.parent_run_id if run else None
+
                         await task_service.update_run(
                             UUID(run_id),
                             status=RunStatus.FAILED,
@@ -455,6 +469,11 @@ def run_ingestion_task_single_email(self, run_id: str, email_dict: dict, task_id
                             error_message=str(e),
                         )
                         await db2.commit()
+
+                        # Aggregate stats to parent run if this is a child task
+                        if parent_run_id:
+                            await task_service.aggregate_child_stats_to_parent(parent_run_id)
+                            await db2.commit()
                 except Exception as update_error:
                     logger.error("Failed to update run status on error", error=str(update_error))
 
@@ -666,7 +685,7 @@ def retry_failed_emails(self, task_id: str):
                                 from app.services.schema_mapping_service import SchemaMappingService
 
                                 schema_service = SchemaMappingService(db)
-                                mapping = await schema_service.get_task_schema_mapping(task_id_obj)
+                                mapping = await schema_service.get_task_mapping(str(task_id_obj))
 
                                 if not mapping:
                                     logger.error(

@@ -458,6 +458,108 @@ class IngestionTaskService:
             logger.error("Failed to stop task run", error=str(e), run_id=run_id)
             raise
 
+    async def aggregate_child_stats_to_parent(self, parent_run_id: UUID) -> IngestionTaskRun:
+        """Aggregate statistics from all child runs to parent run.
+
+        Updates parent with:
+        - Sum of rows_inserted, rows_updated, rows_failed from all children
+        - Aggregated status based on children statuses
+        - Completion time if all children are done
+
+        Status aggregation logic:
+        - COMPLETED: All children are COMPLETED
+        - PARTIAL: Some children completed, some failed (or at least one has partial success)
+        - FAILED: All children failed
+        - RUNNING/PENDING: At least one child is still running or pending
+
+        Args:
+            parent_run_id: UUID of the parent run.
+
+        Returns:
+            Updated parent IngestionTaskRun with aggregated stats.
+        """
+        try:
+            logger.info("Aggregating child stats to parent", parent_run_id=parent_run_id)
+
+            # Get parent run
+            parent = await self.get_run(parent_run_id)
+            if not parent:
+                raise Exception(f"Parent run not found: {parent_run_id}")
+
+            # Get all child runs
+            stmt = select(IngestionTaskRun).where(
+                IngestionTaskRun.parent_run_id == parent_run_id
+            ).order_by(IngestionTaskRun.created_at)
+            result = await self.db.execute(stmt)
+            child_runs = result.scalars().all()
+
+            if not child_runs:
+                logger.warning("No child runs found for parent", parent_run_id=parent_run_id)
+                return parent
+
+            # Aggregate counters from all children
+            total_inserted = sum(child.rows_inserted for child in child_runs)
+            total_updated = sum(child.rows_updated for child in child_runs)
+            total_failed = sum(child.rows_failed for child in child_runs)
+
+            # Determine aggregated status
+            child_statuses = [child.status for child in child_runs]
+            completed_count = child_statuses.count(RunStatus.COMPLETED)
+            failed_count = child_statuses.count(RunStatus.FAILED)
+            partial_count = child_statuses.count(RunStatus.PARTIAL)
+            pending_count = child_statuses.count(RunStatus.PENDING)
+            running_count = child_statuses.count(RunStatus.RUNNING)
+
+            total_children = len(child_runs)
+
+            # Determine new status
+            if pending_count > 0 or running_count > 0:
+                # Still processing
+                new_status = RunStatus.RUNNING if running_count > 0 else RunStatus.PENDING
+            elif completed_count == total_children:
+                # All done successfully
+                new_status = RunStatus.COMPLETED
+            elif failed_count == total_children:
+                # All failed
+                new_status = RunStatus.FAILED
+            else:
+                # Mix of completed and failed/partial = PARTIAL
+                new_status = RunStatus.PARTIAL
+
+            # Update parent with aggregated stats
+            parent.rows_inserted = total_inserted
+            parent.rows_updated = total_updated
+            parent.rows_failed = total_failed
+            parent.status = new_status
+
+            # Set completion time if all children are done
+            if pending_count == 0 and running_count == 0:
+                parent.completed_at = datetime.utcnow()
+
+            self.db.add(parent)
+            await self.db.flush()
+
+            logger.info(
+                "Parent run aggregated",
+                parent_run_id=parent_run_id,
+                new_status=new_status,
+                total_inserted=total_inserted,
+                total_updated=total_updated,
+                total_failed=total_failed,
+                completed_children=completed_count,
+                total_children=total_children,
+            )
+
+            return parent
+
+        except Exception as e:
+            logger.error(
+                "Failed to aggregate child stats to parent",
+                error=str(e),
+                parent_run_id=parent_run_id,
+            )
+            raise
+
     async def cancel_pending_run(self, run_id: UUID) -> IngestionTaskRun:
         """Backward-compatible alias for run cancellation."""
         return await self.request_run_cancellation(run_id)
