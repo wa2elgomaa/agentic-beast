@@ -52,7 +52,7 @@ export default function AdminHeader() {
           {/* Center: Navigation menu  */}
           <nav className="flex items-center gap-4 flex-shrink-0">
             <a
-              href='/chat'
+              href='/'
               className="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 hover:text-primary-600 dark:hover:text-primary-200 transition-colors px-3 py-2 rounded-lg text-sm font-medium"
               title="Go to Chat"
             >
