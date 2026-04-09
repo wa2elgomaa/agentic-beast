@@ -212,27 +212,29 @@ class DeduplicationService:
         identifier: str,
         action: str,
         duplicate_of_run_id: Optional[UUID] = None,
+        is_connection_match: bool = False,
         calculation_summary: Optional[Dict[str, Any]] = None,
     ) -> IngestionDeduplication:
         """Record a deduplication action with full details.
-        
+
         Args:
             run_id: UUID of the ingestion run
             row_number: Row number
             identifier: Identifier text
             action: Action taken (first_occurrence, inserted_delta, skipped)
             duplicate_of_run_id: If duplicate, the run it matched
+            is_connection_match: True if matched via connection_strategy column (separate metrics), False if exact match
             calculation_summary: Metrics calculation details (for delta actions)
-            
+
         Returns:
             Created IngestionDeduplication record
         """
         is_duplicate = action in ["inserted_delta", "skipped"]
-        
+
         # Clean identifier and generate beast_uuid
         cleaned_identifier = clean_and_truncate(identifier, max_length=150)
         beast_uuid = get_beast_uuid_hex(identifier, max_length=150)
-        
+
         # Create deduplication record with full details
         dedup_record = IngestionDeduplication(
             run_id=run_id,
@@ -240,19 +242,21 @@ class DeduplicationService:
             cleaned_identifier=cleaned_identifier,
             beast_uuid=beast_uuid,
             is_duplicate=is_duplicate,
+            is_connection_match=is_connection_match,
             duplicate_of_run_id=duplicate_of_run_id,
             dedup_action=action,
             metrics_calculation_summary=calculation_summary,
         )
-        
+
         self.db.add(dedup_record)
         await self.db.flush()
-        
+
         logger.info(
             f"Recorded dedup action: row={row_number}, "
-            f"action={action}, duplicate_of_run={duplicate_of_run_id}"
+            f"action={action}, duplicate_of_run={duplicate_of_run_id}, "
+            f"is_connection_match={is_connection_match}"
         )
-        
+
         return dedup_record
     
     async def get_deduplication_summary(

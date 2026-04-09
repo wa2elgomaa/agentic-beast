@@ -90,6 +90,7 @@ class Document(Base):
     # Content Deduplication & Cross-Platform Matching
     identifier_cleaned: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     identifier_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    connection_identifier_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)  # Hash of connection_strategy column for cross-platform linking
 
     # Differential Metrics (deltas from previous ingestion)
     metric_deltas: Mapped[Optional[dict]] = mapped_column(JSONB)

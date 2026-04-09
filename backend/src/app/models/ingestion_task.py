@@ -227,7 +227,8 @@ class TaskSchemaMapping(Base):
     # }
 
     # Identifier configuration
-    identifier_column: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)  # Column name for cross-platform matching
+    identifier_column: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)  # Column name for exact-match deduplication
+    connection_strategy_identifier_column: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)  # Column name for cross-platform content linking
 
     # Deduplication strategy configuration
     # Stored as JSONB to support per-field strategies:
@@ -393,6 +394,7 @@ class IngestionDeduplication(Base):
     
     # Deduplication status and action
     is_duplicate: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
+    is_connection_match: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)  # True if matched via connection_strategy_identifier, False if exact match
     duplicate_of_run_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("ingestion_task_runs.id", ondelete="SET NULL"),
