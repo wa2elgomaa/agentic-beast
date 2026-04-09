@@ -4,12 +4,13 @@ from datetime import datetime
 from typing import Optional, List, Tuple
 from uuid import UUID
 
-from sqlalchemy import select, desc
+from sqlalchemy import and_, select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.logging import get_logger
 from app.models import IngestionTask, IngestionTaskRun, AdaptorType, ScheduleType, TaskStatus, RunStatus
+from app.tasks.celery_app import celery_app
 
 logger = get_logger(__name__)
 
@@ -374,6 +375,8 @@ class IngestionTaskService:
         rows_updated: Optional[int] = None,
         rows_failed: Optional[int] = None,
         error_message: Optional[str] = None,
+        run_metadata: Optional[dict] = None,
+        celery_task_id: Optional[str] = None,
     ) -> IngestionTaskRun:
         """Update a run's status and results.
 
@@ -386,6 +389,8 @@ class IngestionTaskService:
             rows_updated: Optional number of updated rows.
             rows_failed: Optional number of failed rows.
             error_message: Optional error message.
+            run_metadata: Optional metadata dict to merge with existing metadata.
+            celery_task_id: Optional Celery task ID for task revocation.
 
         Returns:
             Updated IngestionTaskRun.
@@ -415,6 +420,12 @@ class IngestionTaskService:
                 run.rows_failed = rows_failed
             if error_message is not None:
                 run.error_message = error_message
+            if run_metadata is not None:
+                # Merge new metadata with existing metadata
+                existing_metadata = run.run_metadata or {}
+                run.run_metadata = {**existing_metadata, **run_metadata}
+            if celery_task_id is not None:
+                run.celery_task_id = celery_task_id
 
             self.db.add(run)
             await self.db.flush()
@@ -427,7 +438,10 @@ class IngestionTaskService:
             raise
 
     async def request_run_cancellation(self, run_id: UUID) -> IngestionTaskRun:
-        """Stop a run immediately if pending, or request a cooperative stop if running."""
+        """Stop a run immediately if pending, or request a cooperative stop if running.
+
+        If stopping a parent run, will also stop all child runs.
+        """
         try:
             logger.info("Stopping ingestion task run", run_id=run_id)
 
@@ -448,8 +462,49 @@ class IngestionTaskService:
                 run.run_metadata = self._cancel_requested_metadata(run.run_metadata)
                 run.error_message = "Stop requested by user"
 
+                # Revoke the Celery task if we have its ID
+                if run.celery_task_id:
+                    try:
+                        celery_app.control.revoke(run.celery_task_id, terminate=True, signal='SIGTERM')
+                        logger.info("Celery task revoked", celery_task_id=run.celery_task_id, run_id=run_id)
+                    except Exception as e:
+                        logger.warning("Failed to revoke Celery task", celery_task_id=run.celery_task_id, error=str(e))
+
             self.db.add(run)
             await self.db.flush()
+
+            # If this is a parent run, also stop all child runs
+            if not run.parent_run_id:  # This is a parent run
+                stmt = select(IngestionTaskRun).where(
+                    and_(
+                        IngestionTaskRun.parent_run_id == run_id,
+                        IngestionTaskRun.status.in_([RunStatus.PENDING, RunStatus.RUNNING])
+                    )
+                )
+                result = await self.db.execute(stmt)
+                child_runs = result.scalars().all()
+
+                for child_run in child_runs:
+                    if child_run.status == RunStatus.PENDING:
+                        child_run.status = RunStatus.CANCELED
+                        child_run.completed_at = datetime.utcnow()
+                        child_run.error_message = "Canceled by user (parent run stopped)"
+                    elif child_run.status == RunStatus.RUNNING:
+                        child_run.run_metadata = self._cancel_requested_metadata(child_run.run_metadata)
+                        child_run.error_message = "Stop requested by user (parent run stopped)"
+
+                        # Revoke child's Celery task if we have its ID
+                        if child_run.celery_task_id:
+                            try:
+                                celery_app.control.revoke(child_run.celery_task_id, terminate=True, signal='SIGTERM')
+                                logger.info("Child Celery task revoked", celery_task_id=child_run.celery_task_id, child_run_id=child_run.id)
+                            except Exception as e:
+                                logger.warning("Failed to revoke child Celery task", celery_task_id=child_run.celery_task_id, error=str(e))
+
+                    self.db.add(child_run)
+                    logger.info("Child run stop recorded", parent_run_id=run_id, child_run_id=child_run.id, status=child_run.status)
+
+                await self.db.flush()
 
             logger.info("Ingestion task run stop recorded", run_id=run_id, status=run.status)
             return run

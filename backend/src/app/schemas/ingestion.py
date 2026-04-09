@@ -135,6 +135,7 @@ class IngestionTaskRunResponse(BaseModel):
 
     id: UUID
     task_id: UUID
+    parent_run_id: Optional[UUID] = None
     status: str
     started_at: Optional[datetime]
     completed_at: Optional[datetime]
@@ -185,7 +186,8 @@ class SchemaMappingUpdate(BaseModel):
 
     source_columns: List[str]
     field_mappings: Dict[str, Any]  # {source: target or {target, is_metric, is_datetime_split, datetime_split_companion_field}}
-    identifier_column: Optional[str] = None  # Column name for cross-platform deduplication
+    identifier_column: Optional[str] = None  # Column name for exact deduplication (same-platform matching)
+    connection_strategy_identifier_column: Optional[str] = None  # Column name for cross-platform matching
     dedup_config: Optional[Dict[str, Any]] = None  # Deduplication strategy configuration
     template_id: Optional[UUID] = None  # Optional: apply existing template
 
@@ -224,7 +226,8 @@ class TaskSchemaMappingResponse(BaseModel):
     template_id: Optional[UUID]
     source_columns: List[str]
     field_mappings: Dict[str, Any]  # Can include per-field config with is_metric, is_datetime_split, etc.
-    identifier_column: Optional[str]  # Column name for cross-platform matching
+    identifier_column: Optional[str]  # Column name for exact deduplication (same-platform matching)
+    connection_strategy_identifier_column: Optional[str]  # Column name for cross-platform content matching
     dedup_config: Optional[Dict[str, Any]]  # Deduplication strategy configuration
     created_at: datetime
     updated_at: datetime

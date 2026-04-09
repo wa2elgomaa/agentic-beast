@@ -346,6 +346,7 @@ class SchemaMappingService:
         field_mappings: Dict[str, str],
         template_id: Optional[str] = None,
         identifier_column: Optional[str] = None,
+        connection_strategy_identifier_column: Optional[str] = None,
         dedup_config: Optional[Dict] = None,
     ) -> TaskSchemaMapping:
         """Save or update schema mapping for a task.
@@ -355,7 +356,8 @@ class SchemaMappingService:
             source_columns: List of source column names.
             field_mappings: {source: target} mapping dict.
             template_id: Optional template ID to link.
-            identifier_column: Optional column name for deduplication.
+            identifier_column: Optional column name for exact deduplication (same-platform matching).
+            connection_strategy_identifier_column: Optional column name for cross-platform content matching.
             dedup_config: Optional deduplication strategy configuration.
 
         Returns:
@@ -385,6 +387,7 @@ class SchemaMappingService:
                 task_mapping.field_mappings = field_mappings
                 task_mapping.template_id = template_id
                 task_mapping.identifier_column = identifier_column
+                task_mapping.connection_strategy_identifier_column = connection_strategy_identifier_column
                 task_mapping.dedup_config = dedup_config
             else:
                 # Create new
@@ -394,6 +397,7 @@ class SchemaMappingService:
                     field_mappings=field_mappings,
                     template_id=template_id,
                     identifier_column=identifier_column,
+                    connection_strategy_identifier_column=connection_strategy_identifier_column,
                     dedup_config=dedup_config,
                 )
 

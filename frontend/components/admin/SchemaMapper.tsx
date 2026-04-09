@@ -161,6 +161,7 @@ export default function SchemaMapper({ task, initialMapping, onUpdated }: Schema
   const [templateDescr, setTemplateDescr] = useState('')
   const [columnInput, setColumnInput] = useState('')
   const [identifierColumn, setIdentifierColumn] = useState<string>(initialMapping?.identifier_column || '')
+  const [connectionStrategyIdentifierColumn, setConnectionStrategyIdentifierColumn] = useState<string>(initialMapping?.connection_strategy_identifier_column || '')
 
   const customTargetMappings = Object.fromEntries(
     Object.entries(initialFieldMappings).filter(([, target]) => !DB_TARGET_FIELDS.includes(target as typeof DB_TARGET_FIELDS[number]))
@@ -266,6 +267,7 @@ export default function SchemaMapper({ task, initialMapping, onUpdated }: Schema
         source_columns: uniq([...sourceColumns, ...availableColumns]),
         field_mappings: fieldMappings,
         identifier_column: identifierColumn || undefined,
+        connection_strategy_identifier_column: connectionStrategyIdentifierColumn || undefined,
         dedup_config: dedupConfig
       })
 
@@ -362,6 +364,38 @@ export default function SchemaMapper({ task, initialMapping, onUpdated }: Schema
               When set, this column will be normalized and used to detect duplicate content across different platforms/sheets.
               Leave empty to use only sheet position for matching.
             </p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-900 dark:text-white mb-2">
+              Connection Strategy Identifier Column
+              <span className="text-gray-400 font-normal"> (optional)</span>
+            </label>
+            <select
+              value={connectionStrategyIdentifierColumn}
+              onChange={(e) => {
+                setConnectionStrategyIdentifierColumn(e.target.value)
+                setSuccess(false)
+              }}
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="">None (cross-platform linking disabled)</option>
+              {availableColumns.map(col => (
+                <option key={col} value={col}>{col}</option>
+              ))}
+            </select>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+              Used for cross-platform content matching. When set, content from different platforms with the same cleaned/normalized value will be linked under a single beast_uuid.
+              Unlike the Deduplication Identifier Column, metrics will be kept separate per content_id.
+            </p>
+
+            <div className="mt-4 p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-900 rounded">
+              <p className="text-xs font-semibold text-blue-900 dark:text-blue-200 mb-2">Examples:</p>
+              <ul className="text-xs text-blue-800 dark:text-blue-300 space-y-1">
+                <li><strong>News Articles:</strong> Dedup column = "article_id", Connection column = "headline" (to link syndicated articles across news sites)</li>
+                <li><strong>Social Videos:</strong> Dedup column = "content_id", Connection column = "content" (to link same content across platforms)</li>
+              </ul>
+            </div>
           </div>
         </div>
       </div>

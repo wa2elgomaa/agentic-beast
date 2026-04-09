@@ -263,8 +263,11 @@ async def trigger_run(
         run = await service.create_run(task_id)
         await db.commit()
 
-        # Queue Celery task
-        celery_app.send_task("app.tasks.ingestion_tasks.run_ingestion_task", args=[str(task_id), str(run.id)])
+        # Queue Celery task and store its ID
+        celery_result = celery_app.send_task("app.tasks.ingestion_tasks.run_ingestion_task", args=[str(task_id), str(run.id)])
+        # Update run with celery task ID for later revocation
+        await service.update_run(run.id, celery_task_id=celery_result.id)
+        await db.commit()
 
         return IngestionTaskRunResponse.model_validate(run)
     except Exception as e:
@@ -533,6 +536,7 @@ async def save_schema_mapping(
             req.field_mappings,
             req.template_id,
             req.identifier_column,
+            req.connection_strategy_identifier_column,
             req.dedup_config,
         )
         await db.commit()

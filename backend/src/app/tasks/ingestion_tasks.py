@@ -127,14 +127,17 @@ async def _run_gmail_with_subtasks(
             for child_run_id, message_id in child_runs_config:
                 email_dict = email_by_id.get(message_id)
                 if email_dict:
-                    run_ingestion_task_single_email.apply_async(
+                    celery_result = run_ingestion_task_single_email.apply_async(
                         args=(str(child_run_id), email_dict, str(task_id)),
                         task_id=f"single-email-{child_run_id}",
                     )
+                    # Store celery task ID for later revocation
+                    await task_service.update_run(child_run_id, celery_task_id=celery_result.id)
                     logger.info(
                         "Queued single email task",
                         child_run_id=child_run_id,
                         message_id=message_id,
+                        celery_task_id=celery_result.id,
                     )
 
             # Update parent run to reflect that sub-tasks are queued
@@ -332,6 +335,7 @@ def run_ingestion_task_single_email(self, run_id: str, email_dict: dict, task_id
                 task_mapping = await schema_service.get_task_mapping(str(task_id_obj))
                 field_mappings = task_mapping.field_mappings if task_mapping else {}
                 identifier_column = task_mapping.identifier_column if task_mapping else None
+                connection_strategy_column = task_mapping.connection_strategy_identifier_column if task_mapping else None
 
                 # Initialize dedup service if configured
                 dedup_service = None
@@ -376,6 +380,7 @@ def run_ingestion_task_single_email(self, run_id: str, email_dict: dict, task_id
                         run_id=run_id_obj,
                         field_mappings=field_mappings,
                         identifier_column=identifier_column,
+                        connection_strategy_column=connection_strategy_column,
                         dedup_service=dedup_service,
                         gmail_adapter=gmail_adapter,
                         sheet_name=sheet_name,
@@ -429,7 +434,8 @@ def run_ingestion_task_single_email(self, run_id: str, email_dict: dict, task_id
                     )
 
                     # Aggregate stats to parent run if this is a child task
-                    if run.parent_run_id:
+                    run = await task_service.get_run(run_id_obj)
+                    if run and run.parent_run_id:
                         await task_service.aggregate_child_stats_to_parent(run.parent_run_id)
                         await db.commit()
                         logger.info(
@@ -697,6 +703,7 @@ def retry_failed_emails(self, task_id: str):
 
                                 field_mappings = mapping.field_mappings
                                 identifier_column = mapping.identifier_column
+                                connection_strategy_column = mapping.connection_strategy_identifier_column
                                 dedup_config = mapping.dedup_config
 
                                 # Initialize dedup service if configured
@@ -715,6 +722,7 @@ def retry_failed_emails(self, task_id: str):
                                     run_id=None,  # No associated run for retry
                                     field_mappings=field_mappings,
                                     identifier_column=identifier_column,
+                                    connection_strategy_column=connection_strategy_column,
                                     dedup_service=dedup_service,
                                     gmail_adapter=gmail_adapter,
                                     sheet_name=sheet_name,

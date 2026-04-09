@@ -23,6 +23,46 @@ class ContentNormalizer:
     SPECIAL_CHAR_PATTERN = r'[^a-z0-9\s]'
 
     @staticmethod
+    def _is_url_only(text: str) -> bool:
+        """Check if text contains only URLs and whitespace.
+
+        Args:
+            text: Text to check
+
+        Returns:
+            True if text is only URLs/whitespace, False otherwise
+        """
+        if not text.strip():
+            return False
+        # Remove URLs and whitespace, check if anything remains
+        temp = re.sub(ContentNormalizer.URL_PATTERN, '', text).strip()
+        return not temp
+
+    @staticmethod
+    def _normalize_url(url: str) -> str:
+        """Normalize URL by replacing special characters with dashes.
+
+        Args:
+            url: Raw URL string
+
+        Returns:
+            Normalized URL with special chars replaced by dashes
+
+        Examples:
+            >>> ContentNormalizer._normalize_url("https://t.co/ABC123")
+            'https-t-co-ABC123'
+        """
+        # Convert to lowercase
+        normalized = url.lower()
+        # Replace special characters with dashes: [:?#[]@!$&'()*+,;=/ etc]
+        normalized = re.sub(r'[^a-z0-9-]', '-', normalized)
+        # Collapse consecutive dashes
+        normalized = re.sub(r'-+', '-', normalized)
+        # Strip leading/trailing dashes
+        normalized = normalized.strip('-')
+        return normalized
+
+    @staticmethod
     def normalize(text: str) -> Tuple[str, str]:
         """Clean content value and generate hash for matching.
 
@@ -46,9 +86,17 @@ class ContentNormalizer:
             >>> cleaned, hash_val = ContentNormalizer.normalize(text)
             >>> cleaned
             'post content here'
+
+            >>> text = "https://t.co/ABC123"
+            >>> cleaned, hash_val = ContentNormalizer.normalize(text)
+            >>> cleaned
+            'https-t-co-ABC123'
         """
         if not text or not isinstance(text, str):
             return ("", hashlib.sha256("".encode()).hexdigest())
+
+        # Check if text is URL-only BEFORE cleaning
+        is_url_only = ContentNormalizer._is_url_only(text)
 
         # Step 1: Remove URLs (http://, https://, www.*)
         cleaned = re.sub(ContentNormalizer.URL_PATTERN, '', text)
@@ -68,10 +116,14 @@ class ContentNormalizer:
         # Step 6: Normalize whitespace (collapse multiple spaces)
         cleaned = ' '.join(cleaned.split()).strip()
 
-        # Step 7: Truncate to 500 characters (DB VARCHAR limit)
+        # Step 7: If result is empty but input was URL-only, normalize the URL instead
+        if not cleaned and is_url_only:
+            cleaned = ContentNormalizer._normalize_url(text)
+
+        # Step 8: Truncate to 500 characters (DB VARCHAR limit)
         cleaned = cleaned[:500]
 
-        # Step 8: Generate SHA256 hash for fast matching
+        # Step 9: Generate SHA256 hash for fast matching
         hash_value = hashlib.sha256(cleaned.encode()).hexdigest()
 
         return (cleaned, hash_value)

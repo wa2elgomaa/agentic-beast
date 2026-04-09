@@ -153,6 +153,9 @@ class IngestionTaskRun(Base):
     failed_emails_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     retry_emails_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
+    # Celery task tracking for graceful cancellation
+    celery_task_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+
     # Metadata
     run_metadata: Mapped[Optional[dict]] = mapped_column(JSONB)  # e.g. {"file_name": "...", "email_subject": "..."}
     

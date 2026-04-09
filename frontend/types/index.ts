@@ -333,6 +333,7 @@ export interface TaskSchemaMapping {
   source_columns: string[]
   field_mappings: Record<string, string>
   identifier_column?: string
+  connection_strategy_identifier_column?: string
   dedup_config?: Record<string, any>
   created_at: string
   updated_at: string
