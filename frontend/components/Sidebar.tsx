@@ -288,7 +288,7 @@ export default function Sidebar({
                     </h3>
                     <a
                       href="/admin/ingestion"
-                      className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-orange-50 transition-colors text-sm text-gray-700 hover:text-orange-700 hover:font-medium"
+                      className="w-full flex items-center gap-3 py-2.5 rounded-lg transition-colors text-sm text-gray-700 hover:text-orange-700 hover:font-medium"
                     >
                       <TrendingUp size={16} className="text-orange-600" />
                       <span>Data Ingestion</span>

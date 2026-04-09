@@ -17,7 +17,6 @@ import SchemaMapper from '@/components/admin/SchemaMapper'
 import TaskRunHistory from '@/components/admin/TaskRunHistory'
 import TaskSettingsForm from '@/components/admin/TaskSettingsForm'
 import GmailCredentialStatus from '@/components/admin/GmailCredentialStatus'
-import FailedEmailsPanel from '@/components/admin/FailedEmailsPanel'
 import { EmailSelectionModal } from '@/components/admin/ingestion/EmailSelectionModal'
 import { AlertCircle, Link as LinkIcon, Play, Settings, Lock } from 'lucide-react'
 import Link from 'next/link'
@@ -311,15 +310,6 @@ export default function TaskDetailPage() {
                         Gmail Credentials
                     </button>
                 )}
-                <button
-                    onClick={() => setActiveTab('failed-emails')}
-                    className={`px-4 py-3 font-medium border-b-2 transition-colors ${activeTab === 'failed-emails'
-                        ? 'border-blue-600 text-blue-600 dark:text-blue-400'
-                        : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-300'
-                    }`}
-                >
-                    Failed Emails
-                </button>
             </div>
 
             {/* Content */}
@@ -331,10 +321,6 @@ export default function TaskDetailPage() {
                 <TaskSettingsForm task={task} onUpdated={loadData} />
             ) : activeTab === 'gmail-credentials' ? (
                 <GmailCredentialStatus taskId={taskId} />
-            ) : activeTab === 'failed-emails' ? (
-                <div className="mt-6">
-                    <FailedEmailsPanel taskId={taskId} onRefresh={loadData} />
-                </div>
             ) : null}
         </div>
     )

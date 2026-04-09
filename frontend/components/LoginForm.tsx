@@ -37,7 +37,7 @@ export default function LoginForm() {
             <div className="max-w-md w-full space-y-8">
                 <div>
                     <div className="flex flex-col items-center justify-center gap-2 mb-4">
-                        <img src="/logo.png" alt="The Beast AI Logo" className="h-12 w-12" />
+                        <LogoIcon width={45} height={45} />
                         <div className="font-semibold text-gray-900">The Beast AI</div>
                     </div>
                     <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900 dark:text-white">

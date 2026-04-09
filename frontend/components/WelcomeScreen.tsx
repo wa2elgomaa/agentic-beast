@@ -2,6 +2,7 @@
 
 import { motion } from 'framer-motion'
 import { Sparkles } from 'lucide-react'
+import LogoIcon from './Logo'
 
 interface WelcomeScreenProps {
   onSendMessage: (message: string) => void
@@ -40,8 +41,8 @@ export default function WelcomeScreen({ onSendMessage }: WelcomeScreenProps) {
           transition={{ duration: 0.5 }}
           className="text-center mb-12"
         >
-          <div className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-br from-blue-500 to-purple-600 rounded-2xl mb-6">
-            <Sparkles className="w-8 h-8 text-white" />
+          <div className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-br from-gray-200 to-gray-300 rounded-2xl mb-6">
+            <LogoIcon color='#fff' width={34} height={34} />
           </div>
           <h1 className="text-4xl font-bold text-gray-900 mb-4">
             Welcome to The Beast AI

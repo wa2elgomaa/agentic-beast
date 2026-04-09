@@ -310,21 +310,6 @@ export default function SchemaMapper({ task, initialMapping, onUpdated }: Schema
 
   return (
     <div className="space-y-6">
-      {/* Upload Section */}
-      {(task.adaptor_type === 'manual' || task.adaptor_type === 'gmail') && (
-        <ManualUpload
-          taskId={task.adaptor_type === 'manual' ? task.id : undefined}
-          detectOnly={task.adaptor_type === 'gmail'}
-          onColumnsDetected={handleColumnDetect}
-          title="Import Sample File"
-          description={
-            task.adaptor_type === 'gmail'
-              ? 'Upload a sample attachment (Excel/CSV) to detect headers and configure mapping.'
-              : 'Upload an Excel/CSV file to detect headers and configure mapping for this upload task.'
-          }
-        />
-      )}
-
       {/* Alerts */}
       {error && (
         <div className="flex items-center gap-3 px-4 py-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-900 rounded-lg">
@@ -339,95 +324,8 @@ export default function SchemaMapper({ task, initialMapping, onUpdated }: Schema
         </div>
       )}
 
-      {/* Cross-Platform Deduplication Settings */}
-      <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
-        <div className="space-y-3">
-          <div>
-            <label className="block text-sm font-medium text-gray-900 dark:text-white mb-2">
-              Deduplication Identifier Column
-              <span className="text-gray-400 font-normal"> (optional)</span>
-            </label>
-            <select
-              value={identifierColumn}
-              onChange={(e) => {
-                setIdentifierColumn(e.target.value)
-                setSuccess(false)
-              }}
-              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
-              <option value="">None (use sheet position)</option>
-              {availableColumns.map(col => (
-                <option key={col} value={col}>{col}</option>
-              ))}
-            </select>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
-              When set, this column will be normalized and used to detect duplicate content across different platforms/sheets.
-              Leave empty to use only sheet position for matching.
-            </p>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-900 dark:text-white mb-2">
-              Connection Strategy Identifier Column
-              <span className="text-gray-400 font-normal"> (optional)</span>
-            </label>
-            <select
-              value={connectionStrategyIdentifierColumn}
-              onChange={(e) => {
-                setConnectionStrategyIdentifierColumn(e.target.value)
-                setSuccess(false)
-              }}
-              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
-              <option value="">None (cross-platform linking disabled)</option>
-              {availableColumns.map(col => (
-                <option key={col} value={col}>{col}</option>
-              ))}
-            </select>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
-              Used for cross-platform content matching. When set, content from different platforms with the same cleaned/normalized value will be linked under a single beast_uuid.
-              Unlike the Deduplication Identifier Column, metrics will be kept separate per content_id.
-            </p>
-
-            <div className="mt-4 p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-900 rounded">
-              <p className="text-xs font-semibold text-blue-900 dark:text-blue-200 mb-2">Examples:</p>
-              <ul className="text-xs text-blue-800 dark:text-blue-300 space-y-1">
-                <li><strong>News Articles:</strong> Dedup column = "article_id", Connection column = "headline" (to link syndicated articles across news sites)</li>
-                <li><strong>Social Videos:</strong> Dedup column = "content_id", Connection column = "content" (to link same content across platforms)</li>
-              </ul>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Deduplication Strategy Configuration */}
-      <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
-        <div className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-900 dark:text-white mb-2">
-              Default Deduplication Strategy
-            </label>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
-              When duplicates are found, apply this strategy to all metric fields (unless overridden per-field below)
-            </p>
-            <select
-              value={dedupConfig.default_strategy}
-              onChange={(e) => handleChangeDefaultStrategy(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
-              {Object.entries(DEDUP_STRATEGIES).map(([key, { label }]) => (
-                <option key={key} value={key}>{label}</option>
-              ))}
-            </select>
-            <p className="text-xs text-gray-600 dark:text-gray-400 mt-2">
-              {DEDUP_STRATEGIES[dedupConfig.default_strategy].description}
-            </p>
-          </div>
-        </div>
-      </div>
-
-      {/* Mapping Controls */}
-      <div className="flex gap-3 flex-wrap">
+      {/* Mapping Controls - with template and import buttons */}
+      <div className="flex gap-3 flex-wrap items-center">
         <SchemaMappingTemplates
           taskId={task.id}
           onApply={(mapping: Record<string, string>) => {
@@ -443,6 +341,26 @@ export default function SchemaMapper({ task, initialMapping, onUpdated }: Schema
           <BookmarkPlus size={16} />
           Save as Template
         </button>
+
+        {/* Import Sample File Button */}
+        {(task.adaptor_type === 'manual' || task.adaptor_type === 'gmail') && (
+          <div
+            className="ml-auto"
+            onClick={(e) => {
+              // Trigger the file input from ManualUpload
+              e.stopPropagation()
+              document.getElementById(`file-input-${task.id}`)?.click()
+            }}
+          >
+            <button
+              className="flex items-center gap-2 px-4 py-2 text-white bg-indigo-600 hover:bg-indigo-700 border border-indigo-600 rounded-lg transition-colors font-medium"
+              title="Import a sample file to detect columns"
+            >
+              <Plus size={16} />
+              Import Sample File
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4 space-y-3">
@@ -615,6 +533,101 @@ export default function SchemaMapper({ task, initialMapping, onUpdated }: Schema
         </div>
       )}
 
+      {/* Deduplication Configuration - Moved to Bottom */}
+      {availableColumns.length > 0 && (
+        <>
+          {/* Divider */}
+          <div className="border-t border-gray-200 dark:border-gray-700 my-8"></div>
+
+          {/* Cross-Platform Deduplication Settings */}
+          <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+            <div className="space-y-3">
+              <div>
+                <label className="block text-sm font-medium text-gray-900 dark:text-white mb-2">
+                  Deduplication Identifier Column
+                  <span className="text-gray-400 font-normal"> (optional)</span>
+                </label>
+                <select
+                  value={identifierColumn}
+                  onChange={(e) => {
+                    setIdentifierColumn(e.target.value)
+                    setSuccess(false)
+                  }}
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="">None (use sheet position)</option>
+                  {availableColumns.map(col => (
+                    <option key={col} value={col}>{col}</option>
+                  ))}
+                </select>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                  When set, this column will be normalized and used to detect duplicate content across different platforms/sheets.
+                  Leave empty to use only sheet position for matching.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-900 dark:text-white mb-2">
+                  Connection Strategy Identifier Column
+                  <span className="text-gray-400 font-normal"> (optional)</span>
+                </label>
+                <select
+                  value={connectionStrategyIdentifierColumn}
+                  onChange={(e) => {
+                    setConnectionStrategyIdentifierColumn(e.target.value)
+                    setSuccess(false)
+                  }}
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="">None (cross-platform linking disabled)</option>
+                  {availableColumns.map(col => (
+                    <option key={col} value={col}>{col}</option>
+                  ))}
+                </select>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                  Used for cross-platform content matching. When set, content from different platforms with the same cleaned/normalized value will be linked under a single beast_uuid.
+                  Unlike the Deduplication Identifier Column, metrics will be kept separate per content_id.
+                </p>
+
+                <div className="mt-4 p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-900 rounded">
+                  <p className="text-xs font-semibold text-blue-900 dark:text-blue-200 mb-2">Examples:</p>
+                  <ul className="text-xs text-blue-800 dark:text-blue-300 space-y-1">
+                    <li><strong>News Articles:</strong> Dedup column = "article_id", Connection column = "headline" (to link syndicated articles across news sites)</li>
+                    <li><strong>Social Videos:</strong> Dedup column = "content_id", Connection column = "content" (to link same content across platforms)</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Deduplication Strategy Configuration */}
+          <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-900 dark:text-white mb-2">
+                  Default Deduplication Strategy
+                </label>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+                  When duplicates are found, apply this strategy to all metric fields (unless overridden per-field above)
+                </p>
+                <select
+                  value={dedupConfig.default_strategy}
+                  onChange={(e) => handleChangeDefaultStrategy(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  {Object.entries(DEDUP_STRATEGIES).map(([key, { label }]) => (
+                    <option key={key} value={key}>{label}</option>
+                  ))}
+                </select>
+                <p className="text-xs text-gray-600 dark:text-gray-400 mt-2">
+                  {DEDUP_STRATEGIES[dedupConfig.default_strategy].description}
+                </p>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
       {/* Save Button */}
       {availableColumns.length > 0 && (
         <button
@@ -625,6 +638,23 @@ export default function SchemaMapper({ task, initialMapping, onUpdated }: Schema
           <Save size={16} />
           {isSaving ? 'Saving...' : 'Save Mapping'}
         </button>
+      )}
+
+      {/* Hidden ManualUpload for file input - triggered by Import Sample File button */}
+      {(task.adaptor_type === 'manual' || task.adaptor_type === 'gmail') && (
+        <div className="hidden">
+          <ManualUpload
+            taskId={task.adaptor_type === 'manual' ? task.id : undefined}
+            detectOnly={task.adaptor_type === 'gmail'}
+            onColumnsDetected={handleColumnDetect}
+            title="Import Sample File"
+            description={
+              task.adaptor_type === 'gmail'
+                ? 'Upload a sample attachment (Excel/CSV) to detect headers and configure mapping.'
+                : 'Upload an Excel/CSV file to detect headers and configure mapping for this upload task.'
+            }
+          />
+        </div>
       )}
     </div>
   )

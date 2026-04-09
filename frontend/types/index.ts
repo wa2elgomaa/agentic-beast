@@ -380,6 +380,7 @@ export interface SchemaMappingUpdateInput {
   source_columns: string[]
   field_mappings: Record<string, string>
   identifier_column?: string
+  connection_strategy_identifier_column?: string
   template_id?: string
   dedup_config?: Record<string, any>
 }
