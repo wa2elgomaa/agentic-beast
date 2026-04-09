@@ -671,18 +671,21 @@ class IngestionService:
             errors=errors,
         )
 
-    async def _upsert_document(self, row_data: dict, identifier_column: str | None = None) -> str:
+    async def _upsert_document(self, row_data: dict, identifier_column: str | None = None, connection_strategy_column: str | None = None) -> str:
         """Insert or append document record with full history tracking.
 
         Implements append-only history: instead of updating, creates new row
         if metrics have changed. Marks old record as stale (is_current=FALSE).
 
-        When task_schema_mapping is provided with identifier_column configured,
-        performs cross-platform deduplication using normalized content identifiers.
+        Two-pass matching strategy:
+        - Pass 1: Exact match on identifier_column (apply dedup strategies, reuse beast_uuid)
+        - Pass 2: Content match on connection_strategy_column (group by beast_uuid, separate metrics)
+        - Fallback: Sheet + row_number match or new record
 
         Args:
             row_data: Row data dict.
-            task_schema_mapping: Optional schema mapping with identifier_column for cross-platform matching.
+            identifier_column: Column name for exact-match deduplication.
+            connection_strategy_column: Column name for cross-platform content grouping.
 
         Returns:
             'inserted' (new record), 'appended' (metrics changed), or 'skipped' (no change).
@@ -752,7 +755,45 @@ class IngestionService:
                             error=str(e),
                         )
 
-            # Fallback: legacy sheet_name + row_number matching if cross-platform didn't find match
+            # PASS 2: Attempt connection-strategy matching if configured and no exact match found
+            connection_match_found = False
+            if not existing and connection_strategy_column:
+                connection_value = row_data.get(connection_strategy_column)
+
+                if connection_value:
+                    # Normalize and hash the connection value for cross-platform matching
+                    try:
+                        connection_cleaned, connection_hash = ContentNormalizer.normalize(str(connection_value))
+                        row_data["connection_identifier_hash"] = connection_hash
+
+                        # Query for match across any platform using connection hash
+                        stmt = select(Document).where(
+                            and_(
+                                Document.connection_identifier_hash == connection_hash,
+                                Document.is_current,
+                            )
+                        )
+                        result = await self.db.execute(stmt)
+                        existing = result.scalars().first()
+
+                        if existing:
+                            connection_match_found = True
+                            logger.debug(
+                                "Found existing document via connection_strategy match (cross-platform grouping)",
+                                connection_column=connection_strategy_column,
+                                connection_hash=connection_hash,
+                                existing_id=existing.id,
+                            )
+                    except Exception as e:
+                        logger.warning(
+                            "Error during connection strategy normalization",
+                            error=str(e),
+                        )
+
+            # Store connection_match_found in row_data for dedup tracking
+            row_data["_is_connection_match"] = connection_match_found
+
+            # Fallback: legacy sheet_name + row_number matching if neither pass found match
             if not existing:
                 stmt = select(Document).where(
                     and_(
@@ -796,36 +837,55 @@ class IngestionService:
                     )
                     return "skipped"
 
-                # Calculate metric deltas before marking old as stale
-                metric_deltas = self._calculate_metric_deltas(existing_data, row_data)
-                if metric_deltas:
-                    row_data["metric_deltas"] = metric_deltas
+                # EXACT MATCH (Pass 1): Calculate metric deltas and mark old as stale
+                if not connection_match_found:
+                    # Calculate metric deltas before marking old as stale
+                    metric_deltas = self._calculate_metric_deltas(existing_data, row_data)
+                    if metric_deltas:
+                        row_data["metric_deltas"] = metric_deltas
 
-                # Note: Deduplication strategies are applied in _upsert_document_with_dedup_tracking
-                # This method (_upsert_document) is the simple path without dedup strategies
+                    # Reuse existing beast_uuid if available, otherwise generate new
+                    if existing.beast_uuid:
+                        row_data["beast_uuid"] = existing.beast_uuid
+                    else:
+                        row_data["beast_uuid"] = uuid.uuid4()
 
-                # Reuse existing beast_uuid if available, otherwise generate new
-                if existing.beast_uuid:
-                    row_data["beast_uuid"] = existing.beast_uuid
+                    # Metrics changed: mark old record as stale and insert new version
+                    logger.debug(
+                        "Exact match found, appending new version with metric deltas",
+                        row_number=row_data.get("row_number"),
+                        old_fingerprint=old_fingerprint,
+                        new_fingerprint=new_fingerprint,
+                        beast_uuid=row_data.get("beast_uuid"),
+                    )
+                    stmt = (
+                        update(Document)
+                        .where(Document.id == existing.id)
+                        .values(is_current=False)
+                    )
+                    await self._safe_execute(stmt)
+
+                # CONNECTION MATCH (Pass 2): Reuse beast_uuid but insert separately (no marking old as stale)
                 else:
-                    row_data["beast_uuid"] = uuid.uuid4()
+                    # No delta calculation - keep metrics separate per content_id
+                    row_data["metric_deltas"] = None
 
-                # Metrics changed: mark old record as stale and insert new version
-                logger.debug(
-                    "Document metrics changed, appending new version",
-                    row_number=row_data.get("row_number"),
-                    old_fingerprint=old_fingerprint,
-                    new_fingerprint=new_fingerprint,
-                    beast_uuid=row_data.get("beast_uuid"),
-                )
-                stmt = (
-                    update(Document)
-                    .where(Document.id == existing.id)
-                    .values(is_current=False)
-                )
-                await self._safe_execute(stmt)
+                    # Reuse existing beast_uuid for cross-platform grouping
+                    if existing.beast_uuid:
+                        row_data["beast_uuid"] = existing.beast_uuid
+                    else:
+                        row_data["beast_uuid"] = uuid.uuid4()
 
-                # Insert new version with is_current=TRUE
+                    logger.debug(
+                        "Connection match found, linking by beast_uuid (cross-platform grouping, separate metrics)",
+                        row_number=row_data.get("row_number"),
+                        connection_column=connection_strategy_column,
+                        beast_uuid=row_data.get("beast_uuid"),
+                    )
+                    # NOTE: Do NOT mark old as is_current=False for connection matches
+                    # Both records remain is_current=True as they represent different content_ids
+
+                # Insert new version with is_current=TRUE (for both exact and connection matches)
                 stmt = insert(Document).values(**row_data)
                 try:
                     await self._safe_execute(stmt)
@@ -992,6 +1052,7 @@ class IngestionService:
         self,
         row_data: dict,
         identifier_column: str | None,
+        connection_strategy_identifier_column: str | None,
         dedup_service: DeduplicationService,
         run_id: UUID,
     ) -> str:
@@ -999,7 +1060,8 @@ class IngestionService:
 
         Args:
             row_data: Row data to upsert
-            task_schema_mapping: Optional schema mapping with identifier column
+            identifier_column: Column name for exact-match deduplication
+            connection_strategy_identifier_column: Column name for cross-platform matching
             dedup_service: Deduplication service for tracking
             run_id: Current run ID
 
@@ -1007,11 +1069,12 @@ class IngestionService:
             Result string: 'inserted', 'appended', or 'skipped'
         """
         # Call the standard upsert method
-        result = await self._upsert_document(row_data, identifier_column)
+        result = await self._upsert_document(row_data, identifier_column, connection_strategy_identifier_column)
 
         # Record deduplication event if we have the necessary metadata
         row_number = row_data.get("row_number", 0)
         identifier_value = row_data.get(identifier_column) if identifier_column else None
+        is_connection_match = row_data.get("_is_connection_match", False)
 
         if identifier_value:
             # Determine the dedup action based on result
@@ -1022,6 +1085,7 @@ class IngestionService:
                     row_number=row_number,
                     identifier=str(identifier_value),
                     action="first_occurrence",
+                    is_connection_match=is_connection_match,
                     calculation_summary=None,
                 )
             elif result == "appended":
@@ -1035,6 +1099,7 @@ class IngestionService:
                     row_number=row_number,
                     identifier=str(identifier_value),
                     action="inserted_delta",
+                    is_connection_match=is_connection_match,
                     calculation_summary=calculation_summary,
                 )
             elif result == "skipped":
@@ -1044,6 +1109,7 @@ class IngestionService:
                     row_number=row_number,
                     identifier=str(identifier_value),
                     action="skipped",
+                    is_connection_match=is_connection_match,
                     calculation_summary=None,
                 )
 
@@ -1135,6 +1201,8 @@ class IngestionService:
             field_mappings = task_mapping.field_mappings if task_mapping else {}
             # Capture identifier_column early to prevent lazy-loading in other async contexts
             identifier_column = task_mapping.identifier_column if task_mapping else None
+            # Capture connection_strategy_identifier_column for cross-platform matching
+            connection_strategy_column = task_mapping.connection_strategy_identifier_column if task_mapping else None
 
             # Initialize deduplication service if deduplication is enabled
             dedup_service = None
@@ -1152,7 +1220,7 @@ class IngestionService:
             if task_adaptor_type == "gmail":
                 # Gmail adaptor: fetch from Gmail
                 rows_inserted, rows_updated, rows_failed, errors = await self._ingest_from_gmail_task(
-                    task, run_id, field_mappings, identifier_column, dedup_service
+                    task, run_id, field_mappings, identifier_column, connection_strategy_column, dedup_service
                 )
 
             elif task_adaptor_type == "webhook":
@@ -1160,7 +1228,7 @@ class IngestionService:
                 if not webhook_payload:
                     raise ValueError("webhook_payload required for webhook adaptor")
                 rows_inserted, rows_updated, rows_failed, errors = await self._ingest_from_webhook(
-                    task, run_id, webhook_payload, field_mappings, identifier_column, dedup_service
+                    task, run_id, webhook_payload, field_mappings, identifier_column, connection_strategy_column, dedup_service
                 )
 
             elif task_adaptor_type == "manual":
@@ -1168,7 +1236,7 @@ class IngestionService:
                 if not file_bytes:
                     raise ValueError("file_bytes required for manual adaptor")
                 rows_inserted, rows_updated, rows_failed, errors = await self._ingest_from_file_task(
-                    task, run_id, file_bytes, field_mappings, identifier_column, dedup_service
+                    task, run_id, file_bytes, field_mappings, identifier_column, connection_strategy_column, dedup_service
                 )
 
             else:
@@ -1230,6 +1298,7 @@ class IngestionService:
         run_id: UUID,
         field_mappings: dict,
         identifier_column: str | None,
+        connection_strategy_column: str | None,
         dedup_service: DeduplicationService | None,
         gmail_adapter: GmailAdapter,
         sheet_name: str = "Sheet1",
@@ -1356,11 +1425,11 @@ class IngestionService:
                         # Upsert with dedup tracking if available
                         if dedup_service:
                             upsert_result = await self._upsert_document_with_dedup_tracking(
-                                document_row, identifier_column, dedup_service, run_id
+                                document_row, identifier_column, connection_strategy_column, dedup_service, run_id
                             )
                         else:
                             upsert_result = await self._upsert_document(
-                                document_row, identifier_column
+                                document_row, identifier_column, connection_strategy_column
                             )
 
                         if upsert_result == "inserted":
@@ -1425,6 +1494,7 @@ class IngestionService:
         run_id: UUID,
         field_mappings: dict,
         identifier_column: str | None = None,
+        connection_strategy_column: str | None = None,
         dedup_service: DeduplicationService | None = None,
     ) -> tuple:
         """Ingest from Gmail using task configuration.
@@ -1570,6 +1640,7 @@ class IngestionService:
                             run_id=run_id,
                             field_mappings=field_mappings,
                             identifier_column=identifier_column,
+                            connection_strategy_column=connection_strategy_column,
                             dedup_service=dedup_service,
                             gmail_adapter=gmail_adapter,
                             sheet_name=sheet_name,
@@ -1735,6 +1806,7 @@ class IngestionService:
         payload: dict,
         field_mappings: dict,
         identifier_column: str | None = None,
+        connection_strategy_column: str | None = None,
         dedup_service: DeduplicationService | None = None,
     ) -> tuple:
         """Ingest from webhook payload.
@@ -1773,7 +1845,7 @@ class IngestionService:
                                 mapped_data[target] = row_data[source_column]
                         row_data = {**row_data, **mapped_data}
 
-                    result = await self._upsert_document(row_data, identifier_column) if not dedup_service else await self._upsert_document_with_dedup_tracking(row_data, identifier_column, dedup_service, run_id)
+                    result = await self._upsert_document(row_data, identifier_column, connection_strategy_column) if not dedup_service else await self._upsert_document_with_dedup_tracking(row_data, identifier_column, connection_strategy_column, dedup_service, run_id)
                     if result == "inserted":
                         rows_inserted += 1
                     elif result == "updated":
@@ -1800,6 +1872,7 @@ class IngestionService:
         file_data: bytes,
         field_mappings: dict,
         identifier_column: str | None = None,
+        connection_strategy_column: str | None = None,
         dedup_service: DeduplicationService | None = None,
     ) -> tuple:
         """Ingest from uploaded file using task configuration.
@@ -1838,10 +1911,10 @@ class IngestionService:
                     document_row = self._build_document_payload(row_data, field_mappings)
                     if dedup_service:
                         result = await self._upsert_document_with_dedup_tracking(
-                            document_row, identifier_column, dedup_service, run_id
+                            document_row, identifier_column, connection_strategy_column, dedup_service, run_id
                         )
                     else:
-                        result = await self._upsert_document(document_row, identifier_column)
+                        result = await self._upsert_document(document_row, identifier_column, connection_strategy_column)
                     if result == "inserted":
                         rows_inserted += 1
                     elif result == "updated":
