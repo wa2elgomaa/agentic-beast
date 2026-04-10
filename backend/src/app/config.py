@@ -1,15 +1,112 @@
 """Application configuration using Pydantic V2 Settings."""
 
+import json
 import logging
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal, Optional
 
-from pydantic import Field, computed_field
+from pydantic import Field, computed_field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+try:
+    import boto3
+    HAS_BOTO3 = True
+except ImportError:
+    HAS_BOTO3 = False
 
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 ENV_FILE = BASE_DIR / ".env"
+
+# Setup logging
+logger = logging.getLogger(__name__)
+
+
+def load_secret_from_aws_secrets_manager(
+    secret_name: str,
+    region_name: str = "us-east-1",
+    json_key: Optional[str] = None
+) -> Optional[str]:
+    """
+    Load a secret from AWS Secrets Manager.
+
+    Args:
+        secret_name: Name of the secret in Secrets Manager (e.g., "beast/production/db/postgres")
+        region_name: AWS region
+        json_key: If the secret is JSON, specify which key to extract
+
+    Returns:
+        Secret value as string, or None if not found
+    """
+    if not HAS_BOTO3:
+        logger.warning(f"boto3 not installed, cannot load secret: {secret_name}")
+        return None
+
+    try:
+        client = boto3.client("secretsmanager", region_name=region_name)
+        response = client.get_secret_value(SecretId=secret_name)
+
+        # Handle both string and binary secrets
+        secret = response.get("SecretString") or response.get("SecretBinary")
+
+        if not secret:
+            logger.warning(f"Secret is empty: {secret_name}")
+            return None
+
+        # If json_key is specified, parse JSON and extract key
+        if json_key:
+            try:
+                secret_dict = json.loads(secret)
+                return secret_dict.get(json_key)
+            except json.JSONDecodeError:
+                logger.error(f"Failed to parse secret as JSON: {secret_name}")
+                return None
+
+        return secret
+    except Exception as e:
+        logger.error(f"Failed to load secret '{secret_name}': {str(e)}")
+        return None
+
+
+def load_database_url_from_secrets(
+    environment: str,
+    region_name: str = "us-east-1"
+) -> Optional[str]:
+    """
+    Load database URL from AWS Secrets Manager.
+
+    Args:
+        environment: Deployment environment (dev, staging, production)
+        region_name: AWS region
+
+    Returns:
+        PostgreSQL connection URL
+    """
+    secret_name = f"beast/{environment}/db/postgres"
+
+    try:
+        if not HAS_BOTO3:
+            return None
+
+        client = boto3.client("secretsmanager", region_name=region_name)
+        response = client.get_secret_value(SecretId=secret_name)
+        secret = response.get("SecretString")
+
+        if not secret:
+            return None
+
+        secret_dict = json.loads(secret)
+        username = secret_dict.get("username", "beast")
+        password = secret_dict.get("password", "")
+        hostname = secret_dict.get("hostname", "localhost")
+        port = secret_dict.get("port", 5432)
+        database = secret_dict.get("database", "beast")
+
+        # Build PostgreSQL URL
+        return f"postgresql+asyncpg://{username}:{password}@{hostname}:{port}/{database}"
+    except Exception as e:
+        logger.error(f"Failed to load database URL from secrets: {str(e)}")
+        return None
 
 
 class Settings(BaseSettings):
@@ -29,6 +126,36 @@ class Settings(BaseSettings):
     api_title: str = Field(default="Agentic Beast API")
     api_version: str = Field(default="0.1.0")
     environment: Literal["development", "staging", "production"] = Field(default="development")
+
+    @field_validator("environment", mode="before")
+    @classmethod
+    def validate_environment(cls, v: str) -> str:
+        """Validate and normalize environment name."""
+        if isinstance(v, str):
+            v = v.lower()
+            if v not in ("development", "staging", "production"):
+                logger.warning(f"Unknown environment: {v}, defaulting to development")
+                return "development"
+        return v
+
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def load_database_url(cls, v: str, info) -> str:
+        """Load database URL from AWS Secrets Manager if in production."""
+        environment = info.data.get("environment", "development")
+
+        # Only try to load from Secrets Manager if:
+        # 1. In production/staging
+        # 2. boto3 is available
+        # 3. Using default/empty database URL
+        if environment in ("production", "staging") and HAS_BOTO3:
+            aws_region = info.data.get("aws_region", "us-east-1")
+            db_url = load_database_url_from_secrets(environment, aws_region)
+            if db_url:
+                logger.info(f"Loaded database URL from AWS Secrets Manager for {environment}")
+                return db_url
+
+        return v
 
     # Database Configuration
     database_url: str = Field(default="postgresql+asyncpg://beast:beast@localhost:5432/beast")
@@ -253,6 +380,49 @@ class Settings(BaseSettings):
     def is_development(self) -> bool:
         """Check if running in development."""
         return self.environment == "development"
+
+    @computed_field
+    @property
+    def is_production(self) -> bool:
+        """Check if running in production."""
+        return self.environment == "production"
+
+    @computed_field
+    @property
+    def is_development(self) -> bool:
+        """Check if running in development."""
+        return self.environment == "development"
+
+    def get_secret(
+        self,
+        secret_name: str,
+        json_key: Optional[str] = None,
+        default: Optional[str] = None
+    ) -> Optional[str]:
+        """
+        Load a secret from AWS Secrets Manager with fallback to default.
+
+        Usage:
+            openai_key = settings.get_secret("beast/production/providers/openai", "api_key")
+
+        Args:
+            secret_name: Full secret name path
+            json_key: If secret is JSON, which key to extract
+            default: Default value if secret cannot be loaded
+
+        Returns:
+            Secret value or default
+        """
+        if self.is_production and HAS_BOTO3:
+            value = load_secret_from_aws_secrets_manager(
+                secret_name,
+                region_name=self.aws_region,
+                json_key=json_key
+            )
+            if value:
+                return value
+
+        return default
 
     def get_logger(self) -> logging.Logger:
         """Get a configured logger."""

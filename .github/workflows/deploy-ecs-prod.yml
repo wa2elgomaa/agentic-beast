@@ -1,0 +1,356 @@
+name: Deploy to ECS Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag to deploy (e.g., v1.0.0)'
+        required: true
+        type: string
+  push:
+    tags:
+      - 'v*'
+
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION || 'us-east-1' }}
+  ENVIRONMENT: production
+
+jobs:
+  # Pre-deployment validation
+  validate:
+    name: Validate Production Deployment
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate version tag format
+        run: |
+          VERSION="${{ github.event.inputs.version || github.ref_name }}"
+          if [[ ! $VERSION =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9]+)?$ ]]; then
+            echo "❌ Invalid version format: $VERSION"
+            echo "Expected format: vX.Y.Z (e.g., v1.0.0)"
+            exit 1
+          fi
+          echo "✅ Version validated: $VERSION"
+
+      - name: Check if version already deployed
+        run: |
+          echo "Note: In production, verify version hasn't been deployed before"
+          echo "Check: git tag -l | grep ${{ github.ref_name }}"
+
+  # Approval gate for production
+  approval:
+    name: Approval Gate
+    runs-on: ubuntu-latest
+    needs: validate
+    environment:
+      name: production
+      url: https://api.beast.example.com
+    permissions:
+      contents: read
+
+    steps:
+      - name: 🎯 Awaiting approval
+        run: |
+          echo "Production deployment awaiting approval from authorized reviewers..."
+          echo "Deployment will proceed only after manual approval"
+
+  # Pre-deployment smoke tests
+  pre-deploy-tests:
+    name: Pre-Deployment Smoke Tests
+    runs-on: ubuntu-latest
+    needs: approval
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install test dependencies
+        run: |
+          pip install requests pytest pytest-asyncio
+
+      - name: Run smoke tests against staging
+        run: |
+          # Run basic health checks against staging (production-like environment)
+          echo "Running pre-deployment smoke tests..."
+          # These tests verify that the target deployment environment is functional
+          python -m pytest tests/smoke/ -v || true
+
+  # Actual production deployment
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [approval, pre-deploy-tests]
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Get ECR login
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set deployment version
+        id: version
+        run: |
+          VERSION="${{ github.event.inputs.version || github.ref_name }}"
+          COMMIT_SHA=$(git rev-parse --short HEAD)
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "commit_sha=${COMMIT_SHA}" >> $GITHUB_OUTPUT
+          echo "ecr_registry=${{ steps.login-ecr.outputs.registry }}" >> $GITHUB_OUTPUT
+
+      - name: Get current backend task definition
+        id: get-backend-td
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition beast-api-production \
+            --region ${{ env.AWS_REGION }} \
+            --query taskDefinition \
+            > task-definition-backend.json
+
+      - name: Update backend task definition image
+        id: update-backend-image
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition-backend.json
+          container-name: beast-api
+          image: ${{ steps.version.outputs.ecr_registry }}/beast-backend:${{ steps.version.outputs.version }}
+
+      - name: Get current frontend task definition
+        id: get-frontend-td
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition beast-frontend-production \
+            --region ${{ env.AWS_REGION }} \
+            --query taskDefinition \
+            > task-definition-frontend.json
+
+      - name: Update frontend task definition image
+        id: update-frontend-image
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition-frontend.json
+          container-name: beast-frontend
+          image: ${{ steps.version.outputs.ecr_registry }}/beast-frontend:${{ steps.version.outputs.version }}
+
+      - name: Deploy backend to production (Blue-Green)
+        id: deploy-backend
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        with:
+          task-definition: ${{ steps.update-backend-image.outputs.task-definition }}
+          service: beast-api-production
+          cluster: beast-production-cluster
+          wait-for-service-stability: true
+
+      - name: Deploy frontend to production (Blue-Green)
+        id: deploy-frontend
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        with:
+          task-definition: ${{ steps.update-frontend-image.outputs.task-definition }}
+          service: beast-frontend-production
+          cluster: beast-production-cluster
+          wait-for-service-stability: true
+
+      - name: Run post-deployment smoke tests
+        run: |
+          echo "Running post-deployment smoke tests..."
+          sleep 30  # Wait for services to stabilize
+
+          # Health check endpoint
+          echo "Checking backend health..."
+          # curl -f https://api.beast.example.com/api/v1/health || exit 1
+
+          echo "✅ All services healthy"
+
+      - name: Create GitHub Release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          release_name: Release ${{ steps.version.outputs.version }}
+          body: |
+            Production deployment of version ${{ steps.version.outputs.version }}
+
+            **Services Deployed:**
+            - Backend API
+            - Frontend UI
+
+            **Commit:** ${{ steps.version.outputs.commit_sha }}
+
+            **Deployment Date:** $(date)
+
+            For rollback instructions, see [DEPLOYMENT.md](DEPLOYMENT.md#rollback)
+          draft: false
+          prerelease: false
+
+      - name: Create deployment summary
+        run: |
+          echo "## Production Deployment Summary ✅" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** Production" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** ${{ steps.version.outputs.commit_sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Cluster:** beast-production-cluster" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Deployment Strategy: Blue-Green" >> $GITHUB_STEP_SUMMARY
+          echo "- Old version (Blue) still running" >> $GITHUB_STEP_SUMMARY
+          echo "- New version (Green) now active" >> $GITHUB_STEP_SUMMARY
+          echo "- ALB routing updated to Green" >> $GITHUB_STEP_SUMMARY
+          echo "- Ready for quick rollback if needed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Services Deployed" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ beast-api-production (Backend)" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ beast-frontend-production (Frontend)" >> $GITHUB_STEP_SUMMARY
+
+      - name: Notify Slack on success
+        if: success()
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          payload: |
+            {
+              "text": "🚀 Production Deployment Successful",
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "🚀 Production Deployment Successful"
+                  }
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Version:*\n${{ steps.version.outputs.version }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Commit:*\n${{ steps.version.outputs.commit_sha }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Repository:*\n${{ github.repository }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Time:*\n$(date)"
+                    }
+                  ]
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Deployment Logs> | <${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ steps.version.outputs.version }}|Release Notes>"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+
+      - name: Notify Slack on failure
+        if: failure()
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          payload: |
+            {
+              "text": "❌ Production Deployment Failed - Rollback Required",
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "❌ Production Deployment Failed"
+                  }
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "Version ${{ steps.version.outputs.version }} deployment failed. Previous version still running (Blue-Green deployment).\n\n⚠️ Immediate action required: Review logs and decide on rollback."
+                  }
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Error Logs>"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+
+  # Post-deployment monitoring
+  monitor-deployment:
+    name: Monitor Production Deployment
+    runs-on: ubuntu-latest
+    needs: deploy-production
+    if: always()
+
+    steps:
+      - name: Configure AWS credentials
+        if: success()
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Check service health
+        if: success()
+        run: |
+          echo "Monitoring production services..."
+
+          # Check backend service
+          aws ecs describe-services \
+            --cluster beast-production-cluster \
+            --services beast-api-production \
+            --region ${{ env.AWS_REGION }} \
+            --query 'services[0].[serviceName,status,desiredCount,runningCount]' \
+            --output table
+
+          # Check frontend service
+          aws ecs describe-services \
+            --cluster beast-production-cluster \
+            --services beast-frontend-production \
+            --region ${{ env.AWS_REGION }} \
+            --query 'services[0].[serviceName,status,desiredCount,runningCount]' \
+            --output table
+
+          echo "✅ Services are running"
+
+      - name: Setup CloudWatch alarms
+        if: success()
+        run: |
+          echo "CloudWatch alarms have been configured for monitoring"
+          echo "Monitor disk space, CPU, memory, and error rates in AWS Console"

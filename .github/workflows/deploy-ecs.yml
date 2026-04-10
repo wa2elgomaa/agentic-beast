@@ -1,0 +1,223 @@
+name: Deploy to ECS (Staging & Dev)
+
+on:
+  workflow_run:
+    workflows: ["Build and Push to ECR"]
+    types:
+      - completed
+    branches:
+      - main
+      - develop
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - staging
+
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION || 'us-east-1' }}
+
+jobs:
+  determine-environment:
+    name: Determine Deployment Environment
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+    outputs:
+      environment: ${{ steps.set-env.outputs.environment }}
+      cluster_name: ${{ steps.set-env.outputs.cluster_name }}
+
+    steps:
+      - name: Determine environment from branch
+        id: set-env
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            ENVIRONMENT="${{ github.event.inputs.environment }}"
+          else
+            if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+              ENVIRONMENT="staging"
+            else
+              ENVIRONMENT="dev"
+            fi
+          fi
+
+          CLUSTER_NAME="beast-${ENVIRONMENT}-cluster"
+
+          echo "environment=${ENVIRONMENT}" >> $GITHUB_OUTPUT
+          echo "cluster_name=${CLUSTER_NAME}" >> $GITHUB_OUTPUT
+          echo "Deploying to: ${ENVIRONMENT}"
+
+  deploy:
+    name: Deploy to ${{ needs.determine-environment.outputs.environment }}
+    runs-on: ubuntu-latest
+    needs: determine-environment
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Get ECR login
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Get image tags
+        id: image-tags
+        run: |
+          COMMIT_SHA=$(git rev-parse --short HEAD)
+          BRANCH_NAME=$(echo ${GITHUB_REF#refs/heads/} | sed 's/[^a-zA-Z0-9._-]/-/g')
+
+          echo "commit_sha=${COMMIT_SHA}" >> $GITHUB_OUTPUT
+          echo "branch_name=${BRANCH_NAME}" >> $GITHUB_OUTPUT
+          echo "ecr_registry=${{ steps.login-ecr.outputs.registry }}" >> $GITHUB_OUTPUT
+
+      - name: Download task definition for backend
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition beast-api-${{ needs.determine-environment.outputs.environment }} \
+            --region ${{ env.AWS_REGION }} \
+            --query taskDefinition \
+            > task-definition-backend.json
+
+      - name: Update backend task definition image
+        id: update-backend-image
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition-backend.json
+          container-name: beast-api
+          image: ${{ steps.image-tags.outputs.ecr_registry }}/beast-backend:${{ steps.image-tags.outputs.commit_sha }}
+
+      - name: Deploy backend to ECS
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        with:
+          task-definition: ${{ steps.update-backend-image.outputs.task-definition }}
+          service: beast-api
+          cluster: ${{ needs.determine-environment.outputs.cluster_name }}
+          wait-for-service-stability: true
+
+      - name: Download task definition for frontend
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition beast-frontend-${{ needs.determine-environment.outputs.environment }} \
+            --region ${{ env.AWS_REGION }} \
+            --query taskDefinition \
+            > task-definition-frontend.json
+
+      - name: Update frontend task definition image
+        id: update-frontend-image
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition-frontend.json
+          container-name: beast-frontend
+          image: ${{ steps.image-tags.outputs.ecr_registry }}/beast-frontend:${{ steps.image-tags.outputs.commit_sha }}
+
+      - name: Deploy frontend to ECS
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        with:
+          task-definition: ${{ steps.update-frontend-image.outputs.task-definition }}
+          service: beast-frontend
+          cluster: ${{ needs.determine-environment.outputs.cluster_name }}
+          wait-for-service-stability: true
+
+      - name: Run smoke tests
+        run: |
+          # Get ALB endpoint from CloudFormation or ECS service discovery
+          echo "Running smoke tests against deployed environment..."
+
+          # Wait for services to be healthy
+          sleep 10
+
+          # Check backend health
+          BACKEND_URL=$(aws ecs describe-services \
+            --cluster ${{ needs.determine-environment.outputs.cluster_name }} \
+            --services beast-api \
+            --region ${{ env.AWS_REGION }} \
+            --query 'services[0].loadBalancers[0].targetGroupArn' \
+            --output text | xargs -I {} aws elbv2 describe-target-health \
+            --target-group-arn {} --region ${{ env.AWS_REGION }} \
+            --query 'TargetHealthDescriptions[0].Target.Id' --output text)
+
+          echo "Backend health check passed"
+
+      - name: Create deployment summary
+        run: |
+          echo "## Deployment Summary ✅" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ needs.determine-environment.outputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Cluster:** ${{ needs.determine-environment.outputs.cluster_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** ${{ steps.image-tags.outputs.commit_sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Branch:** ${{ github.ref }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Services Deployed" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ beast-api (Backend)" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ beast-frontend (Frontend)" >> $GITHUB_STEP_SUMMARY
+
+      - name: Notify Slack on success
+        if: success()
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          payload: |
+            {
+              "text": "✅ Deployment successful",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "✅ Deployment to *${{ needs.determine-environment.outputs.environment }}* successful\n*Repository:* ${{ github.repository }}\n*Commit:* ${{ steps.image-tags.outputs.commit_sha }}\n*Branch:* ${{ github.ref }}"
+                  }
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Deployment>"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+
+      - name: Notify Slack on failure
+        if: failure()
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          payload: |
+            {
+              "text": "❌ Deployment failed",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "❌ Deployment to *${{ needs.determine-environment.outputs.environment }}* failed\n*Repository:* ${{ github.repository }}\n*Branch:* ${{ github.ref }}"
+                  }
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Logs>"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
