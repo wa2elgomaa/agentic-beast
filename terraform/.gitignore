@@ -1,0 +1,76 @@
+# Terraform State Files (SENSITIVE - Never commit)
+*.tfstate
+*.tfstate.*
+terraform.tfstate
+terraform.tfstate.backup
+
+# Terraform Crash Log
+crash.log
+crash.*.log
+
+# Terraform Lock File
+.terraform.lock.hcl
+
+# Exclude all .terraformrc and terraform.rc files, which are personal for each developer
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Include override files as they are usually used to override resources locally
+!example_override.tf
+!example_override.tf.json
+
+# Include tfplan files to ignore the plan output of command: terraform plan -out=tfplan
+*tfplan*
+*.tfplan
+
+# Terraform working directory
+.terraform/
+.terraform/**/*
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+*.swp
+*.swo
+*~
+.vscode/
+*.code-workspace
+
+# Environment variable files (if storing locally)
+.env
+.env.local
+
+# MacOS
+.AppleDouble
+.LSOverride
+._*
+
+# Python
+__pycache__/
+*.pyc
+.Python
+
+# Logs
+*.log
+logs/
+
+# Local execution environment
+local-execs/
+*.tfvars  # Avoid committing tfvars with actual values, use environments/ instead
+
+# Except environment files in environments/ directory
+!environments/*.tfvars
+
+# Temporary files
+*.tmp
+*.temp
+*.backup
+~*
+
+# Documentation generated from terraform
+docs/generated/

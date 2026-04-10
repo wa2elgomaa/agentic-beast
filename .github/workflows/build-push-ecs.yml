@@ -1,0 +1,156 @@
+name: Build and Push to ECR
+
+on:
+  workflow_run:
+    workflows: ["CI - Build and Test"]
+    types:
+      - completed
+    branches:
+      - main
+      - develop
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - staging
+
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION || 'us-east-1' }}
+  ECR_REGISTRY_BACKEND: beast-backend
+  ECR_REGISTRY_FRONTEND: beast-frontend
+
+jobs:
+  build-and-push:
+    name: Build Docker Images and Push to ECR
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set image tags
+        id: image-tags
+        run: |
+          COMMIT_SHA=$(git rev-parse --short HEAD)
+          GIT_TAG=$(git describe --tags --exact-match 2>/dev/null || echo "")
+          BRANCH_NAME=$(echo ${GITHUB_REF#refs/heads/} | sed 's/[^a-zA-Z0-9._-]/-/g')
+
+          echo "commit_sha=${COMMIT_SHA}" >> $GITHUB_OUTPUT
+          echo "branch_name=${BRANCH_NAME}" >> $GITHUB_OUTPUT
+          echo "git_tag=${GIT_TAG}" >> $GITHUB_OUTPUT
+          echo "ECR_REGISTRY=${{ steps.login-ecr.outputs.registry }}" >> $GITHUB_OUTPUT
+
+      - name: Build backend Docker image
+        run: |
+          docker build \
+            -t ${{ steps.image-tags.outputs.ecr_registry }}/${{ env.ECR_REGISTRY_BACKEND }}:latest \
+            -t ${{ steps.image-tags.outputs.ecr_registry }}/${{ env.ECR_REGISTRY_BACKEND }}:${{ steps.image-tags.outputs.commit_sha }} \
+            -t ${{ steps.image-tags.outputs.ecr_registry }}/${{ env.ECR_REGISTRY_BACKEND }}:${{ steps.image-tags.outputs.branch_name }} \
+            -f backend/Dockerfile \
+            backend/
+
+      - name: Build frontend Docker image
+        run: |
+          docker build \
+            -t ${{ steps.image-tags.outputs.ecr_registry }}/${{ env.ECR_REGISTRY_FRONTEND }}:latest \
+            -t ${{ steps.image-tags.outputs.ecr_registry }}/${{ env.ECR_REGISTRY_FRONTEND }}:${{ steps.image-tags.outputs.commit_sha }} \
+            -t ${{ steps.image-tags.outputs.ecr_registry }}/${{ env.ECR_REGISTRY_FRONTEND }}:${{ steps.image-tags.outputs.branch_name }} \
+            -f frontend/Dockerfile \
+            frontend/
+
+      - name: Push backend image to ECR
+        run: |
+          docker push ${{ steps.image-tags.outputs.ecr_registry }}/${{ env.ECR_REGISTRY_BACKEND }}:latest
+          docker push ${{ steps.image-tags.outputs.ecr_registry }}/${{ env.ECR_REGISTRY_BACKEND }}:${{ steps.image-tags.outputs.commit_sha }}
+          docker push ${{ steps.image-tags.outputs.ecr_registry }}/${{ env.ECR_REGISTRY_BACKEND }}:${{ steps.image-tags.outputs.branch_name }}
+
+      - name: Push frontend image to ECR
+        run: |
+          docker push ${{ steps.image-tags.outputs.ecr_registry }}/${{ env.ECR_REGISTRY_FRONTEND }}:latest
+          docker push ${{ steps.image-tags.outputs.ecr_registry }}/${{ env.ECR_REGISTRY_FRONTEND }}:${{ steps.image-tags.outputs.commit_sha }}
+          docker push ${{ steps.image-tags.outputs.ecr_registry }}/${{ env.ECR_REGISTRY_FRONTEND }}:${{ steps.image-tags.outputs.branch_name }}
+
+      - name: Create image summary
+        run: |
+          echo "## Docker Images Built and Pushed to ECR ✅" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Backend Image" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ steps.image-tags.outputs.ecr_registry }}/${{ env.ECR_REGISTRY_BACKEND }}:latest\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ steps.image-tags.outputs.ecr_registry }}/${{ env.ECR_REGISTRY_BACKEND }}:${{ steps.image-tags.outputs.commit_sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ steps.image-tags.outputs.ecr_registry }}/${{ env.ECR_REGISTRY_BACKEND }}:${{ steps.image-tags.outputs.branch_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Frontend Image" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ steps.image-tags.outputs.ecr_registry }}/${{ env.ECR_REGISTRY_FRONTEND }}:latest\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ steps.image-tags.outputs.ecr_registry }}/${{ env.ECR_REGISTRY_FRONTEND }}:${{ steps.image-tags.outputs.commit_sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ steps.image-tags.outputs.ecr_registry }}/${{ env.ECR_REGISTRY_FRONTEND }}:${{ steps.image-tags.outputs.branch_name }}\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Notify Slack on success
+        if: success()
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          payload: |
+            {
+              "text": "✅ Docker images built and pushed to ECR",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "✅ Docker images built and pushed to ECR\n*Repository:* ${{ github.repository }}\n*Commit:* ${{ steps.image-tags.outputs.commit_sha }}"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+
+      - name: Notify Slack on failure
+        if: failure()
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          payload: |
+            {
+              "text": "❌ Failed to build and push Docker images",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "❌ Failed to build and push images\n*Repository:* ${{ github.repository }}\n*Branch:* ${{ github.ref }}"
+                  }
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Logs>"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
