@@ -33,11 +33,45 @@ class TestResult:
 
 
 class ChatTester:
-    def __init__(self, api_base: str = API_BASE):
+    def __init__(self, api_base: str = API_BASE, username: str = "testuser", password: str = "testpass123"):
         self.api_base = api_base
         self.conversation_id: Optional[str] = None
         self.results: List[TestResult] = []
         self.session = requests.Session()
+        self.username = username
+        self.password = password
+        self.auth_token: Optional[str] = None
+
+        # Authenticate on init
+        self._authenticate()
+
+    def _authenticate(self) -> None:
+        """Authenticate with the API and store the token."""
+        try:
+            # Try to get auth token
+            auth_url = f"{self.api_base}/users/login"
+            response = self.session.post(
+                auth_url,
+                json={"username": self.username, "password": self.password},
+                timeout=TIMEOUT,
+            )
+
+            # Check if login worked
+            if response.status_code == 200:
+                data = response.json()
+                self.auth_token = data.get("access_token")
+                if self.auth_token:
+                    # Add token to default headers
+                    self.session.headers.update({"Authorization": f"Bearer {self.auth_token}"})
+                    if VERBOSE:
+                        print(f"✓ Authenticated as {self.username}")
+            elif response.status_code == 401:
+                print(f"⚠ Authentication failed (401). Testing without token - API may be public.")
+            else:
+                print(f"⚠ Authentication endpoint error ({response.status_code}). Continuing anyway...")
+        except Exception as e:
+            print(f"⚠ Could not authenticate: {str(e)}")
+            print("  Attempting to access API without authentication...")
 
     def send_message(self, message: str, conversation_id: Optional[str] = None) -> Dict[str, Any]:
         """Send a chat message and return the full response."""
