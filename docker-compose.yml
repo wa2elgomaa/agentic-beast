@@ -54,75 +54,79 @@ services:
     networks:
       - beast-network
 
-  mysql:
-    image: mysql:8.0
-    container_name: beast-mysql
-    environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
-      MYSQL_DATABASE: ${MYSQL_DATABASE}
-      MYSQL_USER: ${MYSQL_USER}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
-    ports:
-      - "3306:3306"
-    volumes:
-      - mysql_data:/var/lib/mysql
-    command: --default-authentication-plugin=mysql_native_password
-    healthcheck:
-      test: [ "CMD", "mysqladmin", "ping", "-h", "localhost" ]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - beast-network
+  # Commented out: MySQL (only used by ragflow-server, not part of active tech stack)
+  # mysql:
+  #   image: mysql:8.0
+  #   container_name: beast-mysql
+  #   environment:
+  #     MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+  #     MYSQL_DATABASE: ${MYSQL_DATABASE}
+  #     MYSQL_USER: ${MYSQL_USER}
+  #     MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+  #   ports:
+  #     - "3306:3306"
+  #   volumes:
+  #     - mysql_data:/var/lib/mysql
+  #   command: --default-authentication-plugin=mysql_native_password
+  #   healthcheck:
+  #     test: [ "CMD", "mysqladmin", "ping", "-h", "localhost" ]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+  #   networks:
+  #     - beast-network
 
-  es01:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.10.0
-    container_name: beast-es01
-    environment:
-      - discovery.type=single-node
-      - xpack.security.enabled=false
-      - ES_JAVA_OPTS=-Xms512m -Xmx512m
-    ports:
-      - "9200:9200"
-    volumes:
-      - elasticsearch_data:/usr/share/elasticsearch/data
-    healthcheck:
-      test: [ "CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1" ]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 40s
-    networks:
-      - beast-network
+  # Commented out: Elasticsearch (only used by ragflow-server)
+  # es01:
+  #   image: docker.elastic.co/elasticsearch/elasticsearch:8.10.0
+  #   container_name: beast-es01
+  #   environment:
+  #     - discovery.type=single-node
+  #     - xpack.security.enabled=false
+  #     - ES_JAVA_OPTS=-Xms512m -Xmx512m
+  #   ports:
+  #     - "9200:9200"
+  #   volumes:
+  #     - elasticsearch_data:/usr/share/elasticsearch/data
+  #   healthcheck:
+  #     test: [ "CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1" ]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 5
+  #     start_period: 40s
+  #   networks:
+  #     - beast-network
 
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: beast-prometheus
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./backend/prometheus.yml:/etc/prometheus/prometheus.yml
-      - prometheus_data:/prometheus
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-    networks:
-      - beast-network
+  # Commented out: Prometheus (monitoring service, not actively used)
+  # prometheus:
+  #   image: prom/prometheus:latest
+  #   container_name: beast-prometheus
+  #   ports:
+  #     - "9090:9090"
+  #   volumes:
+  #     - ./backend/prometheus.yml:/etc/prometheus/prometheus.yml
+  #     - prometheus_data:/prometheus
+  #   command:
+  #     - '--config.file=/etc/prometheus/prometheus.yml'
+  #     - '--storage.tsdb.path=/prometheus'
+  #   networks:
+  #     - beast-network
 
-  grafana:
-    image: grafana/grafana:latest
-    container_name: beast-grafana
-    ports:
-      - "3001:3001"
-    environment:
-      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD}
-      GF_USERS_ALLOW_SIGN_UP: "false"
-    volumes:
-      - grafana_data:/var/lib/grafana
-    networks:
-      - beast-network
-    depends_on:
-      - prometheus
+  # Commented out: Grafana (depends on prometheus for metrics visualization)
+  # grafana:
+  #   image: grafana/grafana:latest
+  #   container_name: beast-grafana
+  #   ports:
+  #     - "3001:3001"
+  #   environment:
+  #     GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD}
+  #     GF_USERS_ALLOW_SIGN_UP: "false"
+  #   volumes:
+  #     - grafana_data:/var/lib/grafana
+  #   networks:
+  #     - beast-network
+  #   depends_on:
+  #     - prometheus
 
   ollama:
     image: ollama/ollama:latest
@@ -297,68 +301,71 @@ services:
     networks:
       - beast-network
 
-  ragflow-server:
-    image: "infiniflow/ragflow"
-    platform: linux/amd64
-    container_name: ragflow-server
-    ports:
-      - "8090:8080"
-    environment:
-      - RAGFLOW_ADMIN_PASSWORD=${RAGFLOW_ADMIN_PASSWORD}
-      - DB_TYPE=mysql
-      - MYSQL_HOST=mysql
-      - MYSQL_PORT=3306
-      - MYSQL_USER=${MYSQL_USER}
-      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
-      - MYSQL_DB=${MYSQL_DATABASE}
-      - MINIO_ENABLED=false
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - REDIS_PASSWORD=${REDIS_PASSWORD}
-      - REDIS_DB=0
-      - ELASTICSEARCH_URL=http://es01:9200
-      - ELASTICSEARCH_ENABLED=true
-      - CHUNK_SEARCHABLE=true
-    volumes:
-      - ./backend/ragflow/data:/var/lib/ragflow/data
-    depends_on:
-      - mysql
-      - redis
-      - es01
-    networks:
-      - beast-network
-    healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:8080" ]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
-    restart: unless-stopped
+  # Commented out: RAGFlow server (alternative document processing, not part of active tech stack)
+  # ragflow-server:
+  #   image: "infiniflow/ragflow"
+  #   platform: linux/amd64
+  #   container_name: ragflow-server
+  #   ports:
+  #     - "8090:8080"
+  #   environment:
+  #     - RAGFLOW_ADMIN_PASSWORD=${RAGFLOW_ADMIN_PASSWORD}
+  #     - DB_TYPE=mysql
+  #     - MYSQL_HOST=mysql
+  #     - MYSQL_PORT=3306
+  #     - MYSQL_USER=${MYSQL_USER}
+  #     - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+  #     - MYSQL_DB=${MYSQL_DATABASE}
+  #     - MINIO_ENABLED=false
+  #     - REDIS_HOST=redis
+  #     - REDIS_PORT=6379
+  #     - REDIS_PASSWORD=${REDIS_PASSWORD}
+  #     - REDIS_DB=0
+  #     - ELASTICSEARCH_URL=http://es01:9200
+  #     - ELASTICSEARCH_ENABLED=true
+  #     - CHUNK_SEARCHABLE=true
+  #   volumes:
+  #     - ./backend/ragflow/data:/var/lib/ragflow/data
+  #   depends_on:
+  #     - mysql
+  #     - redis
+  #     - es01
+  #   networks:
+  #     - beast-network
+  #   healthcheck:
+  #     test: [ "CMD", "curl", "-f", "http://localhost:8080" ]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 5
+  #     start_period: 60s
+  #   restart: unless-stopped
 
-  ragflow-runner:
-    build:
-      context: ./backend
-      dockerfile: ragflow/runner/Dockerfile
-    container_name: ragflow-runner
-    volumes:
-      - ./backend/data/analytics:/app/data/analytics
-      - ./backend/data/processed:/app/data/processed
-      - ./backend/data/materialized:/app/data/materialized
-      - ./backend/data/vector_db:/app/data/vector_db
-      - ./backend:/app
-    environment:
-      - PYTHONPATH=/app
-    restart: "unless-stopped"
+  # Commented out: RAGFlow runner (alternative processing component, not part of active tech stack)
+  # ragflow-runner:
+  #   build:
+  #     context: ./backend
+  #     dockerfile: ragflow/runner/Dockerfile
+  #   container_name: ragflow-runner
+  #   volumes:
+  #     - ./backend/data/analytics:/app/data/analytics
+  #     - ./backend/data/processed:/app/data/processed
+  #     - ./backend/data/materialized:/app/data/materialized
+  #     - ./backend/data/vector_db:/app/data/vector_db
+  #     - ./backend:/app
+  #   environment:
+  #     - PYTHONPATH=/app
+  #   restart: "unless-stopped"
 
 volumes:
   postgres_data:
   redis_data:
   mongodb_data:
-  mysql_data:
-  elasticsearch_data:
-  prometheus_data:
-  grafana_data:
   ollama_data:
+  # Commented out volumes (only used by uncommented services)
+  # mysql_data:
+  # elasticsearch_data:
+  # prometheus_data:
+  # grafana_data:
 
 
 networks:
