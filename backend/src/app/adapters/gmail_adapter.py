@@ -214,6 +214,42 @@ class GmailAdapter(DataAdapter):
         self.health_status = AdapterHealthStatus(status=AdapterStatus.DISCONNECTED)
         logger.info("Gmail connection closed")
 
+    async def mark_email_as_read(self, message_id: str) -> bool:
+        """Mark a Gmail message as read by removing the UNREAD label.
+
+        Args:
+            message_id: Gmail message ID to mark as read
+
+        Returns:
+            True if successful, False if failed
+        """
+        if not self.service:
+            logger.warning("Gmail adapter not connected, cannot mark email as read", message_id=message_id)
+            return False
+
+        try:
+            import asyncio
+
+            # Run the synchronous Gmail API call in a thread pool to avoid blocking the event loop
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                None,
+                lambda: self.service.users().messages().modify(
+                    userId="me",
+                    id=message_id,
+                    body={"removeLabelIds": ["UNREAD"]},
+                ).execute()
+            )
+            logger.info("Email marked as read", message_id=message_id)
+            return True
+        except Exception as e:
+            logger.warning(
+                "Failed to mark email as read",
+                message_id=message_id,
+                error=str(e),
+            )
+            return False
+
     def get_oauth_config(self) -> Optional[Dict[str, Any]]:
         """Return updated OAuth config with potentially refreshed token.
         

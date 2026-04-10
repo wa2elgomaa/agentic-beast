@@ -1771,21 +1771,8 @@ class IngestionService:
                                 is_retryable=is_email_retryable,
                             )
 
-                            # Try to remove UNREAD label
-                            try:
-                                gmail_service = gmail_adapter.service
-                                if gmail_service is not None:
-                                    await gmail_service.users().messages().modify(
-                                        userId="me",
-                                        id=email_message_id,
-                                        body={"removeLabelIds": ["UNREAD"]},
-                                    ).execute()
-                            except Exception as e:
-                                logger.warning(
-                                    "Could not mark email as processed",
-                                    message_id=email_message_id,
-                                    error=str(e),
-                                )
+                            # Mark email as read using Gmail UNREAD label removal
+                            await gmail_adapter.mark_email_as_read(email_message_id)
 
                 except Exception as e:
                     # Email processing failed (extraction error, etc.)
