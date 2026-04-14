@@ -13,6 +13,7 @@ AnalyticsResultDataItem (frontend/types/index.ts):
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 _logger = logging.getLogger(__name__)
@@ -24,11 +25,11 @@ _logger = logging.getLogger(__name__)
 
 def _display_label(row: dict[str, Any]) -> str:
     """Return title, display_label, or first 200 chars of content, or 'Unknown'."""
-    for key in ("title", "display_label"):
+    for key in ("content", "title", "display_label"):
         val = (row.get(key) or "").strip()
         if val:
             return val
-    c = str(row.get("content") or "").strip()
+    c = str(row.get("content") or row.get("title") or "").strip()
     return c[:200] or "Unknown"
 
 
@@ -52,30 +53,26 @@ def _format_number(v: Any) -> str:
     return f"{num:,.0f}"
 
 
-def _build_view_url(platform: str | None, content_id: str | None) -> str:
-    """Return a best-effort URL to view the content on its platform.
+def _resolve_view_url(row: dict[str, Any]) -> str:
+    for key in ("view_on_platform", "link_url"):
+        value = _safe_str(row.get(key)).strip()
+        if value:
+            return value
 
-    Uses common platform URL patterns; falls back to a generic host if unknown.
-    """
-    if not content_id:
-        return ""
-    p = (platform or "").strip().lower()
-    cid = str(content_id)
-    if "youtube" in p or p == "youtube":
-        return f"https://www.youtube.com/watch?v={cid}"
-    if "tiktok" in p or p == "tiktok":
-        return f"https://www.tiktok.com/t/{cid}"
-    if "instagram" in p or p == "instagram":
-        return f"https://www.instagram.com/p/{cid}"
-    if "facebook" in p or p == "facebook":
-        return f"https://www.facebook.com/{cid}"
-    # Generic fallback
-    return f"https://{p or 'content'}.example/{cid}"
+    for key in ("content", "title", "description"):
+        text = _safe_str(row.get(key)).strip()
+        if not text:
+            continue
+        match = re.search(r"https?://\S+", text)
+        if match:
+            return match.group(0).rstrip('.,);]\"\'')
+
+    return ""
 
 
 def _numeric_value(row: dict[str, Any]) -> float:
     """Extract the primary numeric value from a row (handles varied column names)."""
-    for key in ("metric_value", "value", "avg_interactions", "total", "count"):
+    for key in ("metric_value", "value", "avg_interactions", "avg_engagements", "total", "count"):
         v = row.get(key)
         if v is not None:
             try:
@@ -133,18 +130,18 @@ def build_analytics_response(
         numeric = _numeric_value(row)
         formatted_value = _format_number(numeric)
 
-        # Title should be title column first, then content column.
-        raw_title = (row.get("title") or "").strip()
-        if raw_title:
-            title_field = _safe_str(raw_title)
+        # Prefer content for resilient display; fall back to title if needed.
+        raw_content = (row.get("content") or "").strip()
+        if raw_content:
+            title_field = _safe_str(raw_content)
         else:
-            title_field = _safe_str(row.get("content") or "")
+            title_field = _safe_str(row.get("title") or "")
 
         # Content/description should map to content column (not content_id).
         content_field = _safe_str(row.get("content") or "")
 
         # View link for platform (best-effort)
-        view_url = _build_view_url(_safe_str(row.get("platform")), row.get("content_id"))
+        view_url = _resolve_view_url(row)
 
         result_data.append(
             {

@@ -210,6 +210,7 @@ export interface ContentResult {
   content?: string
   link_url?: string
   view_on_platform?: string
+  view_url?: string
   organic_interactions?: number
   total_interactions?: number
   total_reactions?: number

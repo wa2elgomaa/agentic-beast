@@ -23,7 +23,11 @@ import json
 import logging
 from typing import Any
 
-from app.agents.analytics_agent import generate_analytics_sql
+from app.agents.analytics_agent import (
+    enrich_rows_with_content_metadata,
+    generate_analytics_sql,
+    sanitize_rows_for_output,
+)
 from app.config import (
     get_agent_settings_registry,
     get_schema_registry,
@@ -206,6 +210,15 @@ async def run_code_interpreter(
     try:
         db_result = await execute_safe_sql(sql, params=params)
         rows: list[dict] = db_result["rows"]
+
+        # Preserve entity anchor for chained follow-ups.
+        # If SQL filtered by top_beast_uuid but did not select beast_uuid,
+        # add it to each row so next-turn context can still resolve "same video".
+        top_beast_uuid = params.get("top_beast_uuid") if isinstance(params, dict) else None
+        if top_beast_uuid and rows and "beast_uuid" not in rows[0]:
+            rows = [{**row, "beast_uuid": str(top_beast_uuid)} for row in rows]
+        rows = await enrich_rows_with_content_metadata(rows)
+        rows = sanitize_rows_for_output(rows)
     except (SQLValidationError, SQLAlchemyError, Exception) as exc:  # noqa: BLE001
         _logger.warning("Code interpreter: SQL exec failed", extra={"error": str(exc)})
         return {

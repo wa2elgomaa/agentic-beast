@@ -24,6 +24,7 @@ ALIAS_TABLE = {
     "profile_url": "profile_url",
     "content_id": "content_id",
     "post_detail_url": "post_detail_url",
+    "view_on_platform" : "view_on_platform",
     "reach": "total_reach",
     "organic_reach": "organic_reach",
     "paid_reach": "paid_reach",

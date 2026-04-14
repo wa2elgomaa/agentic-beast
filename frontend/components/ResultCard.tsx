@@ -11,6 +11,8 @@ interface ResultCardProps {
 }
 
 export default function ResultCard({ result, index }: ResultCardProps) {
+  const outboundUrl = String(result.view_on_platform || result.view_url || result.link_url || '').trim()
+
   const metrics = [
     { label: 'Views', value: result.video_views, icon: '👁️', color: 'from-blue-500 to-cyan-500' },
     { label: 'Impressions', value: result.total_impressions, icon: '📊', color: 'from-purple-500 to-pink-500' },
@@ -73,9 +75,9 @@ export default function ResultCard({ result, index }: ResultCardProps) {
             <span className="text-gray-900 font-medium">{result.profile_name}</span>
           )}
         </div>
-        {result.view_on_platform && (
+        {outboundUrl && (
           <a
-            href={result.view_on_platform}
+            href={outboundUrl}
             target="_blank"
             rel="noopener noreferrer"
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 text-white font-medium transition-all"

@@ -26,6 +26,7 @@ const DB_TARGET_FIELDS = [
   'profile_id',
   'content_id',
   'post_detail_url',
+  'view_on_platform',
   'content_type',
   'media_type',
   'title',

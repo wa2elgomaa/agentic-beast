@@ -1690,8 +1690,35 @@ class IngestionService:
             # The adapted config will be updated on next task run via task_config initialization
             refreshed_oauth = gmail_adapter.get_oauth_config()
             if refreshed_oauth or oauth_changed:
-                logger.debug("Gmail OAuth config updated but not persisted in async context",
-                           oauth_changed=oauth_changed)
+                logger.info("Gmail OAuth config refreshed; persisting to task adaptor_config if available",
+                            oauth_changed=oauth_changed)
+                try:
+                    # Merge refreshed oauth into task.adaptor_config.gmail_oauth and persist
+                    current_adaptor = dict(task.adaptor_config or {})
+                    gmail_oauth = dict(current_adaptor.get("gmail_oauth", {}))
+                    # Only merge non-empty keys to avoid wiping existing client secrets unintentionally
+                    for k, v in (refreshed_oauth or {}).items():
+                        if v is not None:
+                            gmail_oauth[k] = v
+                    current_adaptor["gmail_oauth"] = gmail_oauth
+                    task.adaptor_config = current_adaptor
+                    self.db.add(task)
+                    await self.db.flush()
+                    await self.db.commit()
+
+                    # Record audit event for token refresh
+                    try:
+                        await credential_service.record_auth_event(
+                            task_id=task.id,
+                            event_type="token_refreshed",
+                            account_email=gmail_oauth.get("account_email") or None,
+                            error_code=None,
+                            error_message=None,
+                        )
+                    except Exception as e:
+                        logger.debug("Failed to write gmail credential audit event", error=str(e), task_id=task.id)
+                except Exception as e:
+                    logger.warning("Failed to persist refreshed Gmail OAuth into task.adaptor_config", error=str(e), task_id=task.id)
 
             # Fetch emails - child runs process only their assigned email, parent runs process all
             if selected_message_id:

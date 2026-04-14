@@ -1,6 +1,8 @@
 'use client'
 
 import React, { useState } from 'react'
+import { formatInTimeZone } from 'date-fns-tz'
+import { APP_TIMEZONE } from '@/lib/dateUtils'
 import { IngestionTaskRun } from '@/types'
 import { CheckCircle2, AlertCircle, Clock, RefreshCw, XCircle, Eye } from 'lucide-react'
 
@@ -198,7 +200,7 @@ function DetailModal({ run, childRuns, isOpen, onClose, onCancelRun, cancelingRu
               <div>
                 <p className="text-xs text-gray-500 dark:text-gray-400">Started At</p>
                 <p className="text-sm font-medium text-gray-900 dark:text-white">
-                  {run.started_at ? new Date(run.started_at).toLocaleString() : '-'}
+                  {run.started_at ? formatInTimeZone(new Date(run.started_at), APP_TIMEZONE, 'yyyy-MM-dd HH:mm:ss') : '-'}
                 </p>
               </div>
             </div>
@@ -511,10 +513,10 @@ export default function TaskRunHistory({ runs, onRefresh, onCancelRun, canceling
           </div>
         </td>
         <td className="px-6 py-4 text-sm text-gray-600 dark:text-gray-400">
-          {run.started_at ? new Date(run.started_at).toLocaleString() : '-'}
+          {run.started_at ? formatInTimeZone(new Date(run.started_at), APP_TIMEZONE, 'yyyy-MM-dd HH:mm:ss') : '-'}
         </td>
         <td className="px-6 py-4 text-sm text-gray-600 dark:text-gray-400">
-          {run.completed_at ? new Date(run.completed_at).toLocaleString() : '-'}
+          {run.completed_at ? formatInTimeZone(new Date(run.completed_at), APP_TIMEZONE, 'yyyy-MM-dd HH:mm:ss') : '-'}
         </td>
         <td className="px-6 py-4 text-sm font-medium text-green-700 dark:text-green-300">{run.rows_inserted}</td>
         <td className="px-6 py-4 text-sm font-medium text-blue-700 dark:text-blue-300">

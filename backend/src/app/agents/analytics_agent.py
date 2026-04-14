@@ -16,10 +16,14 @@ import logging
 import re
 from typing import Any, Optional
 
+from sqlalchemy import func, select
+
 _logger = logging.getLogger(__name__)
 
+from app.db.session import AsyncSessionLocal
+from app.models.document import Document
 from app.config import settings
-from app.agents.response_agent import _format_number, _build_view_url, _safe_str  # noqa: E402
+from app.agents.response_agent import _format_number, _safe_str  # noqa: E402
 from app.utilities.json_chat import generate_json_object
 
 from pydantic import BaseModel, field_validator
@@ -186,7 +190,7 @@ def _build_insight_summary(
         lines = []
         for r in rows[:7]:
             day = (r.get("day_of_week") or "?").strip()
-            avg = r.get("avg_interactions", 0)
+            avg = r.get("avg_interactions", r.get("avg_engagements", 0))
             sample = r.get("sample_size", 0)
             lines.append(f"  {day}: avg {avg:,.0f} interactions ({sample} posts)")
         return "Best days to publish:\n" + "\n".join(lines)
@@ -203,7 +207,7 @@ def _build_insight_summary(
     if operation == "top_n":
         lines = []
         for i, r in enumerate(rows[:10], start=1):
-            name = r.get("title") or r.get("beast_uuid") or r.get("content_id") or "Unknown"
+            name = r.get("content") or r.get("title") or r.get("beast_uuid") or r.get("content_id") or "Unknown"
             val = _row_metric_value(r)
             platform = r.get("platform", "")
             suffix = f" ({platform})" if platform else ""
@@ -242,20 +246,32 @@ def _build_insight_summary(
 
 def _rows_to_result_data(rows: list[dict], query_category: str = "metrics") -> list[dict]:
     """Normalise DB rows to the AnalyticsAgentSchema__ResultDataItem shape."""
+    def _extract_first_http_url(*values: object) -> str:
+        for value in values:
+            text = _safe_str(value).strip()
+            if not text:
+                continue
+            match = re.search(r"https?://\S+", text)
+            if match:
+                return match.group(0).rstrip('.,);]\"\'')
+        return ""
+
     result = []
     for r in rows:
         if query_category == "publishing_insights":
             label = (r.get("day_of_week") or "Unknown").strip()
+            avg_val = r.get("avg_interactions", r.get("avg_engagements", 0))
             result.append({
                 "label": label,
-                "value": str(round(r.get("avg_interactions", 0))),
+                "value": str(round(avg_val)),
                 "platform": r.get("platform"),
                 "content": str(r.get("sample_size", "")),
                 "title": None,
             })
         else:
             label = (
-                r.get("title")
+                r.get("content")
+                or r.get("title")
                 or r.get("platform")
                 or r.get("published_date")
                 or r.get("content_type")
@@ -266,14 +282,16 @@ def _rows_to_result_data(rows: list[dict], query_category: str = "metrics") -> l
             )
 
             # Build canonical fields: title from title then content; description from content column
-            raw_title = (r.get("title") or "").strip()
-            if raw_title:
-                title_field = _safe_str(raw_title)
+            raw_content = (r.get("content") or "").strip()
+            if raw_content:
+                title_field = _safe_str(raw_content)
             else:
-                title_field = _safe_str(r.get("content") or "")
+                title_field = _safe_str(r.get("title") or "")
 
             content_field = _safe_str(r.get("content") or "")
-            view_url = _build_view_url(_safe_str(r.get("platform")), r.get("content_id"))
+            view_url = _safe_str(r.get("view_on_platform") or r.get("link_url")).strip()
+            if not view_url:
+                view_url = _extract_first_http_url(r.get("content"), r.get("title"), r.get("description"))
             formatted_value = _format_number(r.get("value", r.get("metric_value", 0)))
 
             result.append(
@@ -314,6 +332,103 @@ def _post_process_sqo(sqo, message: str):
             sqo.keyword = next((g.strip() for g in km.groups() if g), None)
 
     return sqo
+
+
+async def enrich_rows_with_content_metadata(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Backfill content and URL metadata for rows identified by beast_uuid.
+
+    Generated SQL does not always project resilient display fields or platform URLs.
+    This helper enriches rows from documents so the UI can show content text and
+    clickable links consistently.
+    """
+    if not rows:
+        return rows
+
+    beast_uuids = [str(row.get("beast_uuid")) for row in rows if row.get("beast_uuid")]
+    if not beast_uuids:
+        return rows
+
+    async with AsyncSessionLocal() as session:
+        global_stmt = (
+            select(
+                Document.beast_uuid,
+                func.max(Document.content).label("content"),
+                func.max(func.coalesce(Document.title, "")).label("title"),
+                func.max(Document.view_on_platform).label("view_on_platform"),
+                func.max(Document.link_url).label("link_url"),
+                func.max(Document.content_id).label("content_id"),
+            )
+            .where(Document.beast_uuid.in_(beast_uuids))
+            .group_by(Document.beast_uuid)
+        )
+        global_rows = (await session.execute(global_stmt)).fetchall()
+
+        platform_stmt = (
+            select(
+                Document.beast_uuid,
+                func.lower(Document.platform).label("platform"),
+                func.max(Document.view_on_platform).label("view_on_platform"),
+                func.max(Document.link_url).label("link_url"),
+                func.max(Document.content_id).label("content_id"),
+            )
+            .where(Document.beast_uuid.in_(beast_uuids))
+            .group_by(Document.beast_uuid, func.lower(Document.platform))
+        )
+        platform_rows = (await session.execute(platform_stmt)).fetchall()
+
+    global_map = {
+        str(row[0]): {
+            "content": row[1],
+            "title": row[2],
+            "view_on_platform": row[3],
+            "link_url": row[4],
+            "content_id": row[5],
+        }
+        for row in global_rows
+    }
+    platform_map = {
+        (str(row[0]), str(row[1] or "").lower()): {
+            "view_on_platform": row[2],
+            "link_url": row[3],
+            "content_id": row[4],
+        }
+        for row in platform_rows
+    }
+
+    enriched: list[dict[str, Any]] = []
+    for row in rows:
+        beast_uuid = str(row.get("beast_uuid")) if row.get("beast_uuid") else None
+        platform = str(row.get("platform") or "").lower()
+        merged = dict(row)
+
+        if beast_uuid and beast_uuid in global_map:
+            for key, value in global_map[beast_uuid].items():
+                if not merged.get(key) and value:
+                    merged[key] = value
+
+        if beast_uuid and platform and (beast_uuid, platform) in platform_map:
+            for key, value in platform_map[(beast_uuid, platform)].items():
+                if not merged.get(key) and value:
+                    merged[key] = value
+
+        enriched.append(merged)
+
+    return enriched
+
+
+def sanitize_rows_for_output(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Remove internal/disallowed columns from outbound analytics payloads."""
+    if not rows:
+        return rows
+
+    sanitized: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        cleaned = dict(row)
+        cleaned.pop("post_detail_url", None)
+        sanitized.append(cleaned)
+    return sanitized
 
 
 async def run_analytics_query(
@@ -387,6 +502,8 @@ async def run_analytics_query(
         except json.JSONDecodeError:
             db_result = {"rows": []}
         rows = db_result.get("rows", [])
+        rows = await enrich_rows_with_content_metadata(rows)
+        rows = sanitize_rows_for_output(rows)
         insight = _build_insight_summary(None, "publishing_insights", rows, query_category="publishing_insights")
         return {
             "query_type": "publishing_insights",
@@ -427,6 +544,8 @@ async def run_analytics_query(
         except json.JSONDecodeError:
             db_result = {"rows": []}
         rows = db_result.get("rows", [])
+        rows = await enrich_rows_with_content_metadata(rows)
+        rows = sanitize_rows_for_output(rows)
         insight = _build_insight_summary(sqo.metric, "compare", rows, query_category="compare")
         return {
             "query_type": "compare",
@@ -467,6 +586,8 @@ async def run_analytics_query(
         db_result = {"rows": []}
 
     rows = db_result.get("rows", [])
+    rows = await enrich_rows_with_content_metadata(rows)
+    rows = sanitize_rows_for_output(rows)
     _logger.info("run_analytics_query: DB rows", extra={"rows_count": len(rows)})
 
     # ------------------------------------------------------------------
@@ -538,11 +659,12 @@ def _build_schema_context() -> str:
         f"{metrics_text}\n\n"
         "Allowed dimension columns (use for GROUP BY / WHERE / ORDER BY):\n"
         f"{dimensions_text}\n\n"
-        "Other useful columns: title (text), content (text), beast_uuid (uuid), content_id (text), "
+        "Other useful columns: content (text), title (text), beast_uuid (uuid), content_id (text), "
+        "view_on_platform (text url), link_url (text url), "
         "published_date (date), platform (text)\n"
         "CRITICAL: When grouping (GROUP BY), EVERY non-aggregated column in SELECT must be in GROUP BY.\n"
-        "Example correct query: SELECT beast_uuid, MAX(title), SUM(metric) FROM documents "
-        "GROUP BY beast_uuid  (title will be aggregated automatically).\n"
+        "Example correct query: SELECT beast_uuid, MAX(content), SUM(metric) FROM documents "
+        "GROUP BY beast_uuid  (content will be aggregated automatically).\n"
         "Example INCORRECT: SELECT platform, published_date, SUM(metric) FROM documents GROUP BY platform "
         "(missing published_date in GROUP BY).\n"
         f"Default limit: {default_limit}; absolute max limit: {max_limit}."
@@ -567,7 +689,7 @@ def _build_sql_gen_system_prompt() -> str:
         "1. ONLY SELECT from the documents table. Never use INSERT/UPDATE/DELETE/DROP/ALTER/CREATE.\n"
         "2. Use :param_name placeholders for ALL user-supplied filter values — NEVER interpolate strings.\n"
         "3. ALWAYS include LIMIT :max_rows in SQL and set params.max_rows.\n"
-        "4. For top-N: ORDER BY metric_value DESC LIMIT :max_rows and include title/content/beast_uuid.\n"
+        "4. For top-N or record-level ranking: ORDER BY metric_value DESC LIMIT :max_rows and include content, beast_uuid, and view_on_platform when available. Use title only if explicitly requested.\n"
         "5. For publishing insights, aggregate by day using published_date and engagements.\n"
         "6. For platform filter: LOWER(platform) = LOWER(:platform).\n"
         "7. For keyword filter: (title ILIKE :keyword OR content ILIKE :keyword), with %term%.\n"
@@ -608,7 +730,7 @@ def _build_sql_gen_few_shot() -> list[dict[str, str]]:
                 {
                     "sql": (
                         "SELECT beast_uuid, "
-                        "MAX(NULLIF(title, '')) AS title, MAX(content) AS content, "
+                        "MAX(content) AS content, MAX(view_on_platform) AS view_on_platform, "
                         f"SUM({metric_default}) AS metric_value "
                         "FROM documents "
                         "GROUP BY beast_uuid "
@@ -666,14 +788,14 @@ def _build_sql_gen_few_shot() -> list[dict[str, str]]:
             "content": (
                 "[PRIOR QUERY CONTEXT]\n"
                 "The user's last analytics query used this SQL:\n"
-                "SELECT beast_uuid, MAX(NULLIF(title, '')) AS title, SUM(video_views) AS metric_value "
+                "SELECT beast_uuid, MAX(content) AS content, MAX(view_on_platform) AS view_on_platform, SUM(video_views) AS metric_value "
                 "FROM documents GROUP BY beast_uuid ORDER BY metric_value DESC LIMIT :max_rows\n"
                 "Metric analysed: video_views\n"
-                "Columns returned: beast_uuid, title, metric_value\n"
+                "Columns returned: beast_uuid, content, view_on_platform, metric_value\n"
                 "RESULTS (ranked by display order):\n"
-                "  [1st/TOP] {\"beast_uuid\": \"11111111-1111-1111-1111-111111111111\", \"title\": \"Viral Post\", \"metric_value\": \"50000\"}\n"
-                "  [2nd] {\"beast_uuid\": \"22222222-2222-2222-2222-222222222222\", \"title\": \"Trending Clip\", \"metric_value\": \"35000\"}\n"
-                "  [3rd] {\"beast_uuid\": \"33333333-3333-3333-3333-333333333333\", \"title\": \"Featured Video\", \"metric_value\": \"28000\"}\n"
+                "  [1st/TOP] {\"beast_uuid\": \"11111111-1111-1111-1111-111111111111\", \"content\": \"Viral Post\", \"view_on_platform\": \"https://example.com/video/1\", \"metric_value\": \"50000\"}\n"
+                "  [2nd] {\"beast_uuid\": \"22222222-2222-2222-2222-222222222222\", \"content\": \"Trending Clip\", \"view_on_platform\": \"https://example.com/video/2\", \"metric_value\": \"35000\"}\n"
+                "  [3rd] {\"beast_uuid\": \"33333333-3333-3333-3333-333333333333\", \"content\": \"Featured Video\", \"view_on_platform\": \"https://example.com/video/3\", \"metric_value\": \"28000\"}\n"
                 "KEY REFERENCE: The TOP RESULT has beast_uuid='11111111-1111-1111-1111-111111111111'.\n"
                 "When the user says 'first', 'top', or 'most...', use this beast_uuid in WHERE clause.\n"
                 "Example: WHERE beast_uuid = '11111111-1111-1111-1111-111111111111' then GROUP BY platform to show across platforms.\n"
@@ -891,6 +1013,15 @@ async def run_sql_analytics_pipeline(
 
             db_result = await execute_safe_sql(sql, params=params)
             rows = db_result["rows"]
+
+            # Preserve entity anchor for chained follow-ups.
+            # If SQL filtered by top_beast_uuid but did not select beast_uuid,
+            # add it to each row so next-turn context can still resolve "same video".
+            top_beast_uuid = params.get("top_beast_uuid") if isinstance(params, dict) else None
+            if top_beast_uuid and rows and "beast_uuid" not in rows[0]:
+                rows = [{**row, "beast_uuid": str(top_beast_uuid)} for row in rows]
+            rows = await enrich_rows_with_content_metadata(rows)
+            rows = sanitize_rows_for_output(rows)
 
             _logger.info(
                 "run_sql_analytics_pipeline: success",

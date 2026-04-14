@@ -77,6 +77,28 @@ class GmailAdapter(DataAdapter):
                 )
 
                 refresh_token = self.oauth_config.get("refresh_token")
+                loaded_from_file = False
+                # If task adaptor_config doesn't contain a refresh_token, try loading
+                # stored credentials from the configured credentials file (legacy/local)
+                if not refresh_token:
+                    cred_path = getattr(settings, "gmail_credentials_path", None)
+                    if cred_path:
+                        try:
+                            import json
+                            from pathlib import Path
+
+                            path = Path(cred_path)
+                            if path.exists():
+                                data = json.loads(path.read_text())
+                                # merge any keys we care about
+                                for k in ("refresh_token", "access_token", "client_id", "client_secret", "token_uri", "scopes"):
+                                    if data.get(k) and not self.oauth_config.get(k):
+                                        self.oauth_config[k] = data.get(k)
+                                refresh_token = self.oauth_config.get("refresh_token")
+                                loaded_from_file = True
+                        except Exception as e:
+                            logger.warning("Failed to load gmail credentials file", path=cred_path, error=str(e))
+
                 if not refresh_token:
                     raise ValueError("Missing Gmail OAuth refresh_token in task adaptor_config.gmail_oauth")
 
@@ -183,7 +205,29 @@ class GmailAdapter(DataAdapter):
                         account_email=email_address,
                     )
                     await self.credential_service.reset_failure_count(self.task_id)
+                # If we loaded credentials from a local credentials file, persist any
+                # refreshed tokens back to that file so future runs have the up-to-date
+                # refresh/access tokens. This keeps local development flows working.
+                if loaded_from_file:
+                    try:
+                        import json
+                        from pathlib import Path
 
+                        cred_path = getattr(settings, "gmail_credentials_path", None)
+                        if cred_path:
+                            path = Path(cred_path)
+                            oauth_update = self.get_oauth_config() or {}
+                            # Read existing to avoid clobbering unrelated fields
+                            existing = {}
+                            if path.exists():
+                                try:
+                                    existing = json.loads(path.read_text())
+                                except Exception:
+                                    existing = {}
+                            merged = {**existing, **oauth_update}
+                            path.write_text(json.dumps(merged, indent=2))
+                    except Exception as e:
+                        logger.warning("Failed to persist refreshed gmail credentials to file", error=str(e))
                 self.health_status = AdapterHealthStatus(status=AdapterStatus.CONNECTED)
                 return
 
