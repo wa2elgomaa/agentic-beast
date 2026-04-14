@@ -47,6 +47,9 @@ class ProcessedEmail(Base):
     # Set to True if email had extraction/file errors or all rows failed
     is_retryable: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
+    # Original sent date from the email headers (if available)
+    sent_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP, nullable=True)
+
     processed_at: Mapped[datetime] = mapped_column(
         TIMESTAMP, nullable=False, server_default=func.current_timestamp()
     )

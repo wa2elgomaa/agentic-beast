@@ -332,6 +332,7 @@ class IngestionService:
         message_id: str,
         subject: str | None = None,
         sender: str | None = None,
+        sent_at: datetime | None = None,
         task_id: UUID | None = None,
         rows_inserted: int = 0,
         rows_skipped: int = 0,
@@ -361,6 +362,7 @@ class IngestionService:
                 task_id=task_id,
                 subject=subject,
                 sender=sender,
+                sent_at=sent_at,
                 rows_inserted=rows_inserted,
                 rows_skipped=rows_skipped,
                 rows_failed=rows_failed,
@@ -448,6 +450,7 @@ class IngestionService:
                         "message_id": email.get("message_id", ""),
                         "subject": email.get("subject", ""),
                         "from": email.get("from", ""),
+                        "date": email.get("date", ""),
                         "attachment_count": attachment_count,
                     })
 
@@ -554,10 +557,22 @@ class IngestionService:
 
                 # Record email as processed in DB and remove UNREAD label
                 if email_message_id:
+                    # Parse sent date header if present and persist it
+                    sent_date_str = email.get("date")
+                    sent_dt = None
+                    if sent_date_str:
+                        try:
+                            from email.utils import parsedate_to_datetime
+
+                            sent_dt = parsedate_to_datetime(sent_date_str)
+                        except Exception:
+                            sent_dt = None
+
                     await self._record_processed_email(
                         message_id=email_message_id,
                         subject=email_subject,
                         sender=email_sender,
+                        sent_at=sent_dt,
                         rows_inserted=email_inserted,
                         rows_skipped=email_skipped,
                         rows_failed=email_failed,

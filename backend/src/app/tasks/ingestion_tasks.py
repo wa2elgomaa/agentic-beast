@@ -140,6 +140,50 @@ async def _run_gmail_with_subtasks(
                         celery_task_id=celery_result.id,
                     )
 
+            # Persist subject and sent date into child run metadata and parent run metadata
+            try:
+                from sqlalchemy import select
+                from app.models import IngestionTaskRun
+
+                for child_run_id, message_id in child_runs_config:
+                    email_dict = email_by_id.get(message_id)
+                    if not email_dict:
+                        continue
+                    stmt = select(IngestionTaskRun).where(IngestionTaskRun.id == child_run_id)
+                    result = await db.execute(stmt)
+                    child_run = result.scalar_one_or_none()
+                    if child_run:
+                        meta = child_run.run_metadata or {}
+                        meta.update(
+                            {
+                                "selected_message_id": message_id,
+                                "email_subject": email_dict.get("subject") or "",
+                                "email_sent_at": email_dict.get("date") or "",
+                            }
+                        )
+                        child_run.run_metadata = meta
+                        db.add(child_run)
+
+                # Update parent run metadata emails list
+                parent_meta = (await task_service.get_run(parent_run_id)).run_metadata or {}
+                emails_list = parent_meta.get("emails", [])
+                for _child_run_id, message_id in child_runs_config:
+                    email_dict = email_by_id.get(message_id)
+                    if not email_dict:
+                        continue
+                    emails_list.append(
+                        {
+                            "message_id": message_id,
+                            "subject": email_dict.get("subject") or "",
+                            "sent_at": email_dict.get("date") or "",
+                        }
+                    )
+                parent_meta["emails"] = emails_list
+                await task_service.update_run(parent_run_id, status=RunStatus.PENDING, run_metadata=parent_meta)
+                await db.commit()
+            except Exception as e:
+                logger.warning("Failed to persist email metadata for sub-tasks", error=str(e), task_id=task_id, parent_run_id=parent_run_id)
+
             # Update parent run to reflect that sub-tasks are queued
             await task_service.update_run(
                 parent_run_id,

@@ -390,6 +390,53 @@ async def trigger_run_with_selections(
                         task_id=f"single-email-{child_run_id}",
                     )
 
+            # Persist subject and sent date into child run metadata and parent run metadata
+            from sqlalchemy import select
+            from app.models import IngestionTaskRun
+
+            # Update child runs with email metadata
+            for child_run_id, message_id in child_runs:
+                email_dict = email_by_id.get(message_id)
+                if not email_dict:
+                    continue
+                stmt = select(IngestionTaskRun).where(IngestionTaskRun.id == child_run_id)
+                result = await db.execute(stmt)
+                child_run = result.scalar_one_or_none()
+                if child_run:
+                    meta = child_run.run_metadata or {}
+                    meta.update(
+                        {
+                            "selected_message_id": message_id,
+                            "email_subject": email_dict.get("subject") or "",
+                            "email_sent_at": email_dict.get("date") or "",
+                        }
+                    )
+                    child_run.run_metadata = meta
+                    db.add(child_run)
+
+            # Update parent run metadata to include simple list of selected emails
+            try:
+                parent_meta = parent_run.run_metadata or {}
+                emails_list = parent_meta.get("emails", [])
+                for _child_run_id, message_id in child_runs:
+                    email_dict = email_by_id.get(message_id)
+                    if not email_dict:
+                        continue
+                    emails_list.append(
+                        {
+                            "message_id": message_id,
+                            "subject": email_dict.get("subject") or "",
+                            "sent_at": email_dict.get("date") or "",
+                        }
+                    )
+                parent_meta["emails"] = emails_list
+                parent_run.run_metadata = parent_meta
+                db.add(parent_run)
+            except Exception:
+                logger.warning("Failed to persist parent run email metadata", parent_run_id=parent_run.id)
+
+            await db.commit()
+
             logger.info(
                 "Email selection run triggered",
                 task_id=task_id,
