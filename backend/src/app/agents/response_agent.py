@@ -205,9 +205,13 @@ def build_analytics_response(
     # ------------------------------------------------------------------
     # Final response dict
     # ------------------------------------------------------------------
+    resolved_subject = metric or query_category
+
     return {
         "query_type": query_category,
-        "resolved_context": metric or query_category,
+        # Keep both keys for backward compatibility across call sites.
+        "resolved_subject": resolved_subject,
+        "resolved_context": resolved_subject,
         "result_data": result_data,
         "insight_summary": insight,
         "verification": (
@@ -225,6 +229,8 @@ def build_error_response(
     sqls_attempted = len(attempted_sqls or [])
     return {
         "query_type": "error",
+        # Keep both keys for backward compatibility across call sites.
+        "resolved_subject": "query_failed",
         "resolved_context": "query_failed",
         "result_data": [],
         "insight_summary": (

@@ -124,6 +124,12 @@ schema:
       type: "categorical"
       values: ["YouTube", "TikTok", "Instagram", "Facebook", "Twitter", "LinkedIn"]
       description: "Social media platform"
+
+    # Cross-platform canonical content identity
+    beast_uuid:
+      aliases: ["content uuid", "canonical content id", "beast id", "uuid", "beast_uuid"]
+      type: "uuid"
+      description: "Canonical cross-platform content identifier used for matching and aggregation"
     
     # Date dimension
     published_date:

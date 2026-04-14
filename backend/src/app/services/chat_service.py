@@ -342,7 +342,11 @@ class ChatService:
                 if result.get("generated_sql") or result.get("result_data") is not None:
                     op_data = {
                         "generated_sql": result.get("generated_sql"),
-                        "metric": result.get("resolved_subject") or result.get("metric"),
+                        "metric": (
+                            result.get("resolved_subject")
+                            or result.get("resolved_context")
+                            or result.get("metric")
+                        ),
                         "query_category": result.get("query_type"),
                         # Store raw rows (capped) for next-turn context injection
                         "raw_rows": (

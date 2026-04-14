@@ -193,11 +193,18 @@ def _build_insight_summary(
 
     metric_label = (metric or "value").replace("_", " ").title()
 
+    def _row_metric_value(row: dict) -> float:
+        raw = row.get("value", row.get("metric_value", 0))
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return 0.0
+
     if operation == "top_n":
         lines = []
         for i, r in enumerate(rows[:10], start=1):
-            name = r.get("title") or r.get("content_id") or "Unknown"
-            val = r.get("value", 0)
+            name = r.get("title") or r.get("beast_uuid") or r.get("content_id") or "Unknown"
+            val = _row_metric_value(r)
             platform = r.get("platform", "")
             suffix = f" ({platform})" if platform else ""
             lines.append(f"{i}. {name}{suffix}: {val:,.0f}")
@@ -209,16 +216,16 @@ def _build_insight_summary(
         for r in rows:
             plat = r.get("platform") or r.get(
                 next((k for k in r if k not in ("value",)), "group"), "?")
-            val = r.get("value", 0)
+            val = _row_metric_value(r)
             lines.append(f"  {plat}: {val:,.0f}")
         return f"{metric_label} by platform:\n" + "\n".join(lines)
 
     if len(rows) == 1:
-        val = rows[0].get("value", 0)
+        val = _row_metric_value(rows[0])
         return f"Total {metric_label}: {val:,.0f}"
 
-    total = sum(r.get("value", 0) for r in rows)
-    top = max(rows, key=lambda r: r.get("value", 0))
+    total = sum(_row_metric_value(r) for r in rows)
+    top = max(rows, key=_row_metric_value)
     top_label = next(
         (
             str(top.get(k, ""))
@@ -229,7 +236,7 @@ def _build_insight_summary(
     )
     return (
         f"{metric_label} summary ({len(rows)} groups): "
-        f"Total={total:,.0f}, Highest={top.get('value', 0):,.0f} ({top_label})"
+        f"Total={total:,.0f}, Highest={_row_metric_value(top):,.0f} ({top_label})"
     )
 
 
@@ -253,6 +260,7 @@ def _rows_to_result_data(rows: list[dict], query_category: str = "metrics") -> l
                 or r.get("published_date")
                 or r.get("content_type")
                 or r.get("media_type")
+                or r.get("beast_uuid")
                 or r.get("content_id")
                 or "Unknown"
             )
@@ -266,7 +274,7 @@ def _rows_to_result_data(rows: list[dict], query_category: str = "metrics") -> l
 
             content_field = _safe_str(r.get("content") or "")
             view_url = _build_view_url(_safe_str(r.get("platform")), r.get("content_id"))
-            formatted_value = _format_number(r.get("value", 0))
+            formatted_value = _format_number(r.get("value", r.get("metric_value", 0)))
 
             result.append(
                 {
@@ -384,6 +392,8 @@ async def run_analytics_query(
             "query_type": "publishing_insights",
             "resolved_subject": f"best_posting_time{'_' + platform_filter if platform_filter else ''}",
             "result_data": _rows_to_result_data(rows, query_category="publishing_insights"),
+            "raw_rows": rows[:100],
+            "metric": None,
             "insight_summary": insight,
             "verification": "Values sourced directly from PostgreSQL — no LLM-generated numbers.",
         }
@@ -422,6 +432,8 @@ async def run_analytics_query(
             "query_type": "compare",
             "resolved_subject": sqo.metric,
             "result_data": _rows_to_result_data(rows, query_category="compare"),
+            "raw_rows": rows[:100],
+            "metric": sqo.metric,
             "insight_summary": insight,
             "verification": "Values sourced directly from PostgreSQL — no LLM-generated numbers.",
         }
@@ -467,6 +479,8 @@ async def run_analytics_query(
         "query_type": sqo.operation,
         "resolved_subject": sqo.metric,
         "result_data": result_data,
+        "raw_rows": rows[:100],
+        "metric": sqo.metric,
         "insight_summary": insight,
         "verification": "Values sourced directly from PostgreSQL — no LLM-generated numbers.",
     }
@@ -524,11 +538,11 @@ def _build_schema_context() -> str:
         f"{metrics_text}\n\n"
         "Allowed dimension columns (use for GROUP BY / WHERE / ORDER BY):\n"
         f"{dimensions_text}\n\n"
-        "Other useful columns: title (text), content (text), content_id (text), "
+        "Other useful columns: title (text), content (text), beast_uuid (uuid), content_id (text), "
         "published_date (date), platform (text)\n"
         "CRITICAL: When grouping (GROUP BY), EVERY non-aggregated column in SELECT must be in GROUP BY.\n"
-        "Example correct query: SELECT platform, content_id, MAX(title), SUM(metric) FROM documents "
-        "GROUP BY platform, content_id  (title will be aggregated automatically).\n"
+        "Example correct query: SELECT beast_uuid, MAX(title), SUM(metric) FROM documents "
+        "GROUP BY beast_uuid  (title will be aggregated automatically).\n"
         "Example INCORRECT: SELECT platform, published_date, SUM(metric) FROM documents GROUP BY platform "
         "(missing published_date in GROUP BY).\n"
         f"Default limit: {default_limit}; absolute max limit: {max_limit}."
@@ -553,7 +567,7 @@ def _build_sql_gen_system_prompt() -> str:
         "1. ONLY SELECT from the documents table. Never use INSERT/UPDATE/DELETE/DROP/ALTER/CREATE.\n"
         "2. Use :param_name placeholders for ALL user-supplied filter values — NEVER interpolate strings.\n"
         "3. ALWAYS include LIMIT :max_rows in SQL and set params.max_rows.\n"
-        "4. For top-N: ORDER BY metric_value DESC LIMIT :max_rows and include title/content/content_id/platform.\n"
+        "4. For top-N: ORDER BY metric_value DESC LIMIT :max_rows and include title/content/beast_uuid.\n"
         "5. For publishing insights, aggregate by day using published_date and engagements.\n"
         "6. For platform filter: LOWER(platform) = LOWER(:platform).\n"
         "7. For keyword filter: (title ILIKE :keyword OR content ILIKE :keyword), with %term%.\n"
@@ -562,10 +576,10 @@ def _build_sql_gen_system_prompt() -> str:
         "10. query_category must be one of metrics | publishing_insights | compare.\n"
         "11. CRITICAL GROUP BY RULE: Every non-aggregated column in SELECT must be in GROUP BY. "
         "   Aggregated columns (SUM, MAX, AVG, MIN, COUNT) do NOT go in GROUP BY.\n"
-        "12. CONTEXTUAL FILTERING: When you see [PRIOR QUERY CONTEXT] with a TOP RESULT content_id:\n"
-        "    - If user says 'first', 'top', 'the one with most...', use WHERE content_id = :top_content_id\n"
-        "    - Example: User says 'compare top video across platforms' → WHERE content_id = :top_content_id GROUP BY platform\n"
-        "    - Extract the content_id value from the prior context and pass it in params.\n"
+        "12. CONTEXTUAL FILTERING: When you see [PRIOR QUERY CONTEXT] with a TOP RESULT beast_uuid:\n"
+        "    - If user says 'first', 'top', 'the one with most...', use WHERE beast_uuid = :top_beast_uuid\n"
+        "    - Example: User says 'compare top video across platforms' → WHERE beast_uuid = :top_beast_uuid GROUP BY platform\n"
+        "    - Extract the beast_uuid value from the prior context and pass it in params.\n"
         "13. Alias aggregated values as metric_value whenever practical."
     )
 
@@ -593,11 +607,11 @@ def _build_sql_gen_few_shot() -> list[dict[str, str]]:
             "content": json.dumps(
                 {
                     "sql": (
-                        "SELECT platform, content_id, "
+                        "SELECT beast_uuid, "
                         "MAX(NULLIF(title, '')) AS title, MAX(content) AS content, "
                         f"SUM({metric_default}) AS metric_value "
                         "FROM documents "
-                        "GROUP BY platform, content_id "
+                        "GROUP BY beast_uuid "
                         "ORDER BY metric_value DESC LIMIT :max_rows"
                     ),
                     "params": {"max_rows": 5},
@@ -652,17 +666,17 @@ def _build_sql_gen_few_shot() -> list[dict[str, str]]:
             "content": (
                 "[PRIOR QUERY CONTEXT]\n"
                 "The user's last analytics query used this SQL:\n"
-                "SELECT platform, content_id, MAX(NULLIF(title, '')) AS title, SUM(video_views) AS metric_value "
-                "FROM documents GROUP BY platform, content_id ORDER BY metric_value DESC LIMIT :max_rows\n"
+                "SELECT beast_uuid, MAX(NULLIF(title, '')) AS title, SUM(video_views) AS metric_value "
+                "FROM documents GROUP BY beast_uuid ORDER BY metric_value DESC LIMIT :max_rows\n"
                 "Metric analysed: video_views\n"
-                "Columns returned: platform, content_id, title, metric_value\n"
+                "Columns returned: beast_uuid, title, metric_value\n"
                 "RESULTS (ranked by display order):\n"
-                "  [1st/TOP] {\"platform\": \"Instagram\", \"content_id\": \"abc123\", \"title\": \"Viral Post\", \"metric_value\": \"50000\"}\n"
-                "  [2nd] {\"platform\": \"TikTok\", \"content_id\": \"def456\", \"title\": \"Trending Clip\", \"metric_value\": \"35000\"}\n"
-                "  [3rd] {\"platform\": \"YouTube\", \"content_id\": \"ghi789\", \"title\": \"Featured Video\", \"metric_value\": \"28000\"}\n"
-                "KEY REFERENCE: The TOP RESULT has content_id='abc123'.\n"
-                "When the user says 'first', 'top', or 'most...', use this content_id in WHERE clause.\n"
-                "Example: WHERE content_id = 'abc123' then GROUP BY platform to show across platforms.\n"
+                "  [1st/TOP] {\"beast_uuid\": \"11111111-1111-1111-1111-111111111111\", \"title\": \"Viral Post\", \"metric_value\": \"50000\"}\n"
+                "  [2nd] {\"beast_uuid\": \"22222222-2222-2222-2222-222222222222\", \"title\": \"Trending Clip\", \"metric_value\": \"35000\"}\n"
+                "  [3rd] {\"beast_uuid\": \"33333333-3333-3333-3333-333333333333\", \"title\": \"Featured Video\", \"metric_value\": \"28000\"}\n"
+                "KEY REFERENCE: The TOP RESULT has beast_uuid='11111111-1111-1111-1111-111111111111'.\n"
+                "When the user says 'first', 'top', or 'most...', use this beast_uuid in WHERE clause.\n"
+                "Example: WHERE beast_uuid = '11111111-1111-1111-1111-111111111111' then GROUP BY platform to show across platforms.\n"
                 "\n"
                 "User follow-up: compare the first video on all platforms"
             ),
@@ -673,10 +687,10 @@ def _build_sql_gen_few_shot() -> list[dict[str, str]]:
                 {
                     "sql": (
                         "SELECT platform, SUM(video_views) AS metric_value "
-                        "FROM documents WHERE content_id = :top_content_id "
+                        "FROM documents WHERE beast_uuid = :top_beast_uuid "
                         "GROUP BY platform ORDER BY metric_value DESC LIMIT :max_rows"
                     ),
-                    "params": {"top_content_id": "abc123", "max_rows": 10},
+                    "params": {"top_beast_uuid": "11111111-1111-1111-1111-111111111111", "max_rows": 10},
                     "metric": "video_views",
                     "operation": "compare",
                     "query_category": "compare",
@@ -745,13 +759,13 @@ async def generate_analytics_sql(
                         rank_label = "[1st/TOP]" if idx == 1 else f"[{idx}nd]" if idx == 2 else f"[{idx}rd]"
                         col_sample += f"  {rank_label} {json.dumps(row_formatted)}\n"
 
-                    # Extract first result's content_id for explicit guidance
+                    # Extract first result's beast_uuid for explicit guidance
                     first_row = prior_rows[0]
-                    first_content_id = first_row.get("content_id", "")
-                    if first_content_id:
-                        col_sample += f"\nKEY REFERENCE: The TOP RESULT has content_id='{first_content_id}'.\n"
-                        col_sample += "When the user says 'first', 'top', or 'the one with most...', use this content_id in a WHERE clause.\n"
-                        col_sample += f"Example: WHERE content_id = '{first_content_id}' then GROUP BY platform to show across platforms."
+                    first_beast_uuid = first_row.get("beast_uuid", "")
+                    if first_beast_uuid:
+                        col_sample += f"\nKEY REFERENCE: The TOP RESULT has beast_uuid='{first_beast_uuid}'.\n"
+                        col_sample += "When the user says 'first', 'top', or 'the one with most...', use this beast_uuid in a WHERE clause.\n"
+                        col_sample += f"Example: WHERE beast_uuid = '{first_beast_uuid}' then GROUP BY platform to show across platforms."
 
                 prior_context_block = (
                     f"[PRIOR QUERY CONTEXT]\n"
@@ -898,6 +912,11 @@ async def run_sql_analytics_pipeline(
             )
             # Include the final generated SQL (for debugging/visibility)
             resp["generated_sql"] = sql
+            # Preserve raw rows so follow-up prompts can reference stable IDs
+            # (e.g. beast_uuid from the "first" top-N result).
+            resp["raw_rows"] = rows[:100]
+            if sql_obj.get("metric"):
+                resp["metric"] = sql_obj.get("metric")
             _logger.info("run_sql_analytics_pipeline: generated_sql", extra={"sql_preview": sql[:400]})
             return resp
 
