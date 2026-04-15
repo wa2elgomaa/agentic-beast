@@ -21,7 +21,8 @@ import {
   GmailAuthUrlResponse,
   GmailExchangeCodeRequest,
   GmailExchangeCodeResponse,
-  PreviewEmail
+  PreviewEmail,
+  PreviewEmailsResponse,
 } from '@/types'
 
 // Helper to get auth headers
@@ -625,8 +626,12 @@ export async function cancelIngestionTaskRun(taskId: string, runId: string): Pro
   return response.json()
 }
 
-export async function previewEmailsForTask(taskId: string): Promise<{ emails: PreviewEmail[]; email_count: number }> {
-  const response = await fetch(buildApiUrl(`${APIPrefix}/admin/ingestion/tasks/${taskId}/preview-emails`), {
+export async function previewEmailsForTask(taskId: string, limit: number = 10, pageToken?: string | null): Promise<PreviewEmailsResponse> {
+  const params = new URLSearchParams({ limit: String(limit) })
+  if (pageToken) {
+    params.append('page_token', pageToken)
+  }
+  const response = await fetch(buildApiUrl(`${APIPrefix}/admin/ingestion/tasks/${taskId}/preview-emails?${params.toString()}`), {
     method: 'GET',
     headers: getAuthHeaders(),
   })

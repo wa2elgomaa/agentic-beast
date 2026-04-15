@@ -35,6 +35,7 @@ class ProcessedEmail(Base):
 
     # Outcome stats per email
     rows_inserted: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    rows_updated: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     rows_skipped: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     rows_failed: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 

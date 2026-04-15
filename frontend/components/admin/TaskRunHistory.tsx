@@ -427,7 +427,7 @@ function DetailModal({ run, childRuns, isOpen, onClose, onCancelRun, cancelingRu
           )}
 
           {/* Metadata Info */}
-          {run.run_metadata && Object.keys(run.run_metadata).length > 0 && (
+          {/* {run.run_metadata && Object.keys(run.run_metadata).length > 0 && (
             <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
               <h3 className="font-semibold text-gray-900 dark:text-white mb-3">Metadata</h3>
               <div className="space-y-2 text-sm">
@@ -441,7 +441,7 @@ function DetailModal({ run, childRuns, isOpen, onClose, onCancelRun, cancelingRu
                 ))}
               </div>
             </div>
-          )}
+          )} */}
         </div>
 
         <div className="sticky bottom-0 flex justify-end gap-3 p-6 border-t border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
@@ -525,7 +525,7 @@ export default function TaskRunHistory({ runs, onRefresh, onCancelRun, canceling
           </span>
         </td>
         <td className="px-6 py-4 text-sm font-medium text-red-700 dark:text-red-300">{run.rows_failed}</td>
-        <td className="px-6 py-4 text-sm font-medium">
+        {/* <td className="px-6 py-4 text-sm font-medium">
           {run.failed_emails_count ? (
             <span title="Emails that failed during processing" className="cursor-help px-2 py-1 rounded-full bg-orange-100 dark:bg-orange-900 text-orange-800 dark:text-orange-200 text-xs font-medium">
               {run.failed_emails_count}
@@ -533,7 +533,7 @@ export default function TaskRunHistory({ runs, onRefresh, onCancelRun, canceling
           ) : (
             <span className="text-gray-400">-</span>
           )}
-        </td>
+        </td> */}
         <td className="px-6 py-4 text-sm text-gray-600 dark:text-gray-400 max-w-xs">
           <div className="space-y-1">
             {run.error_type && (
@@ -614,7 +614,7 @@ export default function TaskRunHistory({ runs, onRefresh, onCancelRun, canceling
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Inserted</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Appended</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Failed</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Failed Emails</th>
+                {/* <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Failed Emails</th> */}
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Error</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Action</th>
               </tr>

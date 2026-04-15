@@ -1,6 +1,6 @@
 """Authentication service with JWT and LDAP support."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import bcrypt
@@ -62,12 +62,12 @@ class AuthService:
         if expires_delta is None:
             expires_delta = timedelta(hours=settings.jwt_expiration_hours)
 
-        expire = datetime.utcnow() + expires_delta
+        expire = datetime.now(timezone.utc) + expires_delta
         to_encode = {
             "sub": str(user_id),
             "username": username,
             "exp": expire,
-            "iat": datetime.utcnow(),
+            "iat": datetime.now(timezone.utc),
         }
 
         encoded_jwt = jwt.encode(

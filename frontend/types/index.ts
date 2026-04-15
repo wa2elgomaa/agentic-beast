@@ -313,7 +313,16 @@ export interface PreviewEmail {
   message_id: string
   subject: string
   from: string
+  date?: string
   attachment_count: number
+}
+
+export interface PreviewEmailsResponse {
+  emails: PreviewEmail[]
+  email_count: number
+  limit: number
+  current_page_token?: string | null
+  next_page_token?: string | null
 }
 
 export interface SchemaMappingTemplate {

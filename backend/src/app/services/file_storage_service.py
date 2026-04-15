@@ -1,6 +1,6 @@
 """Service for managing file storage in S3."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 import io
 
@@ -63,10 +63,10 @@ class FileStorageService:
         try:
             # Generate S3 key
             if task_id:
-                timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+                timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
                 s3_key = f"{self.prefix}/{task_id}/{timestamp}_{filename}"
             else:
-                timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+                timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
                 s3_key = f"{self.prefix}/{timestamp}_{filename}"
 
             logger.info(f"Uploading file to S3", s3_key=s3_key, filename=filename, size=len(file_data))

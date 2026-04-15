@@ -1,6 +1,4 @@
 """Celery background tasks for ingestion."""
-
-from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import and_, select
@@ -13,6 +11,7 @@ from app.services.failed_email_service import FailedEmailService
 from app.services.ingestion_service import IngestionCanceledError, get_ingestion_service
 from app.services.ingestion_task_service import get_ingestion_task_service
 from app.tasks.celery_app import celery_app, run_async_in_worker
+from app.utils import utc_now
 
 logger = get_logger(__name__)
 
@@ -43,7 +42,7 @@ async def _run_gmail_with_subtasks(
             await task_service.update_run(
                 parent_run_id,
                 status=RunStatus.COMPLETED,
-                completed_at=datetime.utcnow(),
+                completed_at=utc_now(),
                 rows_inserted=0,
                 rows_updated=0,
                 rows_failed=0,
@@ -92,16 +91,26 @@ async def _run_gmail_with_subtasks(
 
         try:
             await gmail_adapter.connect()
+            from app.models import ProcessedEmail
+
+            processed_stmt = select(ProcessedEmail.message_id).where(ProcessedEmail.task_id == task_id)
+            processed_result = await db.execute(processed_stmt)
+            exclude_ids = {row[0] for row in processed_result.all() if row and row[0]}
 
             # Fetch full email objects (with attachments/links)
+            # Use page+limit pagination for bulk fetch. Use task-configured
+            # max_results as the page size for this operation (default 25).
+            fetch_limit = int(task_config.get("max_results", 25))
             emails = await gmail_adapter.fetch_data(
                 query=task_config.get("gmail_query", ""),
                 sender_filter=task_config.get("sender_filter"),
                 subject_pattern=task_config.get("subject_pattern"),
-                max_results=task_config.get("max_results", 25),
+                page_token=None,
+                limit=fetch_limit,
                 source_type=task_config.get("gmail_source_type", "attachment"),
                 link_regex=task_config.get("download_link_regex") or r"https?://\S+",
                 allowed_extensions=task_config.get("allowed_extensions"),
+                exclude_message_ids=exclude_ids,
             )
 
             # Extract message IDs from full emails
@@ -112,16 +121,29 @@ async def _run_gmail_with_subtasks(
                 await task_service.update_run(
                     parent_run_id,
                     status=RunStatus.COMPLETED,
-                    completed_at=datetime.utcnow(),
+                    completed_at=utc_now(),
                 )
                 await db.commit()
                 return
 
-            # Create sub-tasks for each email
-            child_runs_config = await ingestion_service.create_email_subtasks(task_id, parent_run_id, message_ids)
-
             # Map message_id to full email dict for queue task
             email_by_id = {email.get("message_id"): email for email in emails}
+
+            # Build per-message metadata to embed in child run records at creation time
+            subtask_email_metadata = {
+                e.get("message_id"): {
+                    "email_subject": e.get("subject") or "",
+                    "email_sent_at": e.get("date") or "",
+                    "date": e.get("date") or "",
+                    "sent_at": e.get("date") or "",
+                }
+                for e in emails if e.get("message_id")
+            }
+
+            # Create sub-tasks for each email, embedding metadata from the start
+            child_runs_config = await ingestion_service.create_email_subtasks(
+                task_id, parent_run_id, message_ids, email_metadata=subtask_email_metadata
+            )
 
             # Queue Celery task for each child run
             for child_run_id, message_id in child_runs_config:
@@ -140,57 +162,21 @@ async def _run_gmail_with_subtasks(
                         celery_task_id=celery_result.id,
                     )
 
-            # Persist subject and sent date into child run metadata and parent run metadata
+            # Update parent run metadata with email list summary
             try:
-                from sqlalchemy import select
-                from app.models import IngestionTaskRun
-
-                for child_run_id, message_id in child_runs_config:
-                    email_dict = email_by_id.get(message_id)
-                    if not email_dict:
-                        continue
-                    stmt = select(IngestionTaskRun).where(IngestionTaskRun.id == child_run_id)
-                    result = await db.execute(stmt)
-                    child_run = result.scalar_one_or_none()
-                    if child_run:
-                        meta = child_run.run_metadata or {}
-                        meta.update(
-                            {
-                                "selected_message_id": message_id,
-                                "email_subject": email_dict.get("subject") or "",
-                                "email_sent_at": email_dict.get("date") or "",
-                            }
-                        )
-                        child_run.run_metadata = meta
-                        db.add(child_run)
-
-                # Update parent run metadata emails list
                 parent_meta = (await task_service.get_run(parent_run_id)).run_metadata or {}
-                emails_list = parent_meta.get("emails", [])
-                for _child_run_id, message_id in child_runs_config:
-                    email_dict = email_by_id.get(message_id)
-                    if not email_dict:
-                        continue
-                    emails_list.append(
-                        {
-                            "message_id": message_id,
-                            "subject": email_dict.get("subject") or "",
-                            "sent_at": email_dict.get("date") or "",
-                        }
-                    )
-                parent_meta["emails"] = emails_list
+                parent_meta["emails"] = [
+                    {
+                        "message_id": message_id,
+                        "subject": (email_by_id[message_id].get("subject") or "") if message_id in email_by_id else "",
+                        "sent_at": (email_by_id[message_id].get("date") or "") if message_id in email_by_id else "",
+                    }
+                    for _child_run_id, message_id in child_runs_config
+                ]
                 await task_service.update_run(parent_run_id, status=RunStatus.PENDING, run_metadata=parent_meta)
                 await db.commit()
             except Exception as e:
-                logger.warning("Failed to persist email metadata for sub-tasks", error=str(e), task_id=task_id, parent_run_id=parent_run_id)
-
-            # Update parent run to reflect that sub-tasks are queued
-            await task_service.update_run(
-                parent_run_id,
-                status=RunStatus.PENDING,
-                run_metadata={"subtask_count": len(child_runs_config)},
-            )
-            await db.commit()
+                logger.warning("Failed to persist parent email metadata", error=str(e), task_id=task_id, parent_run_id=parent_run_id)
 
             logger.info(
                 "Gmail sub-tasks created and queued",
@@ -213,7 +199,7 @@ async def _run_gmail_with_subtasks(
 
 
 @celery_app.task(bind=True, name="app.tasks.ingestion_tasks.run_ingestion_task")
-def run_ingestion_task(self, task_id: str, run_id: str = None):
+def run_ingestion_task(self, task_id: str, run_id: str | None = None):
     """Run an ingestion task (scheduled or manual trigger).
 
     Args:
@@ -221,6 +207,7 @@ def run_ingestion_task(self, task_id: str, run_id: str = None):
         run_id: Optional UUID of the task run (created if not provided).
     """
     async def _run():
+        run_id_obj: UUID | None = None
         async with AsyncSessionLocal() as db:
             try:
                 task_id_obj = UUID(task_id)  
@@ -243,13 +230,10 @@ def run_ingestion_task(self, task_id: str, run_id: str = None):
                     return
 
                 # Update run status to running
-                await task_service.update_run(run_id_obj, status=RunStatus.RUNNING, started_at=datetime.utcnow())
+                await task_service.update_run(run_id_obj, status=RunStatus.RUNNING, started_at=utc_now())
                 await db.commit()
 
                 # Get task to check adaptor type
-                from sqlalchemy import select
-                from app.models import IngestionTask
-
                 stmt = select(IngestionTask).where(IngestionTask.id == task_id_obj)
                 task_result = await db.execute(stmt)
                 task = task_result.scalar_one_or_none()
@@ -278,7 +262,7 @@ def run_ingestion_task(self, task_id: str, run_id: str = None):
                     await task_service.update_run(
                         run_id_obj,
                         status=status_val,
-                        completed_at=datetime.utcnow(),
+                        completed_at=utc_now(),
                         rows_inserted=result.rows_inserted,
                         rows_updated=result.rows_updated,
                         rows_failed=result.rows_failed,
@@ -303,7 +287,7 @@ def run_ingestion_task(self, task_id: str, run_id: str = None):
                     await task_service.update_run(
                         run_id_obj,
                         status=RunStatus.CANCELED,
-                        completed_at=datetime.utcnow(),
+                        completed_at=utc_now(),
                         rows_inserted=e.rows_inserted,
                         rows_updated=e.rows_updated,
                         rows_failed=e.rows_failed,
@@ -325,7 +309,7 @@ def run_ingestion_task(self, task_id: str, run_id: str = None):
                             await task_service.update_run(
                                 run_id_obj,
                                 status=RunStatus.FAILED,
-                                completed_at=datetime.utcnow(),
+                                completed_at=utc_now(),
                                 error_message=str(e),
                             )
                             await db2.commit()
@@ -381,15 +365,45 @@ def run_ingestion_task_single_email(self, run_id: str, email_dict: dict, task_id
                 identifier_column = task_mapping.identifier_column if task_mapping else None
                 connection_strategy_column = task_mapping.connection_strategy_identifier_column if task_mapping else None
 
+                # Early-exit: skip cleanly if the run is already in a terminal state
+                # (e.g. canceled by admin before Celery picked it up).
+                task_service = get_ingestion_task_service(db)
+                run_pre = await task_service.get_run(run_id_obj)
+                if run_pre is None:
+                    logger.warning(
+                        "Skipping single email task because run does not exist",
+                        run_id=run_id,
+                        task_id=task_id,
+                        message_id=email_dict.get("message_id", ""),
+                    )
+                    return
+                if run_pre.status in (
+                    RunStatus.CANCELED, RunStatus.COMPLETED,
+                    RunStatus.FAILED, RunStatus.PARTIAL,
+                ):
+                    logger.info(
+                        "Skipping single email run already in terminal state",
+                        run_id=run_id,
+                        status=run_pre.status,
+                    )
+                    return
+
                 # Initialize dedup service if configured
                 dedup_service = None
                 if task.deduplication_enabled:
                     from app.services.deduplication_service import get_deduplication_service
                     dedup_service = await get_deduplication_service(db, task_id_obj)
 
-                # Update run status to running
-                task_service = get_ingestion_task_service(db)
-                await task_service.update_run(run_id_obj, status=RunStatus.RUNNING, started_at=datetime.utcnow())
+                # Mark as RUNNING, stripping any residual cancel_requested flag so
+                # _is_run_canceled does not immediately re-cancel this run.
+                clean_meta = {
+                    k: v for k, v in (run_pre.run_metadata or {}).items()
+                    if k not in ("cancel_requested", "cancel_requested_at")
+                }
+                run_pre.run_metadata = clean_meta
+                run_pre.status = RunStatus.RUNNING
+                run_pre.started_at = utc_now()
+                db.add(run_pre)
                 await db.commit()
 
                 # Initialize Gmail adapter for the email processing
@@ -443,6 +457,7 @@ def run_ingestion_task_single_email(self, run_id: str, email_dict: dict, task_id
                             sender=sender,
                             task_id=task_id_obj,
                             rows_inserted=email_result.rows_inserted,
+                            rows_updated=email_result.rows_updated,
                             rows_skipped=email_result.rows_skipped,
                             rows_failed=email_result.rows_failed,
                             is_success=email_result.is_success,
@@ -459,7 +474,7 @@ def run_ingestion_task_single_email(self, run_id: str, email_dict: dict, task_id
                     await task_service.update_run(
                         run_id_obj,
                         status=final_status,
-                        completed_at=datetime.utcnow(),
+                        completed_at=utc_now(),
                         rows_inserted=email_result.rows_inserted,
                         rows_updated=email_result.rows_updated,
                         rows_failed=email_result.rows_failed,
@@ -494,6 +509,39 @@ def run_ingestion_task_single_email(self, run_id: str, email_dict: dict, task_id
                     except Exception as disconnect_error:
                         logger.warning("Failed to disconnect Gmail adapter", error=str(disconnect_error))
 
+            except IngestionCanceledError as e:
+                logger.info(
+                    "Single email processing canceled",
+                    run_id=run_id,
+                    task_id=task_id,
+                )
+
+                try:
+                    await db.rollback()
+                    async with AsyncSessionLocal() as db2:
+                        task_service = get_ingestion_task_service(db2)
+
+                        run = await task_service.get_run(UUID(run_id))
+                        parent_run_id = run.parent_run_id if run else None
+
+                        await task_service.update_run(
+                            UUID(run_id),
+                            status=RunStatus.CANCELED,
+                            completed_at=utc_now(),
+                            rows_inserted=e.rows_inserted,
+                            rows_updated=e.rows_updated,
+                            rows_failed=e.rows_failed,
+                            error_message=str(e),
+                        )
+                        await db2.commit()
+
+                        if parent_run_id:
+                            await task_service.aggregate_child_stats_to_parent(parent_run_id)
+                            await db2.commit()
+                except Exception as update_error:
+                    logger.error("Failed to update canceled run status", error=str(update_error))
+                return
+
             except Exception as e:
                 logger.error(
                     "Single email processing failed",
@@ -501,6 +549,16 @@ def run_ingestion_task_single_email(self, run_id: str, email_dict: dict, task_id
                     task_id=task_id,
                     error=str(e)
                 )
+
+                # If the run row no longer exists (or never persisted), do not
+                # fail the Celery task as unexpected; exit gracefully.
+                if "Run not found" in str(e):
+                    logger.warning(
+                        "Skipping single email task due to missing run record",
+                        run_id=run_id,
+                        task_id=task_id,
+                    )
+                    return
 
                 # Update run with error status
                 try:
@@ -515,7 +573,7 @@ def run_ingestion_task_single_email(self, run_id: str, email_dict: dict, task_id
                         await task_service.update_run(
                             UUID(run_id),
                             status=RunStatus.FAILED,
-                            completed_at=datetime.utcnow(),
+                            completed_at=utc_now(),
                             error_message=str(e),
                         )
                         await db2.commit()
@@ -531,6 +589,9 @@ def run_ingestion_task_single_email(self, run_id: str, email_dict: dict, task_id
 
     try:
         run_async_in_worker(_run())
+    except IngestionCanceledError as e:
+        logger.info("Single email Celery task canceled", error=str(e), run_id=run_id)
+        return
     except Exception as e:
         logger.error("Single email Celery task failed", error=str(e), run_id=run_id)
         raise
@@ -546,6 +607,7 @@ def process_webhook_payload(self, task_id: str, run_id: str, payload: dict):
         payload: Webhook payload dict.
     """
     async def _process():
+        run_id_obj: UUID | None = None
         async with AsyncSessionLocal() as db:
             try:
                 task_id_obj = UUID(task_id)
@@ -555,7 +617,7 @@ def process_webhook_payload(self, task_id: str, run_id: str, payload: dict):
 
                 # Update run status to running
                 task_service = get_ingestion_task_service(db)
-                await task_service.update_run(run_id_obj, status=RunStatus.RUNNING, started_at=datetime.utcnow())
+                await task_service.update_run(run_id_obj, status=RunStatus.RUNNING, started_at=utc_now())
                 await db.commit()
 
                 # Run ingestion
@@ -567,7 +629,7 @@ def process_webhook_payload(self, task_id: str, run_id: str, payload: dict):
                 await task_service.update_run(
                     run_id_obj,
                     status=status_val,
-                    completed_at=datetime.utcnow(),
+                    completed_at=utc_now(),
                     rows_inserted=result.rows_inserted,
                     rows_updated=result.rows_updated,
                     rows_failed=result.rows_failed,
@@ -579,11 +641,14 @@ def process_webhook_payload(self, task_id: str, run_id: str, payload: dict):
             except IngestionCanceledError as e:
                 logger.info("Webhook payload processing canceled", task_id=task_id, run_id=run_id)
 
+                if run_id_obj is None:
+                    return
+
                 task_service = get_ingestion_task_service(db)
                 await task_service.update_run(
                     run_id_obj,
                     status=RunStatus.CANCELED,
-                    completed_at=datetime.utcnow(),
+                    completed_at=utc_now(),
                     rows_inserted=e.rows_inserted,
                     rows_updated=e.rows_updated,
                     rows_failed=e.rows_failed,
@@ -604,7 +669,7 @@ def process_webhook_payload(self, task_id: str, run_id: str, payload: dict):
                         await task_service.update_run(
                             UUID(run_id),
                             status=RunStatus.FAILED,
-                            completed_at=datetime.utcnow(),
+                            completed_at=utc_now(),
                             error_message=str(e),
                         )
                         await db2.commit()

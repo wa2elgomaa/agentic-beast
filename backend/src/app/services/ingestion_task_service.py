@@ -1,6 +1,6 @@
 """Service for managing ingestion tasks and runs."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List, Tuple
 from uuid import UUID
 
@@ -11,6 +11,7 @@ from app.config import settings
 from app.logging import get_logger
 from app.models import IngestionTask, IngestionTaskRun, AdaptorType, ScheduleType, TaskStatus, RunStatus
 from app.tasks.celery_app import celery_app
+from app.utils import utc_now
 
 logger = get_logger(__name__)
 
@@ -27,7 +28,7 @@ class IngestionTaskService:
         """Return run metadata updated with a cooperative stop request marker."""
         metadata = dict(run_metadata or {})
         metadata["cancel_requested"] = True
-        metadata["cancel_requested_at"] = datetime.utcnow().isoformat()
+        metadata["cancel_requested_at"] = datetime.now(timezone.utc).isoformat()
         return metadata
 
     async def create_task(
@@ -454,13 +455,21 @@ class IngestionTaskService:
 
             if run.status == RunStatus.PENDING:
                 run.status = RunStatus.CANCELED
-                run.completed_at = datetime.utcnow()
+                run.completed_at = utc_now()
                 run.error_message = "Canceled by user"
+                if run.celery_task_id:
+                    try:
+                        celery_app.control.revoke(run.celery_task_id, terminate=True, signal='SIGTERM')
+                        logger.info("Pending Celery task revoked", celery_task_id=run.celery_task_id, run_id=run_id)
+                    except Exception as e:
+                        logger.warning("Failed to revoke pending Celery task", celery_task_id=run.celery_task_id, error=str(e))
             elif run.status == RunStatus.RUNNING:
                 if (run.run_metadata or {}).get("cancel_requested"):
                     return run
                 run.run_metadata = self._cancel_requested_metadata(run.run_metadata)
-                run.error_message = "Stop requested by user"
+                run.error_message = "Canceled by user"
+                run.status = RunStatus.CANCELED
+                run.completed_at = utc_now()
 
                 # Revoke the Celery task if we have its ID
                 if run.celery_task_id:
@@ -487,11 +496,19 @@ class IngestionTaskService:
                 for child_run in child_runs:
                     if child_run.status == RunStatus.PENDING:
                         child_run.status = RunStatus.CANCELED
-                        child_run.completed_at = datetime.utcnow()
+                        child_run.completed_at = utc_now()
                         child_run.error_message = "Canceled by user (parent run stopped)"
+                        if child_run.celery_task_id:
+                            try:
+                                celery_app.control.revoke(child_run.celery_task_id, terminate=True, signal='SIGTERM')
+                                logger.info("Pending child Celery task revoked", celery_task_id=child_run.celery_task_id, child_run_id=child_run.id)
+                            except Exception as e:
+                                logger.warning("Failed to revoke pending child Celery task", celery_task_id=child_run.celery_task_id, error=str(e))
                     elif child_run.status == RunStatus.RUNNING:
                         child_run.run_metadata = self._cancel_requested_metadata(child_run.run_metadata)
-                        child_run.error_message = "Stop requested by user (parent run stopped)"
+                        child_run.error_message = "Canceled by user (parent run stopped)"
+                        child_run.status = RunStatus.CANCELED
+                        child_run.completed_at = utc_now()
 
                         # Revoke child's Celery task if we have its ID
                         if child_run.celery_task_id:
@@ -589,7 +606,7 @@ class IngestionTaskService:
 
             # Set completion time if all children are done
             if pending_count == 0 and running_count == 0:
-                parent.completed_at = datetime.utcnow()
+                parent.completed_at = utc_now()
 
             self.db.add(parent)
             await self.db.flush()

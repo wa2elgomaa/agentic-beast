@@ -3,7 +3,7 @@
 import json
 import uuid
 from abc import ABC, abstractmethod
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import redis.asyncio as redis
@@ -31,7 +31,7 @@ class AgentHealthStatus:
         """Initialize health status."""
         self.status = status
         self.error = error
-        self.last_check = datetime.utcnow()
+        self.last_check = datetime.now(timezone.utc)
 
 
 class BaseAgent(ABC):

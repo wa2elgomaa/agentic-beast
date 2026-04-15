@@ -1,6 +1,4 @@
 """Service for managing Gmail OAuth credential lifecycle and status tracking."""
-
-from datetime import datetime
 from enum import Enum
 from typing import Optional
 from uuid import UUID
@@ -10,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.logging import get_logger
 from app.models import GmailCredentialStatus, GmailCredentialAuditLog
+from app.utils import utc_now
 
 logger = get_logger(__name__)
 
@@ -102,9 +101,9 @@ class GmailCredentialService:
             if status == GmailCredentialHealthStatus.ACTIVE:
                 cred_status.consecutive_failures = 0
                 cred_status.health_score = 100
-                cred_status.last_used_at = datetime.utcnow()
+                cred_status.last_used_at = utc_now()
 
-        cred_status.updated_at = datetime.utcnow()
+        cred_status.updated_at = utc_now()
         self.db.add(cred_status)
         await self.db.flush()
 
@@ -128,7 +127,7 @@ class GmailCredentialService:
             if status.consecutive_failures >= status.max_consecutive_failures:
                 status.status = GmailCredentialHealthStatus.NEEDS_REFRESH.value
 
-        status.updated_at = datetime.utcnow()
+        status.updated_at = utc_now()
         self.db.add(status)
         await self.db.flush()
 
@@ -140,8 +139,8 @@ class GmailCredentialService:
         if status:
             status.consecutive_failures = 0
             status.health_score = 100
-            status.last_used_at = datetime.utcnow()
-            status.updated_at = datetime.utcnow()
+            status.last_used_at = utc_now()
+            status.updated_at = utc_now()
             self.db.add(status)
             await self.db.flush()
 

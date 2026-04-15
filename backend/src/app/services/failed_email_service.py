@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.failed_email_queue import FailedEmailQueue
 from app.models.ingestion_task import IngestionTaskRun
+from app.utils import utc_now
 
 
 class FailedEmailService:
@@ -77,10 +78,10 @@ class FailedEmailService:
             failed_email.error_count += 1
             failed_email.failure_reason = failure_reason
             failed_email.error_message = error_message
-            failed_email.last_attempted_at = datetime.utcnow()
+            failed_email.last_attempted_at = utc_now()
             # Recalculate next retry based on new error_count
             failed_email.next_retry_at = self._calculate_next_retry_time(failed_email.error_count)
-            failed_email.updated_at = datetime.utcnow()
+            failed_email.updated_at = utc_now()
         else:
             # Create new failed email record
             failed_email = FailedEmailQueue(
@@ -111,7 +112,7 @@ class FailedEmailService:
             select(FailedEmailQueue).where(
                 and_(
                     FailedEmailQueue.task_id == task_id,
-                    FailedEmailQueue.next_retry_at <= datetime.utcnow(),
+                    FailedEmailQueue.next_retry_at <= utc_now(),
                 )
             )
         )
@@ -144,9 +145,9 @@ class FailedEmailService:
             return None
 
         failed_email.error_count += 1
-        failed_email.last_attempted_at = datetime.utcnow()
+        failed_email.last_attempted_at = utc_now()
         failed_email.next_retry_at = self._calculate_next_retry_time(failed_email.error_count)
-        failed_email.updated_at = datetime.utcnow()
+        failed_email.updated_at = utc_now()
 
         return failed_email
 
@@ -196,7 +197,7 @@ class FailedEmailService:
             select(FailedEmailQueue).where(
                 and_(
                     FailedEmailQueue.task_id == task_id,
-                    FailedEmailQueue.next_retry_at <= datetime.utcnow(),
+                    FailedEmailQueue.next_retry_at <= utc_now(),
                 )
             )
             .order_by(FailedEmailQueue.next_retry_at.asc())
@@ -217,7 +218,7 @@ class FailedEmailService:
         Returns:
             Datetime when email is eligible for retry
         """
-        now = datetime.utcnow()
+        now = utc_now()
 
         if error_count == 1:
             # First failure: retry after 1 hour
