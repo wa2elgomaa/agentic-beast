@@ -25,44 +25,64 @@ def split_sentences(text: str) -> list[str]:
     return [s.strip() for s in parts if s.strip()]
 
 
+async def _safe_send_json(websocket: WebSocket, payload) -> bool:
+    """Send JSON on websocket but swallow WebSocketDisconnect so caller can exit gracefully.
+
+    Returns True if send succeeded, False if the connection is closed or send failed.
+    """
+    try:
+        await websocket.send_json(payload)
+        return True
+    except WebSocketDisconnect:
+        logger.info("WebSocket closed before send_json could complete")
+        return False
+    except Exception:
+        logger.exception("Unexpected error sending websocket JSON")
+        return False
+
+
 async def _authenticate_websocket(websocket: WebSocket):
     """Authenticate a websocket connection using the JWT query token."""
     token = websocket.query_params.get("token")
     if not token:
         await websocket.accept()
-        await websocket.send_json(
-            ServerEvent(type="error", message="Missing authentication token.").as_payload()
+        sent = await _safe_send_json(
+            websocket, ServerEvent(type="error", message="Missing authentication token.").as_payload()
         )
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        if sent:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return None
 
     auth_service = get_auth_service()
     payload = auth_service.verify_token(token)
     if payload is None:
         await websocket.accept()
-        await websocket.send_json(
-            ServerEvent(type="error", message="Invalid authentication token.").as_payload()
+        sent = await _safe_send_json(
+            websocket, ServerEvent(type="error", message="Invalid authentication token.").as_payload()
         )
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        if sent:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return None
 
     user_id = payload.get("sub")
     if not user_id:
         await websocket.accept()
-        await websocket.send_json(
-            ServerEvent(type="error", message="Invalid authentication payload.").as_payload()
+        sent = await _safe_send_json(
+            websocket, ServerEvent(type="error", message="Invalid authentication payload.").as_payload()
         )
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        if sent:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return None
 
     async with AsyncSessionLocal() as session:
         user = await UserService(session).get_user_by_id(user_id)
         if user is None or not user.is_active:
             await websocket.accept()
-            await websocket.send_json(
-                ServerEvent(type="error", message="Inactive or missing user.").as_payload()
+            sent = await _safe_send_json(
+                websocket, ServerEvent(type="error", message="Inactive or missing user.").as_payload()
             )
-            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            if sent:
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             return None
         return user
 
@@ -85,17 +105,20 @@ async def realtime_chat(websocket: WebSocket):
         )
     except Exception as exc:
         logger.exception("Failed to create realtime session", error=str(exc))
-        await websocket.send_json(
+        sent = await _safe_send_json(
+            websocket,
             ServerEvent(
                 type="error",
                 message=f"Realtime session could not be started: {exc}",
-            ).as_payload()
+            ).as_payload(),
         )
-        await websocket.close(code=1011)
+        if sent:
+            await websocket.close(code=1011)
         return
     session_id = session["session_id"]
 
-    await websocket.send_json(
+    if not await _safe_send_json(
+        websocket,
         ServerEvent(
             type="session_ready",
             session_id=session_id,
@@ -105,16 +128,20 @@ async def realtime_chat(websocket: WebSocket):
                 "enabled": provider_status["enabled"],
                 "ready": provider_status["ready"],
             },
-        ).as_payload()
-    )
-    await websocket.send_json(
+        ).as_payload(),
+    ):
+        return
+
+    if not await _safe_send_json(
+        websocket,
         ServerEvent(
             type="provider_status",
             session_id=session_id,
             message="Provider status loaded.",
             data=provider_status,
-        ).as_payload()
-    )
+        ).as_payload(),
+    ):
+        return
 
     try:
         while True:

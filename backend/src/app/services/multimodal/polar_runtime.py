@@ -74,13 +74,36 @@ class PolarRuntimeService(MultimodalProvider):
 
         self._model_path = self._resolve_model_path()
         logger.info("Loading Polar multimodal runtime", model_path=self._model_path)
-        engine = litert_lm.Engine(
-            self._model_path,
-            backend=litert_lm.Backend.GPU,
-            vision_backend=litert_lm.Backend.GPU,
-            audio_backend=litert_lm.Backend.CPU,
-        )
-        engine.__enter__()
+
+        # Prefer GPU backends but fall back to CPU if GPU/WebGPU initialization fails
+        try:
+            engine = litert_lm.Engine(
+                self._model_path,
+                backend=litert_lm.Backend.GPU,
+                vision_backend=litert_lm.Backend.GPU,
+                audio_backend=litert_lm.Backend.CPU,
+            )
+            engine.__enter__()
+        except Exception as exc_gpu:
+            logger.warning(
+                "Failed to initialize GPU multimodal runtime, attempting CPU fallback",
+                error=str(exc_gpu),
+            )
+            try:
+                engine = litert_lm.Engine(
+                    self._model_path,
+                    backend=litert_lm.Backend.CPU,
+                    vision_backend=litert_lm.Backend.CPU,
+                    audio_backend=litert_lm.Backend.CPU,
+                )
+                engine.__enter__()
+                logger.info("Polar multimodal runtime loaded with CPU backend", model_path=self._model_path)
+            except Exception as exc_cpu:
+                logger.exception(
+                    "Failed to initialize multimodal runtime with GPU and CPU backends",
+                    error=str(exc_cpu),
+                )
+                raise
 
         self._engine = engine
         self._tts_backend = load_tts_backend(settings.multimodal_tts_backend)
