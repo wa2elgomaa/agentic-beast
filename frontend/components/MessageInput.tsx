@@ -229,6 +229,7 @@ export default function MessageInput({
         }
 
         setCameraEnabled(nextEnabled)
+        onCameraEnabledChange?.(nextEnabled)
         setAudioError('')
       } catch (error) {
         setAudioError(error instanceof Error ? error.message : 'Camera access failed.')
@@ -237,6 +238,7 @@ export default function MessageInput({
     }
 
     setCameraEnabled(nextEnabled)
+    onCameraEnabledChange?.(nextEnabled)
   }
 
   const startAudioMode = async () => {
@@ -356,9 +358,9 @@ export default function MessageInput({
     }
   }
 
-  useEffect(() => {
-    onCameraEnabledChange?.(cameraEnabled)
-  }, [cameraEnabled, onCameraEnabledChange])
+  // useEffect(() => {
+  //   onCameraEnabledChange?.(cameraEnabled)
+  // }, [cameraEnabled, onCameraEnabledChange])
 
   useEffect(() => {
     return () => {
@@ -448,14 +450,15 @@ export default function MessageInput({
           <p className="text-xs text-gray-500 text-center">
             The Beast AI can make mistakes. Please verify important information.
           </p>
-          {audioModeState === 'listening' ? <button
+          {/* {audioModeState === 'listening' ? <button
             id="cameraToggle"
             type="button"
             onClick={() => void handleCameraToggle()}
             className={`${styles.ctrlBtn} ${cameraEnabled ? styles.active : ''}`}
           >
             {cameraEnabled ? 'Camera On' : 'Camera Off'}
-          </button> : <div></div>}
+          </button> : <div></div>} */}
+          <div></div>
         </div>
       </div>
     </div>
