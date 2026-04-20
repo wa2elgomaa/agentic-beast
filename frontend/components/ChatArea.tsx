@@ -7,6 +7,8 @@ import ChatMessage from './ChatMessage'
 import MessageInput, { AudioModeState, VoiceCapturePayload } from './MessageInput'
 import WelcomeScreen from './WelcomeScreen'
 import { buildRealtimeChatWsUrl, chat, getAccessToken } from '@/lib/api'
+import useAudioPlayer from '@/hooks/useAudioPlayer'
+import { useRealtimeChat } from '@/hooks/useRealtimeChat'
 import clsx from 'clsx'
 
 type VoiceState = 'loading' | 'listening' | 'processing' | 'speaking'
@@ -44,8 +46,83 @@ export default function ChatArea({
   const [cameraEnabled, setCameraEnabled] = useState(false)
   const [mediaStream, setMediaStream] = useState<MediaStream | null>(null)
   const [analyser, setAnalyser] = useState<AnalyserNode | null>(null)
-  const playbackAudioCtxRef = useRef<AudioContext | null>(null)
-  const playbackOffsetRef = useRef(0)
+  const [playingStreams, setPlayingStreams] = useState<Record<string, boolean>>({})
+  const audioPlayer = useAudioPlayer({
+    onStreamStart: (id) => setPlayingStreams((s) => ({ ...s, [id]: true })),
+    onStreamEnd: (id) => setPlayingStreams((s) => ({ ...s, [id]: false })),
+  })
+  const [pauseListening, setPauseListening] = useState(false)
+
+  const messagesRef = useRef<Message[]>(messages)
+  useEffect(() => { messagesRef.current = messages }, [messages])
+
+  const token = getAccessToken()
+  const realtime = useRealtimeChat({
+    enabled: !!token,
+    token,
+    conversationId: currentConversationId,
+    onEvent: (event) => {
+      try {
+        if (!event || typeof event.type !== 'string') return
+
+        if (event.type === 'audio_start') {
+          // Pause local listening/transcription while assistant TTS streams
+          setPauseListening(true)
+          const streamId = (event.data && (event.data as any).stream_id) || null
+          const sampleRate = (event.data && (event.data as any).sample_rate) || 24000
+          const targetId = streamId || (messagesRef.current.slice().reverse().find(m => m.role === 'assistant')?.id)
+          if (targetId) {
+            void audioPlayer.startStream(targetId, sampleRate)
+          }
+          return
+        }
+
+        if (event.type === 'audio_chunk') {
+          const chunk = event.data && (event.data as any).audio
+          const streamId = (event.data && (event.data as any).stream_id) || null
+          const targetId = streamId || (messagesRef.current.slice().reverse().find(m => m.role === 'assistant')?.id)
+          if (typeof chunk === 'string' && targetId) {
+            void audioPlayer.appendChunk(targetId, chunk)
+          }
+          return
+        }
+
+        if (event.type === 'audio_end') {
+          // Resume listening/transcription after assistant TTS finished
+          setPauseListening(false)
+          const streamId = (event.data && (event.data as any).stream_id) || null
+          const targetId = streamId || (messagesRef.current.slice().reverse().find(m => m.role === 'assistant')?.id)
+          if (targetId) {
+            void audioPlayer.endStream(targetId)
+          }
+          return
+        }
+      } catch {
+        // ignore event processing errors
+      }
+    }
+  })
+  const [audioAvailable, setAudioAvailable] = useState<boolean | null>(null)
+
+  useEffect(() => {
+    let mounted = true
+    ;(async () => {
+      try {
+        const ctx = await audioPlayer.ensureAudioContext()
+        if (!mounted) return
+        setAudioAvailable(ctx?.state === 'running')
+      } catch {
+        if (!mounted) return
+        setAudioAvailable(false)
+      }
+    })()
+    return () => { mounted = false }
+  }, [audioPlayer])
+
+  const handleEnableAudio = async () => {
+    const ok = await audioPlayer.resume()
+    setAudioAvailable(!!ok)
+  }
   const voiceState: VoiceState = isLoading
     ? 'processing'
     : audioModeState === 'listening'
@@ -132,53 +209,13 @@ export default function ChatArea({
     return canvas.toDataURL('image/jpeg', 0.7).split(',')[1]
   }, [cameraEnabled])
 
-  const decodeBase64ToInt16 = useCallback((base64: string) => {
-    const binary = atob(base64)
-    const bytes = new Uint8Array(binary.length)
-    for (let i = 0; i < binary.length; i += 1) {
-      bytes[i] = binary.charCodeAt(i)
-    }
-    return new Int16Array(bytes.buffer)
-  }, [])
-
-  const playAudioChunk = useCallback(async (pcmChunkBase64: string, sampleRate: number) => {
-    if (typeof window === 'undefined') {
-      return
-    }
-
-    const PCM_MAX_INT16 = 32768
-    if (!playbackAudioCtxRef.current || playbackAudioCtxRef.current.state === 'closed') {
-      playbackAudioCtxRef.current = new AudioContext()
-      playbackOffsetRef.current = 0
-    }
-
-    const audioCtx = playbackAudioCtxRef.current
-    if (audioCtx.state === 'suspended') {
-      await audioCtx.resume()
-    }
-
-    const pcm = decodeBase64ToInt16(pcmChunkBase64)
-    const audioBuffer = audioCtx.createBuffer(1, pcm.length, sampleRate)
-    const channel = audioBuffer.getChannelData(0)
-    for (let i = 0; i < pcm.length; i += 1) {
-      channel[i] = pcm[i] / PCM_MAX_INT16
-    }
-
-    const source = audioCtx.createBufferSource()
-    source.buffer = audioBuffer
-    source.connect(audioCtx.destination)
-
-    const now = audioCtx.currentTime
-    const startAt = Math.max(now, playbackOffsetRef.current || now)
-    source.start(startAt)
-    playbackOffsetRef.current = startAt + audioBuffer.duration
-  }, [decodeBase64ToInt16])
+  // audioPlayer provides scheduling and playback lifecycle
 
   const runRealtimeVoiceTurn = useCallback(async (payload: {
     audioBase64: string
     imageBase64?: string | null
     durationMs: number
-  }) => {
+  }, streamId?: string) => {
     const token = getAccessToken()
     if (!token) {
       throw new Error('Missing authentication token for realtime chat.')
@@ -190,9 +227,11 @@ export default function ChatArea({
       let assistantText = ''
       let sampleRate = 24000
       let audioStarted = false
+        let assistantTextTimeout: number | null = null
 
       const wsUrl = buildRealtimeChatWsUrl(token, currentConversationId)
       const socket = new WebSocket(wsUrl)
+      console.debug('[realtime] opening websocket', wsUrl)
       const timeoutId = window.setTimeout(() => {
         if (finalized) {
           return
@@ -226,23 +265,31 @@ export default function ChatArea({
       }
 
       socket.onopen = () => {
-        socket.send(JSON.stringify({
-          type: 'audio',
-          audio: payload.audioBase64,
-          image: payload.imageBase64 || undefined,
-          conversation_id: currentConversationId,
-          metadata: {
-            media_duration_ms: payload.durationMs,
-          },
-        }))
+        console.debug('[realtime] websocket open, sending audio event')
+        try {
+          socket.send(JSON.stringify({
+            type: 'audio',
+            audio: payload.audioBase64,
+            image: payload.imageBase64 || undefined,
+            conversation_id: currentConversationId,
+            metadata: {
+              media_duration_ms: payload.durationMs,
+            },
+          }))
+        } catch (err) {
+          console.error('[realtime] failed to send audio event', err)
+        }
       }
 
       socket.onmessage = (event) => {
+        console.debug('[realtime] websocket message received', event.data)
         try {
-          const parsed = JSON.parse(event.data) as {
-            type?: string
-            message?: string
-            data?: Record<string, unknown>
+          let parsed: any
+          try {
+            parsed = JSON.parse(event.data)
+          } catch (err) {
+            console.error('[realtime] failed to parse incoming message as JSON', event.data, err)
+            throw err
           }
 
           if (parsed.type === 'error') {
@@ -257,18 +304,35 @@ export default function ChatArea({
 
           if (parsed.type === 'assistant_text') {
             assistantText = parsed.message || assistantText
-            if (!audioStarted) {
-              finishSuccess()
+            // Wait briefly for a possible audio_start to arrive; if none arrives
+            // within the grace period, finalize the turn so speechless providers
+            // still return promptly.
+            if (assistantTextTimeout) {
+              clearTimeout(assistantTextTimeout)
             }
+            assistantTextTimeout = window.setTimeout(() => {
+              if (!audioStarted && !finalized) {
+                finishSuccess()
+              }
+            }, 300)
             return
           }
-
           if (parsed.type === 'audio_start') {
             audioStarted = true
-            playbackOffsetRef.current = 0
+            // If assistant begins streaming audio for this voice turn,
+            // pause local listening/transcription while playback occurs.
+            setPauseListening(true)
             const maybeRate = parsed.data?.sample_rate
             if (typeof maybeRate === 'number' && maybeRate > 0) {
               sampleRate = maybeRate
+            }
+            if (assistantTextTimeout) {
+              clearTimeout(assistantTextTimeout)
+              assistantTextTimeout = null
+            }
+            // map incoming audio stream to provided streamId (assistant message id)
+            if (streamId) {
+              void audioPlayer.startStream(streamId, sampleRate)
             }
             return
           }
@@ -276,12 +340,19 @@ export default function ChatArea({
           if (parsed.type === 'audio_chunk') {
             const chunk = parsed.data?.audio
             if (typeof chunk === 'string' && chunk.length > 0) {
-              void playAudioChunk(chunk, sampleRate)
+              if (streamId) {
+                void audioPlayer.appendChunk(streamId, chunk)
+              }
             }
             return
           }
 
           if (parsed.type === 'audio_end') {
+            // Resume listening/transcription once the assistant finishes.
+            setPauseListening(false)
+            if (streamId) {
+              void audioPlayer.endStream(streamId)
+            }
             finishSuccess()
           }
         } catch {
@@ -289,11 +360,13 @@ export default function ChatArea({
         }
       }
 
-      socket.onerror = () => {
+      socket.onerror = (ev) => {
+        console.error('[realtime] websocket error', ev)
         finishError('Realtime websocket connection failed.')
       }
 
-      socket.onclose = () => {
+      socket.onclose = (ev) => {
+        console.debug('[realtime] websocket closed', ev)
         if (!finalized) {
           if (assistantText.trim()) {
             finishSuccess()
@@ -303,7 +376,8 @@ export default function ChatArea({
         }
       }
     })
-  }, [currentConversationId, playAudioChunk])
+  }, [currentConversationId, audioPlayer, setPauseListening])
+  
 
   const handleVoiceCaptured = useCallback(async ({ audioBase64, durationMs }: VoiceCapturePayload) => {
     if (isLoading) {
@@ -338,7 +412,7 @@ export default function ChatArea({
         audioBase64,
         imageBase64: imageFrame,
         durationMs,
-      })
+      }, assistantMessageId)
 
       onUpdateMessage(userMessageId, {
         content: result.transcript || 'Voice message',
@@ -541,6 +615,14 @@ export default function ChatArea({
                 key={message.id}
                 message={message}
                 onSelectSuggestion={handleSuggestionClick}
+                isPlaying={!!playingStreams[message.id]}
+                onPlayToggle={() => {
+                  if (playingStreams[message.id]) {
+                    audioPlayer.stopStream(message.id)
+                  } else {
+                    void audioPlayer.startStream(message.id)
+                  }
+                }}
               />
             ))}
             <div ref={messagesEndRef} />
@@ -572,6 +654,14 @@ export default function ChatArea({
           <video id="video" autoPlay muted playsInline></video>
         </div> : null}
 
+        {/* Audio enable banner when autoplay is blocked */}
+        {audioAvailable === false && (
+          <div className="p-3 bg-yellow-50 border-t border-yellow-200 text-yellow-800 flex items-center justify-center">
+            <span className="mr-3">Audio is blocked by the browser.</span>
+            <button onClick={handleEnableAudio} className="px-3 py-1 bg-yellow-200 rounded">Enable audio</button>
+          </div>
+        )}
+
         <MessageInput
           onSendMessage={handleSendMessage}
           isLoading={isLoading}
@@ -580,6 +670,7 @@ export default function ChatArea({
           onMediaStreamChange={setMediaStream}
           onCameraEnabledChange={setCameraEnabled}
           onVoiceCaptured={handleVoiceCaptured}
+          pauseListening={pauseListening}
         >
           {voiceState === 'listening' ? <AudioCanvas state={voiceState} analyser={analyser} /> : null}
         </MessageInput>

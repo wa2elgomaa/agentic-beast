@@ -25,6 +25,9 @@ interface MessageInputProps {
   onMediaStreamChange?: (stream: MediaStream | null) => void
   onCameraEnabledChange?: (enabled: boolean) => void
   onVoiceCaptured?: (payload: VoiceCapturePayload) => Promise<void> | void
+  // When true, the input should stop listening/transcribing; when false,
+  // resume if it was previously paused by this external control.
+  pauseListening?: boolean
   children?: React.ReactNode
 }
 
@@ -74,6 +77,7 @@ export default function MessageInput({
   onMediaStreamChange,
   onCameraEnabledChange,
   onVoiceCaptured,
+  pauseListening,
   children,
 }: MessageInputProps) {
   const [message, setMessage] = useState('')
@@ -87,6 +91,7 @@ export default function MessageInput({
   const micSourceRef = useRef<MediaStreamAudioSourceNode | null>(null)
   const vadRef = useRef<MicVADInstance | null>(null)
   const utteranceSubmittingRef = useRef(false)
+  const wasPausedByExternalRef = useRef(false)
 
   const hasTypedText = useMemo(() => message.trim().length > 0, [message])
   const isAudioActive = audioModeState === 'listening' || audioModeState === 'requesting_permission'
@@ -156,6 +161,32 @@ export default function MessageInput({
     onAnalyserChange?.(null)
     onMediaStreamChange?.(null)
   }
+
+  // Pause/resume listening in response to external control (e.g. when the
+  // assistant is streaming TTS audio). If `pauseListening` becomes true,
+  // stop the current VAD / media stream. When it becomes false and we had
+  // paused it previously, attempt to restart listening.
+  useEffect(() => {
+    if (pauseListening) {
+      if (audioModeState === 'listening' || audioModeState === 'requesting_permission') {
+        wasPausedByExternalRef.current = true
+        void (async () => {
+          try {
+            await cleanupAudioMode()
+          } finally {
+            setAudioState('idle')
+          }
+        })()
+      }
+    } else {
+      if (wasPausedByExternalRef.current) {
+        wasPausedByExternalRef.current = false
+        void startAudioMode()
+      }
+    }
+    // Intentionally only run when the external pause flag changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pauseListening])
 
   const detachVideoTracks = () => {
     if (!mediaStreamRef.current) {

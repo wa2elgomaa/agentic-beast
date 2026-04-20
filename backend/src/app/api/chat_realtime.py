@@ -180,6 +180,10 @@ async def realtime_chat(websocket: WebSocket):
 
             responses = await runtime.handle_event(session_id, event.model_dump())
             for response in responses:
+                try:
+                    logger.debug("Sending realtime websocket response", session_id=session_id, response_type=response.get('type'), payload_keys=list(response.keys()))
+                except Exception:
+                    logger.debug("Sending realtime websocket response (unable to stringify response)", session_id=session_id)
                 await websocket.send_json(response)
     except WebSocketDisconnect:
         logger.info("Realtime chat websocket disconnected", user_id=str(user.id), session_id=session_id)

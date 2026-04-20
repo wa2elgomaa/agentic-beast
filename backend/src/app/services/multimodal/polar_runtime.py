@@ -39,6 +39,7 @@ class PolarRuntimeService(MultimodalProvider):
         self._tts_backend: Any | None = None
         self._model_path: str | None = None
         self._load_lock = asyncio.Lock()
+        self._session_lock = asyncio.Lock()
 
     def _resolve_model_path(self) -> str:
         """Resolve multimodal model path from settings or Hugging Face download."""
@@ -258,15 +259,32 @@ class PolarRuntimeService(MultimodalProvider):
         """Create an in-memory realtime session backed by a model conversation."""
         session_id = str(uuid4())
         await self._ensure_runtime_loaded()
-        session_runtime = self._create_session_conversation()
-        session = {
-            "session_id": session_id,
-            "user_id": user_id,
-            "conversation_id": conversation_id,
-            "provider": settings.multimodal_provider,
-            **session_runtime,
-        }
-        self._sessions[session_id] = session
+
+        # Ensure only one active conversation exists for backends that require it.
+        async with self._session_lock:
+            # Close any existing conversations to satisfy runtimes that only
+            # permit a single active session (litert_lm currently enforces this).
+            if self._sessions:
+                logger.info("Closing existing multimodal sessions before creating a new one", existing_sessions=len(self._sessions))
+                for sid, sess in list(self._sessions.items()):
+                    try:
+                        if sess.get("conversation") is not None:
+                            sess["conversation"].__exit__(None, None, None)
+                    except Exception as exc:
+                        logger.warning("Failed to close existing conversation during new session creation", session_id=sid, error=str(exc))
+                    self._sessions.pop(sid, None)
+
+            # Create a fresh conversation now that previous ones are closed.
+            session_runtime = self._create_session_conversation()
+            session = {
+                "session_id": session_id,
+                "user_id": user_id,
+                "conversation_id": conversation_id,
+                "provider": settings.multimodal_provider,
+                **session_runtime,
+            }
+            self._sessions[session_id] = session
+
         return session
 
     async def handle_event(self, session_id: str, event: dict[str, Any]) -> list[dict[str, Any]]:

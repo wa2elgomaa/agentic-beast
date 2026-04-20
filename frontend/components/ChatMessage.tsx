@@ -2,7 +2,7 @@
 
 import { Message as MessageType, QuerySuggestion } from '@/types'
 import { motion } from 'framer-motion'
-import { Bot, Download, User } from 'lucide-react'
+import { Bot, Download, User, Play, Pause, Volume2 } from 'lucide-react'
 import ResultCard from './ResultCard'
 import DashboardStats from './DashboardStats'
 import LoadingSkeleton from './LoadingSkeleton'
@@ -14,9 +14,11 @@ import { exportToCSV } from '@/lib/api'
 interface ChatMessageProps {
   message: MessageType
   onSelectSuggestion?: (suggestion: QuerySuggestion) => void
+  isPlaying?: boolean
+  onPlayToggle?: () => void
 }
 
-export default function ChatMessage({ message, onSelectSuggestion }: ChatMessageProps) {
+export default function ChatMessage({ message, onSelectSuggestion, isPlaying, onPlayToggle }: ChatMessageProps) {
   const isUser = message.role === 'user'
 
   return (
@@ -46,6 +48,17 @@ export default function ChatMessage({ message, onSelectSuggestion }: ChatMessage
             <span className="text-xs text-gray-500 ml-2">
               {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
             </span>
+            {!isUser && typeof props !== 'undefined' && (
+              <span className="ml-3 inline-flex items-center">
+                <button
+                  onClick={onPlayToggle}
+                  className="p-1 rounded hover:bg-gray-100"
+                  aria-label={isPlaying ? 'Pause audio' : 'Play audio'}
+                >
+                  {isPlaying ? <Pause size={14} /> : <Play size={14} />}
+                </button>
+              </span>
+            )}
           </div>
 
           {message.isLoading ? (
