@@ -13,9 +13,9 @@ COPY pyproject.toml .
 # Create minimal src structure for editable install
 RUN mkdir -p src/app && touch src/app/__init__.py
 
-# Install dependencies 
+# Install dependencies (include multimodal extras such as litert-lm)
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
-    pip install --no-cache-dir -e .
+    pip install --no-cache-dir -e ".[multimodal]"
 
 # Runtime stage
 FROM python:3.11-slim

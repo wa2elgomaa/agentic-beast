@@ -12,6 +12,7 @@ from app.logging import get_logger
 from app.models.conversation import Conversation, Message
 from app.models.user import User
 from app.schemas.chat import (
+    ChatMediaRequest,
     ChatMessageRequest, 
     ChatResponse, 
     ConversationListResponse, 
@@ -28,6 +29,23 @@ from app.services.chat_service import ChatService
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/chat", tags=["chat"])
+
+
+async def _ensure_conversation_access(
+    chat_service: ChatService,
+    conversation_id: UUID | None,
+    user_id: UUID,
+) -> None:
+    """Validate that an existing conversation belongs to the current user."""
+    if conversation_id is None:
+        return
+
+    conversation = await chat_service.get_conversation(conversation_id, user_id=user_id)
+    if conversation is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found.",
+        )
 
 
 async def get_chat_service(
@@ -62,18 +80,8 @@ async def chat(
     logger.info("Chat request received", message_preview=request.message[:100])
 
     try:
-        if request.conversation_id is not None:
-            conversation = await chat_service.get_conversation(
-                request.conversation_id,
-                user_id=current_user.id,
-            )
-            if conversation is None:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Conversation not found.",
-                )
+        await _ensure_conversation_access(chat_service, request.conversation_id, current_user.id)
 
-        # Process message through chat service
         conversation, user_message, assistant_message = await chat_service.handle_user_message(
             message_content=request.message,
             conversation_id=request.conversation_id,
@@ -81,19 +89,75 @@ async def chat(
         )
 
         # Format response
+        user_message_response = await chat_service.format_message_response(user_message)
         message_response = await chat_service.format_message_response(assistant_message)
 
         return ChatResponse(
             conversation_id=conversation.id,
+            user_message=user_message_response,
             message=message_response,
             status="success"
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Error processing chat request", error=str(e))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An error occurred while processing your message."
+        )
+
+
+@router.post("/media", response_model=ChatResponse, status_code=status.HTTP_200_OK)
+async def chat_media(
+    request: ChatMediaRequest,
+    chat_service: Annotated[ChatService, Depends(get_chat_service)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    """Send audio or camera-assisted chat input through the shared AI pipeline."""
+    logger.info(
+        "Media chat request received",
+        capture_mode=request.capture_mode,
+        has_audio=bool(request.audio),
+        frame_count=len(request.image_frames),
+    )
+
+    try:
+        await _ensure_conversation_access(chat_service, request.conversation_id, current_user.id)
+
+        conversation, user_message, assistant_message = await chat_service.handle_media_message(
+            audio=request.audio,
+            audio_format=request.audio_format,
+            image_frames=request.image_frames,
+            capture_mode=request.capture_mode,
+            media_duration_ms=request.media_duration_ms,
+            conversation_id=request.conversation_id,
+            user_id=current_user.id,
+        )
+
+        user_message_response = await chat_service.format_message_response(user_message)
+        message_response = await chat_service.format_message_response(assistant_message)
+
+        return ChatResponse(
+            conversation_id=conversation.id,
+            user_message=user_message_response,
+            message=message_response,
+            status="success",
+        )
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        logger.warning("Invalid media chat request", error=str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        )
+    except Exception as e:
+        logger.error("Error processing media chat request", error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An error occurred while processing your media message.",
         )
 
 

@@ -7,6 +7,8 @@ Backward compatibility:
 
 from __future__ import annotations
 
+import asyncio
+import json
 from typing import Any
 
 from app.config import (
@@ -128,6 +130,127 @@ def _context_snippet(context: dict[str, Any] | None) -> str:
     return " | ".join(parts)
 
 
+async def _classify_with_litert_lm(message: str, context: dict | None = None) -> dict[str, Any] | None:
+    """Classify intent using LiteRT_LM local model.
+    
+    Args:
+        message: User message to classify.
+        context: Optional conversation context.
+    
+    Returns:
+        Intent classification dict with keys: intent, confidence, reasoning, raw_intent, model
+        Returns None if LiteRT_LM is disabled or model fails.
+    """
+    if not settings.litert_lm_enabled:
+        return None
+    
+    try:
+        try:
+            import litert_lm  # noqa: F401
+        except ImportError:
+            logger.warning(
+                "LiteRT_LM not installed; falling back to LLM classifier",
+                error="litert_lm import failed",
+            )
+            return None
+
+        from app.services.multimodal import get_polar_runtime_service
+
+        runtime = get_polar_runtime_service()
+        await runtime._ensure_runtime_loaded()
+        if runtime._engine is None:
+            return None
+
+        system_prompt = (
+            "You are a JSON-only intent classifier for an AI analytics platform. "
+            "Return ONLY valid JSON with keys: intent, confidence, reasoning. "
+            "Allowed intent values: analytics, tag_suggestions, article_recommendations, unknown."
+        )
+        user_prompt = (
+            f"Conversation context: {_context_snippet(context)}\n"
+            f"Current message: {message}"
+        )
+
+        loop = asyncio.get_running_loop()
+
+        def _infer() -> str:
+            conversation = runtime._engine.create_conversation(
+                messages=[{"role": "system", "content": system_prompt}],
+            )
+            conversation.__enter__()
+            try:
+                response = conversation.send_message(
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": user_prompt}],
+                    }
+                )
+                text = ""
+                if isinstance(response, dict):
+                    content = response.get("content")
+                    if isinstance(content, list) and content:
+                        first = content[0]
+                        if isinstance(first, dict):
+                            text = str(first.get("text", "")).strip()
+                return text.strip()
+            finally:
+                conversation.__exit__(None, None, None)
+
+        raw_text = await loop.run_in_executor(None, _infer)
+        if not raw_text:
+            return None
+
+        payload = raw_text.strip()
+        if payload.startswith("```"):
+            payload = payload.strip("`").replace("json", "", 1).strip()
+
+        parsed: dict[str, Any] | None = None
+        try:
+            loaded = json.loads(payload)
+            if isinstance(loaded, dict):
+                parsed = loaded
+        except json.JSONDecodeError:
+            start = payload.find("{")
+            end = payload.rfind("}")
+            if start >= 0 and end > start:
+                try:
+                    loaded = json.loads(payload[start : end + 1])
+                    if isinstance(loaded, dict):
+                        parsed = loaded
+                except json.JSONDecodeError:
+                    parsed = None
+
+        if not parsed:
+            return None
+
+        raw_intent = str(parsed.get("intent", "")).strip().lower()
+        normalized_intent = _to_legacy_intent(raw_intent)
+        try:
+            confidence = max(0.0, min(1.0, float(parsed.get("confidence", 0.0))))
+        except (TypeError, ValueError):
+            confidence = 0.0
+
+        min_threshold = float(settings.litert_lm_min_confidence_threshold)
+        if normalized_intent not in _VALID_INTENTS or confidence < min_threshold:
+            return None
+
+        reasoning = str(parsed.get("reasoning", "")).strip() or "classified_with_litert_lm"
+        return {
+            "intent": normalized_intent,
+            "confidence": confidence,
+            "reasoning": reasoning,
+            "raw_intent": raw_intent,
+            "model": settings.litert_lm_intent_model,
+        }
+
+    except Exception as exc:
+        logger.warning(
+            "LiteRT_LM intent classification failed; falling back to LLM",
+            error=str(exc),
+        )
+        return None
+
+
 class IntentClassifier:
     """Dynamic intent classifier backed by registry-configured taxonomy."""
 
@@ -141,8 +264,40 @@ class IntentClassifier:
         intent_registry = get_intent_registry()
         settings_registry = get_agent_settings_registry()
 
+        fallback_intent = _to_legacy_intent(intent_registry.fallback_intent)
+        if fallback_intent not in IntentClassifier.VALID_INTENTS:
+            fallback_intent = "unknown"
+
+        # Try LiteRT_LM classification first when enabled.
+        if settings.litert_lm_enabled:
+            litert_result = await _classify_with_litert_lm(message, context)
+            if litert_result:
+                logger.info(
+                    "Intent classified with LiteRT_LM",
+                    intent=litert_result.get("intent"),
+                    confidence=litert_result.get("confidence"),
+                    message_snippet=message[:80],
+                )
+                return litert_result
+            if not settings.litert_lm_fallback_to_llm:
+                return {
+                    "intent": fallback_intent,
+                    "confidence": 0.0,
+                    "reasoning": "litert_classification_unavailable",
+                    "raw_intent": "",
+                    "model": settings.litert_lm_intent_model,
+                }
+
+        # Determine which LLM model to use
         if settings.ai_provider in ("openai", "strands"):
             intent_model = (settings.openai_intent_model or "").strip() or settings.openai_model
+        elif settings.ai_provider == "litert_lm":
+            intent_model = (
+                (settings.openai_intent_model or "").strip()
+                or settings.openai_model
+                or (settings.ollama_intent_model or "").strip()
+                or settings.ollama_model
+            )
         else:
             intent_model = (settings.ollama_intent_model or "").strip() or settings.ollama_model
 
@@ -160,10 +315,6 @@ class IntentClassifier:
                 ),
             },
         ]
-
-        fallback_intent = _to_legacy_intent(intent_registry.fallback_intent)
-        if fallback_intent not in IntentClassifier.VALID_INTENTS:
-            fallback_intent = "unknown"
 
         try:
             parsed = await generate_json_object(

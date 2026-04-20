@@ -13,6 +13,7 @@ from app.config import settings
 from app.logging import get_logger
 from app.models.conversation import Conversation, Message
 from app.schemas.chat import ChatMessageMetadata, MessageResponse
+from app.services.media_processing_service import MediaNormalizationResult, MediaProcessingService
 
 logger = get_logger(__name__)
 
@@ -28,6 +29,134 @@ class ChatService:
         """
         self.db_session = db_session
         self.orchestrator = get_orchestrator()
+        self.media_processing = MediaProcessingService()
+
+    async def _get_or_create_conversation(
+        self,
+        conversation_id: Optional[uuid.UUID],
+        user_id: Optional[uuid.UUID],
+    ) -> Conversation:
+        """Return an existing conversation or create a new one."""
+        if conversation_id:
+            conversation = await self.get_conversation(conversation_id)
+            if conversation:
+                return conversation
+            logger.warning("Conversation not found", conversation_id=str(conversation_id))
+        return await self.create_conversation(user_id=user_id)
+
+    async def _process_normalized_message(
+        self,
+        *,
+        display_text: str,
+        normalized_text: str,
+        conversation_id: Optional[uuid.UUID],
+        user_id: Optional[uuid.UUID],
+        user_operation_metadata: Optional[Dict[str, Any]] = None,
+    ) -> tuple[Conversation, Message, Message]:
+        """Persist a normalized user turn and route it through the orchestrator."""
+        conversation = await self._get_or_create_conversation(conversation_id, user_id)
+
+        user_message = await self.add_message(
+            conversation.id,
+            role="user",
+            content=display_text,
+            operation_metadata=user_operation_metadata,
+        )
+        await self.db_session.flush()
+
+        logger.info(
+            "User message received and classified",
+            conversation_id=str(conversation.id),
+            message_preview=display_text[:100],
+            input_type=(user_operation_metadata or {}).get("input_type", "text"),
+        )
+
+        history = await self.get_conversation_context(conversation.id, limit=10)
+        context = {
+            "conversation_id": str(conversation.id),
+            "user_id": str(user_id) if user_id else None,
+            "message": normalized_text,
+            "db_session": self.db_session,
+            "conversation_history": history,
+            "input_metadata": user_operation_metadata or {},
+        }
+
+        try:
+            result = await self.orchestrator.execute(context)
+
+            if not isinstance(result, str):
+                store_content = json.dumps(result)
+            else:
+                store_content = result
+
+            op_data: Optional[Dict] = None
+            op_type: Optional[str] = None
+            if isinstance(result, dict):
+                op_type = (
+                    result.get("query_type")
+                    or result.get("operation_type")
+                    or result.get("intent")
+                )
+                if result.get("generated_sql") or result.get("result_data") is not None:
+                    op_data = {
+                        "generated_sql": result.get("generated_sql"),
+                        "metric": (
+                            result.get("resolved_subject")
+                            or result.get("resolved_context")
+                            or result.get("metric")
+                        ),
+                        "query_category": result.get("query_type"),
+                        "raw_rows": (
+                            result.get("raw_rows")
+                            or result.get("result_data", [])[:100]
+                            if isinstance(result.get("raw_rows") or result.get("result_data"), list)
+                            else []
+                        ),
+                        "row_count": (
+                            len(result.get("result_data", []))
+                            if isinstance(result.get("result_data"), list)
+                            else 0
+                        ),
+                        "chart_b64": result.get("chart_b64"),
+                        "code_output": result.get("code_output"),
+                    }
+
+            assistant_message = await self.add_message(
+                conversation.id,
+                role="assistant",
+                content=store_content,
+                operation=op_type,
+                operation_data=op_data,
+            )
+        except Exception as e:
+            logger.error(
+                "Error routing message to agent",
+                conversation_id=str(conversation.id),
+                error=str(e),
+            )
+            assistant_message = await self.add_message(
+                conversation.id,
+                role="assistant",
+                content=json.dumps({
+                    "error": "processing_error",
+                    "message": (
+                        "Something went wrong while processing your request. "
+                        "Please try again."
+                    ),
+                }),
+            )
+
+        conversation.updated_at = datetime.now()
+        self.db_session.add(conversation)
+        await self.db_session.flush()
+
+        logger.info(
+            "Agent response generated",
+            conversation_id=str(conversation.id),
+            assistant_message_id=str(assistant_message.id),
+        )
+
+        return conversation, user_message, assistant_message
 
     async def create_conversation(
         self,
@@ -285,125 +414,57 @@ class ChatService:
         Returns:
             Tuple of (conversation, user_message, assistant_message).
         """
-        # Create or retrieve conversation
-        if conversation_id:
-            conversation = await self.get_conversation(conversation_id)
-            if not conversation:
-                logger.warning("Conversation not found", conversation_id=str(conversation_id))
-                conversation = await self.create_conversation(user_id=user_id)
-        else:
-            conversation = await self.create_conversation(user_id=user_id)
-
-        # Add user message to conversation
-        user_message = await self.add_message(
-            conversation.id,
-            role="user",
-            content=message_content,
-        )
-        await self.db_session.flush()
-
-        logger.info(
-            "User message received and classified",
-            conversation_id=str(conversation.id),
-            # intent=intent,
-            message_preview=message_content[:100],
+        return await self._process_normalized_message(
+            display_text=message_content,
+            normalized_text=message_content,
+            conversation_id=conversation_id,
+            user_id=user_id,
+            user_operation_metadata={
+                "input_type": "text",
+                "modality_pipeline": "text_direct",
+            },
         )
 
-        # Prepare context for orchestrator
-        # Fetch enough history to provide context for up to 3 prior analytics queries
-        history = await self.get_conversation_context(conversation.id, limit=10)
-        context = {
-            "conversation_id": str(conversation.id),
-            "user_id": str(user_id) if user_id else None,
-            "message": message_content,
-            "db_session": self.db_session,
-            "conversation_history": history,
+    async def handle_media_message(
+        self,
+        *,
+        audio: str | None,
+        audio_format: str,
+        image_frames: list[str],
+        capture_mode: str,
+        media_duration_ms: int | None,
+        conversation_id: Optional[uuid.UUID] = None,
+        user_id: Optional[uuid.UUID] = None,
+    ) -> tuple[Conversation, Message, Message]:
+        """Normalize audio/camera input and route it through the shared chat flow."""
+        normalization = await self.media_processing.normalize_media_request(
+            audio=audio,
+            audio_format=audio_format,
+            image_frames=image_frames,
+            capture_mode=capture_mode,
+            media_duration_ms=media_duration_ms,
+        )
+        return await self._process_normalized_message(
+            display_text=normalization.transcript_text,
+            normalized_text=normalization.normalized_text,
+            conversation_id=conversation_id,
+            user_id=user_id,
+            user_operation_metadata=self._build_media_operation_metadata(normalization),
+        )
+
+    def _build_media_operation_metadata(
+        self,
+        normalization: MediaNormalizationResult,
+    ) -> Dict[str, Any]:
+        """Convert normalized media metadata into stored message metadata."""
+        return {
+            "input_type": normalization.input_type,
+            "transcript_source": normalization.transcript_source,
+            "transcript_confidence": normalization.transcript_confidence,
+            "has_visual_context": normalization.has_visual_context,
+            "media_duration_ms": normalization.media_duration_ms,
+            "modality_pipeline": normalization.modality_pipeline,
         }
-
-        # Route to agent via orchestrator
-        try:
-            result = await self.orchestrator.execute(context)
-
-            if not isinstance(result, str):
-                store_content = json.dumps(result)
-            else:
-                store_content = result
-
-            # Persist structured operation data so follow-up queries have context.
-            # Extract SQL + raw rows from analytics results — never store charts (too large).
-            op_data: Optional[Dict] = None
-            op_type: Optional[str] = None
-            if isinstance(result, dict):
-                op_type = (
-                    result.get("query_type")
-                    or result.get("operation_type")
-                    or result.get("intent")
-                )
-                if result.get("generated_sql") or result.get("result_data") is not None:
-                    op_data = {
-                        "generated_sql": result.get("generated_sql"),
-                        "metric": (
-                            result.get("resolved_subject")
-                            or result.get("resolved_context")
-                            or result.get("metric")
-                        ),
-                        "query_category": result.get("query_type"),
-                        # Store raw rows (capped) for next-turn context injection
-                        "raw_rows": (
-                            result.get("raw_rows")
-                            or result.get("result_data", [])[:100]
-                            if isinstance(result.get("raw_rows") or result.get("result_data"), list)
-                            else []
-                        ),
-                        "row_count": (
-                            len(result.get("result_data", []))
-                            if isinstance(result.get("result_data"), list)
-                            else 0
-                        ),
-                        # Code interpreter extras (not stored in DB — surfaced in API response only)
-                        "chart_b64": result.get("chart_b64"),
-                        "code_output": result.get("code_output"),
-                    }
-
-            # Add assistant message to conversation
-            assistant_message = await self.add_message(
-                conversation.id,
-                role="assistant",
-                content=store_content,
-                operation=op_type,
-                operation_data=op_data,
-            )
-        except Exception as e:
-            logger.error(
-                "Error routing message to agent",
-                conversation_id=str(conversation.id),
-                error=str(e),
-            )
-            assistant_message = await self.add_message(
-                conversation.id,
-                role="assistant",
-                content=json.dumps({
-                    "error": "processing_error",
-                    "message": (
-                        "Something went wrong while processing your request. "
-                        "Please try again."
-                    ),
-                }),
-            )
-
-        # Update conversation's updated_at timestamp
-        conversation.updated_at = datetime.now()
-        self.db_session.add(conversation)
-
-        await self.db_session.flush()
-
-        logger.info(
-            "Agent response generated",
-            conversation_id=str(conversation.id),
-            assistant_message_id=str(assistant_message.id),
-        )
-
-        return conversation, user_message, assistant_message
 
     async def format_message_response(self, message: Message) -> MessageResponse:
         """Format a Message ORM object to response schema.
@@ -417,14 +478,21 @@ class ChatService:
         normalized_content = self._normalize_message_content(message.content)
 
         metadata = None
-        if message.operation or message.operation_data:
+        if message.operation or message.operation_data or message.operation_metadata:
             op = message.operation_data or {}
+            extra = message.operation_metadata or {}
             metadata = ChatMessageMetadata(
                 operation=message.operation,
                 citations=op.get("citations"),
                 chart_b64=op.get("chart_b64"),
                 code_output=op.get("code_output"),
                 generated_sql=op.get("generated_sql"),
+                input_type=extra.get("input_type"),
+                transcript_source=extra.get("transcript_source"),
+                transcript_confidence=extra.get("transcript_confidence"),
+                has_visual_context=extra.get("has_visual_context"),
+                media_duration_ms=extra.get("media_duration_ms"),
+                modality_pipeline=extra.get("modality_pipeline"),
             )
 
         return MessageResponse(

@@ -88,9 +88,11 @@ class Settings(BaseSettings):
     mongodb_uri: str = Field(default="mongodb://localhost:27017/articles_db")
 
     # AI Provider Configuration
-    ai_provider: Literal["openai", "bedrock", "ollama", "strands"] = Field(default="openai")
+    ai_provider: Literal["openai", "bedrock", "ollama", "strands", "litert_lm"] = Field(default="openai")
     openai_api_key: str = Field(default="")
     openai_base_url: str = Field(default="")
+    docker_model_runner_enabled: bool = Field(default=False)
+    docker_model_runner_base_url: str = Field(default="http://model-runner.docker.internal/engines/v1")
     openai_model: str = Field(default="gpt-4")
     openai_sql_model: str = Field(default="")
     openai_intent_model: str = Field(default="")
@@ -98,6 +100,8 @@ class Settings(BaseSettings):
     openai_tag_model: str = Field(default="")
     openai_recommendation_model: str = Field(default="")
     openai_embedding_model: str = Field(default="text-embedding-3-small")
+    openai_transcription_model: str = Field(default="gpt-4o-mini-transcribe")
+    openai_vision_max_frames: int = Field(default=3)
     openai_agent_id: str = Field(default="")  # OpenAI Agent ID (e.g. asst_xxxxx)
     openai_workflow_id: str = Field(default="")
 
@@ -109,6 +113,12 @@ class Settings(BaseSettings):
     # Model used specifically for intent classification — qwen2.5-coder recommended
     ollama_intent_model: str = Field(default="")
     ollama_embedding_model: str = Field(default="nomic-embed-text")
+
+    # LiteRT_LM Intent Classification Configuration
+    litert_lm_enabled: bool = Field(default=True)
+    litert_lm_intent_model: str = Field(default="litert-community/gemma-4-E2B-it-litert-lm")
+    litert_lm_fallback_to_llm: bool = Field(default=True)
+    litert_lm_min_confidence_threshold: float = Field(default=0.5)
 
     # Agent Session Encryption (OpenAI Agents SDK EncryptedSession)
     agent_session_encryption_key: str = Field(default="")
@@ -241,6 +251,39 @@ class Settings(BaseSettings):
     # ========== Configuration Directories ==========
     
     config_dir: str = Field(default="config")
+
+    # ========== Multimodal / Realtime Chat ==========
+
+    multimodal_enabled: bool = Field(default=False)
+    multimodal_provider: Literal["polar"] = Field(default="polar")
+    multimodal_model_path: str = Field(default="")
+    multimodal_tts_backend: Literal["auto", "mlx", "onnx"] = Field(default="auto")
+    multimodal_max_sessions: int = Field(default=2)
+    multimodal_max_audio_bytes: int = Field(default=2_000_000)
+    multimodal_max_image_bytes: int = Field(default=5_000_000)
+    multimodal_default_language: str = Field(default="en-US")
+
+    @computed_field
+    @property
+    def effective_openai_base_url(self) -> str:
+        """Resolve OpenAI-compatible base URL, preferring Docker Model Runner when enabled."""
+        if self.docker_model_runner_enabled:
+            return (self.docker_model_runner_base_url or "").strip().rstrip("/")
+
+        configured = (self.openai_base_url or "").strip()
+        return configured or "https://api.openai.com/v1"
+
+    @computed_field
+    @property
+    def effective_openai_api_key(self) -> str:
+        """Resolve API key for OpenAI-compatible clients.
+
+        Docker Model Runner does not require an OpenAI key, but the SDK client
+        still expects a non-empty value.
+        """
+        if self.docker_model_runner_enabled:
+            return "docker-model-runner"
+        return self.openai_api_key
 
     @computed_field
     @property

@@ -83,6 +83,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+multimodal = [
+    "huggingface_hub>=0.30.0",
+    "litert-lm>=0.10.1",
+    "numpy>=2.0.0",
+    "mlx-audio>=0.4.2; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "kokoro-onnx>=0.5.0; sys_platform == 'linux'",
+]
+
 dev = [
     "pytest>=7.4.0",
     "pytest-asyncio>=0.21.0",

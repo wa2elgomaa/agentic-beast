@@ -116,9 +116,10 @@ async def _generate_analysis_code(
         if settings.ai_provider in ("openai", "strands"):
             from openai import AsyncOpenAI  # noqa: PLC0415
 
-            configured_base = (settings.openai_base_url or "").strip()
-            resolved_base = configured_base or "https://api.openai.com/v1"
-            client = AsyncOpenAI(api_key=settings.openai_api_key, base_url=resolved_base)
+            client = AsyncOpenAI(
+                api_key=settings.effective_openai_api_key,
+                base_url=settings.effective_openai_base_url,
+            )
             response = await client.chat.completions.create(
                 model=model,
                 messages=messages,  # type: ignore[arg-type]

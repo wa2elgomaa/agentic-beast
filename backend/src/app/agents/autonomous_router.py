@@ -83,6 +83,15 @@ async def route_analytics_query(
 
     if settings.ai_provider in ("openai", "strands"):
         model = (settings.openai_intent_model or "").strip() or settings.openai_model
+    elif settings.ai_provider == "litert_lm":
+        # LiteRT_LM routing not yet supported; route to SQL by default
+        logger.info("LiteRT_LM routing not yet optimized; defaulting to SQL analytics")
+        return {
+            "target": "sql_analytics",
+            "confidence": 0.5,
+            "reasoning": "LiteRT_LM routing unsupported; using default fallback",
+            "mode": "initial",
+        }
     else:
         model = (settings.ollama_intent_model or "").strip() or settings.ollama_model
 

@@ -42,17 +42,12 @@ async def generate_json_object(
     provider = (settings.ai_provider or "").strip().lower()
 
     if provider in {"openai", "strands"}:
-        if not settings.openai_api_key:
+        if not settings.effective_openai_api_key:
             raise RuntimeError("OPENAI_API_KEY is required when AI_PROVIDER=openai")
 
-        # Always set a valid base URL. Empty OPENAI_BASE_URL in environment can
-        # otherwise override SDK defaults and produce invalid request URLs.
-        configured_base = (settings.openai_base_url or "").strip()
-        resolved_base = configured_base or "https://api.openai.com/v1"
-
         client_args: dict[str, Any] = {
-            "api_key": settings.openai_api_key,
-            "base_url": resolved_base,
+            "api_key": settings.effective_openai_api_key,
+            "base_url": settings.effective_openai_base_url,
         }
 
         client = AsyncOpenAI(**client_args)
@@ -124,7 +119,17 @@ async def generate_json_object(
         logger.info("JSON chat success", provider="ollama", purpose=purpose, model=model)
         return parsed
 
+    if provider == "litert_lm":
+        # LiteRT_LM is available but not optimized for JSON mode API calls
+        # Intent classification uses a separate code path with fallback to LLM
+        # Other use cases (SQL generation, parsing, etc.) should use a traditional LLM
+        raise RuntimeError(
+            f"LiteRT_LM does not support JSON mode for {purpose}. "
+            "For intent classification, it is automatically tried before LLM as a fallback. "
+            "For other purposes, configure AI_PROVIDER to openai, strands, or ollama."
+        )
+
     raise RuntimeError(
         f"Unsupported AI_PROVIDER '{settings.ai_provider}'. "
-        "Expected one of: openai, strands, ollama"
+        "Expected one of: openai, strands, ollama, litert_lm"
     )

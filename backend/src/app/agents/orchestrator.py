@@ -129,6 +129,10 @@ async def _run_tag_suggestions(message: str) -> dict[str, Any]:
     """Return tag suggestions via provider-aware JSON call."""
     if settings.ai_provider in ("openai", "strands"):
         model = (settings.openai_tag_model or "").strip() or (settings.openai_intent_model or "").strip() or settings.openai_model
+    elif settings.ai_provider == "litert_lm":
+        # LiteRT_LM tagging not yet supported; fall back to OpenAI
+        logger.warning("LiteRT_LM tagging not yet optimized; falling back to OpenAI")
+        model = settings.openai_model
     else:
         model = (settings.ollama_intent_model or "").strip() or settings.ollama_model
 
@@ -173,6 +177,10 @@ async def _run_article_recommendations(message: str) -> dict[str, Any]:
     """Return article recommendations via provider-aware JSON call."""
     if settings.ai_provider in ("openai", "strands"):
         model = (settings.openai_recommendation_model or "").strip() or (settings.openai_intent_model or "").strip() or settings.openai_model
+    elif settings.ai_provider == "litert_lm":
+        # LiteRT_LM recommendations not yet supported; fall back to OpenAI
+        logger.warning("LiteRT_LM recommendations not yet optimized; falling back to OpenAI")
+        model = settings.openai_model
     else:
         model = (settings.ollama_intent_model or "").strip() or settings.ollama_model
 

@@ -29,7 +29,10 @@ class OpenAIProvider(AIProvider):
         """
         chosen_model = model or settings.openai_model
         super().__init__(chosen_model, **kwargs)
-        self.client = AsyncOpenAI(api_key=api_key or settings.openai_api_key)
+        self.client = AsyncOpenAI(
+            api_key=api_key or settings.effective_openai_api_key,
+            base_url=settings.effective_openai_base_url,
+        )
         self.embedding_model = embedding_model or getattr(settings, "openai_embedding_model", None)
         logger.info("OpenAI provider initialized", model=self.model)
 

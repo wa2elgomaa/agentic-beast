@@ -69,6 +69,21 @@ export interface ChatMessageMetadata {
   chart_b64?: string
   code_output?: string
   generated_sql?: string
+  input_type?: string
+  transcript_source?: string
+  transcript_confidence?: number
+  has_visual_context?: boolean
+  media_duration_ms?: number
+  modality_pipeline?: string
+}
+
+export interface ChatMediaRequestPayload {
+  audio?: string
+  audio_format?: string
+  image_frames?: string[]
+  capture_mode?: 'audio' | 'camera_audio'
+  media_duration_ms?: number
+  conversation_id?: string | null
 }
 
 // ============================================================================
@@ -119,6 +134,39 @@ export interface OrchestratorResponse {
     event_type?: string
     [key: string]: any
   }
+}
+
+// ============================================================================
+// Realtime Multimodal Chat Types
+// ============================================================================
+
+export type RealtimeClientEventType = 'text' | 'audio' | 'image' | 'interrupt' | 'ping'
+export type RealtimeServerEventType =
+  | 'session_ready'
+  | 'provider_status'
+  | 'ack'
+  | 'transcript'
+  | 'assistant_text'
+  | 'audio_start'
+  | 'audio_chunk'
+  | 'audio_end'
+  | 'error'
+  | 'pong'
+
+export interface RealtimeClientEvent {
+  type: RealtimeClientEventType
+  text?: string
+  audio?: string
+  image?: string
+  conversation_id?: string | null
+  metadata?: Record<string, any>
+}
+
+export interface RealtimeServerEvent {
+  type: RealtimeServerEventType
+  session_id?: string
+  message?: string
+  data?: Record<string, any>
 }
 
 // ============================================================================

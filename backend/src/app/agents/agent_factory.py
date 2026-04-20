@@ -42,9 +42,10 @@ def get_model_provider(selected_model: Optional[str] = None):
             from strands.models.openai import OpenAIModel  # noqa: PLC0415
 
             model_id = selected_model or settings.openai_model
-            client_args: dict = {}
-            if settings.openai_api_key:
-                client_args["api_key"] = settings.openai_api_key
+            client_args: dict = {
+                "api_key": settings.effective_openai_api_key,
+                "base_url": settings.effective_openai_base_url,
+            }
 
             logger.debug("Building OpenAIModel", model_id=model_id)
             return OpenAIModel(client_args=client_args or None, model_id=model_id)

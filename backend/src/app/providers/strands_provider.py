@@ -91,9 +91,10 @@ class StrandsProvider(AIProvider):
             from strands.models.openai import OpenAIModel  # noqa: PLC0415
 
             client_args: dict = {}
-            resolved_key = api_key or settings.openai_api_key
+            resolved_key = api_key or settings.effective_openai_api_key
             if resolved_key:
                 client_args["api_key"] = resolved_key
+            client_args["base_url"] = settings.effective_openai_base_url
 
             return OpenAIModel(
                 client_args=client_args or None,
@@ -169,9 +170,10 @@ class StrandsProvider(AIProvider):
                     if max_tokens is not None:
                         params["max_tokens"] = max_tokens
                     client_args: dict = {}
-                    key = settings.openai_api_key
+                    key = settings.effective_openai_api_key
                     if key:
                         client_args["api_key"] = key
+                    client_args["base_url"] = settings.effective_openai_base_url
                     strands_model = OpenAIModel(
                         client_args=client_args or None,
                         model_id=self.model,

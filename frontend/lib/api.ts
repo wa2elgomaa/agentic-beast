@@ -1,5 +1,6 @@
-import { APIBaseURL, APIPrefix, CHAT_URL, CONVERSATION_URL, buildApiUrl } from '@/constants/urls'
+import { APIBaseURL, APIPrefix, CHAT_URL, CONVERSATION_URL, MEDIA_CHAT_URL, REALTIME_CHAT_URL, buildApiUrl, buildWebSocketUrl } from '@/constants/urls'
 import {
+  ChatMediaRequestPayload,
   QueryResponse,
   OrchestratorResponse,
   OperationType,
@@ -32,6 +33,19 @@ function getAuthHeaders(): HeadersInit {
     'Content-Type': 'application/json',
     ...(token ? { 'Authorization': `Bearer ${token}` } : {})
   }
+}
+
+export function getAccessToken(): string | null {
+  return typeof window !== 'undefined' ? localStorage.getItem('access_token') : null
+}
+
+export function buildRealtimeChatWsUrl(token: string, conversationId?: string | null): string {
+  const url = new URL(buildWebSocketUrl(REALTIME_CHAT_URL))
+  url.searchParams.set('token', token)
+  if (conversationId) {
+    url.searchParams.set('conversation_id', conversationId)
+  }
+  return url.toString()
 }
 
 function tryParseJsonContent(value: unknown): Record<string, any> | null {
@@ -185,11 +199,13 @@ function normalizeAnalyticsResultData(resultData: unknown[]): AnalyticsResultDat
 function toAnalyticsContent(parsedContent: Record<string, any> | null): AnalyticsResponseContent | undefined {
   if (!parsedContent) return undefined
 
-  const queryType = parsedContent.query_type
-  const resolvedContext = parsedContent.resolved_context
-  const resultData = parsedContent.result_data
-  const insightSummary = parsedContent.insight_summary
-  const verification = parsedContent.verification
+  const {
+    query_type: queryType,
+    resolved_context: resolvedContext,
+    result_data: resultData,
+    insight_summary: insightSummary,
+    verification,
+  } = parsedContent
 
   if (
     typeof queryType !== 'string' ||
@@ -210,40 +226,13 @@ function toAnalyticsContent(parsedContent: Record<string, any> | null): Analytic
   }
 }
 
-// ============================================================================
-// New Orchestrator API (Unified Interface)
-// ============================================================================
-
-export async function chat(
-  query: string,
-  conversationId?: string | null,
-  _includeContext: boolean = true,
-  _contextWindow: number = 2,
-  _preGeneratedSql?: string
-): Promise<OrchestratorResponse> {
-  const response = await fetch(buildApiUrl(CHAT_URL), {
-    method: 'POST',
-    headers: getAuthHeaders(),
-    body: JSON.stringify({
-      message: query,
-      conversation_id: conversationId,
-    }),
-  })
-
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({ detail: 'Unknown error' }))
-    throw new Error(error.detail || `HTTP ${response.status}`)
-  }
-
-  const payload = await response.json()
-
+function toOrchestratorResponse(payload: any): OrchestratorResponse {
   const rawContent = payload?.message?.content
   const parsedContent = tryParseJsonContent(rawContent)
   const analyticsContent = toAnalyticsContent(parsedContent)
   const queryType = analyticsContent?.query_type || parsedContent?.query_type
   const operation = mapQueryTypeToOperation(queryType || payload?.message?.metadata?.operation)
 
-  // Detect a structured error payload returned by the backend agents/service.
   const isErrorPayload =
     parsedContent !== null &&
     typeof parsedContent === 'object' &&
@@ -283,7 +272,10 @@ export async function chat(
       resolved_context: analyticsContent?.resolved_context || parsedContent?.resolved_context,
       verification: analyticsContent?.verification || parsedContent?.verification,
       conversation_id: payload?.conversation_id,
-      // Code interpreter extras
+      user_transcript:
+        typeof payload?.user_message?.content === 'string'
+          ? payload.user_message.content
+          : undefined,
       chart_b64: payload?.message?.metadata?.chart_b64 || parsedContent?.chart_b64 || undefined,
       code_output: payload?.message?.metadata?.code_output || parsedContent?.code_output || undefined,
       generated_sql: payload?.message?.metadata?.generated_sql || parsedContent?.generated_sql || undefined,
@@ -296,8 +288,57 @@ export async function chat(
       chart_b64: payload?.message?.metadata?.chart_b64,
       code_output: payload?.message?.metadata?.code_output,
       generated_sql: payload?.message?.metadata?.generated_sql,
+      input_type: payload?.user_message?.metadata?.input_type,
+      transcript_source: payload?.user_message?.metadata?.transcript_source,
+      transcript_confidence: payload?.user_message?.metadata?.transcript_confidence,
+      has_visual_context: payload?.user_message?.metadata?.has_visual_context,
+      media_duration_ms: payload?.user_message?.metadata?.media_duration_ms,
+      modality_pipeline: payload?.user_message?.metadata?.modality_pipeline,
     },
   }
+}
+
+// ============================================================================
+// New Orchestrator API (Unified Interface)
+// ============================================================================
+
+export async function chat(
+  query: string,
+  conversationId?: string | null,
+  _includeContext: boolean = true,
+  _contextWindow: number = 2,
+  _preGeneratedSql?: string
+): Promise<OrchestratorResponse> {
+  const response = await fetch(buildApiUrl(CHAT_URL), {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({
+      message: query,
+      conversation_id: conversationId,
+    }),
+  })
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Unknown error' }))
+    throw new Error(error.detail || `HTTP ${response.status}`)
+  }
+
+  return toOrchestratorResponse(await response.json())
+}
+
+export async function chatMedia(payload: ChatMediaRequestPayload): Promise<OrchestratorResponse> {
+  const response = await fetch(buildApiUrl(MEDIA_CHAT_URL), {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify(payload),
+  })
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Unknown error' }))
+    throw new Error(error.detail || `HTTP ${response.status}`)
+  }
+
+  return toOrchestratorResponse(await response.json())
 }
 
 // ============================================================================

@@ -225,6 +225,8 @@ class Settings(BaseSettings):
     openai_tag_model: str = Field(default="")
     openai_recommendation_model: str = Field(default="")
     openai_embedding_model: str = Field(default="text-embedding-3-small")
+    openai_transcription_model: str = Field(default="gpt-4o-mini-transcribe")
+    openai_vision_max_frames: int = Field(default=3)
     openai_agent_id: str = Field(default="")  # OpenAI Agent ID (e.g. asst_xxxxx)
     openai_workflow_id: str = Field(default="")
 
@@ -368,6 +370,17 @@ class Settings(BaseSettings):
     # ========== Configuration Directories ==========
     
     config_dir: str = Field(default="config")
+
+    # ========== Multimodal / Realtime Chat ==========
+
+    multimodal_enabled: bool = Field(default=False)
+    multimodal_provider: Literal["polar"] = Field(default="polar")
+    multimodal_model_path: str = Field(default="")
+    multimodal_tts_backend: Literal["auto", "mlx", "onnx"] = Field(default="auto")
+    multimodal_max_sessions: int = Field(default=2)
+    multimodal_max_audio_bytes: int = Field(default=2_000_000)
+    multimodal_max_image_bytes: int = Field(default=5_000_000)
+    multimodal_default_language: str = Field(default="en-US")
 
     @computed_field
     @property

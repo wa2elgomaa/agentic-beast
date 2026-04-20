@@ -2,7 +2,6 @@
 
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.requests import Request
@@ -64,7 +63,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     """Lifespan context manager for startup and shutdown events."""
     # Startup
     logger.info("Starting Agentic Beast API", version=settings.api_version)
-    
+
+   
     # Initialize registries (schema, intents, agent settings)
     try:
         initialize_registries(config_dir=settings.config_dir)
@@ -310,9 +310,10 @@ def create_app() -> FastAPI:
         return get_metrics()
 
     # Register API routers
-    from app.api import auth, chat, ingestion, users, admin_ingestion, webhooks
+    from app.api import admin_ingestion, auth, chat, chat_realtime, ingestion, users, webhooks
     app.include_router(auth.router, prefix="/api/v1", tags=["auth"])
     app.include_router(chat.router, prefix="/api/v1", tags=["chat"])
+    app.include_router(chat_realtime.router, prefix="/api/v1", tags=["chat-realtime"])
     app.include_router(ingestion.router, prefix="/api/v1", tags=["ingestion"])
     app.include_router(users.router, prefix="/api/v1", tags=["auth"])
     app.include_router(admin_ingestion.router, prefix="/api/v1", tags=["admin-ingestion"])

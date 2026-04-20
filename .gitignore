@@ -71,4 +71,4 @@ celerybeat-schedule
 Thumbs.db
 *.tmp
 
-oldbackend
+polar
