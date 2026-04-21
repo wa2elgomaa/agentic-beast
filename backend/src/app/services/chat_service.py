@@ -14,6 +14,8 @@ from app.logging import get_logger
 from app.models.conversation import Conversation, Message
 from app.schemas.chat import ChatMessageMetadata, MessageResponse
 from app.services.media_processing_service import MediaNormalizationResult, MediaProcessingService
+from app.providers.factory import get_multimodal_provider
+from app.services.message_parser import parse_and_classify
 
 logger = get_logger(__name__)
 
@@ -80,6 +82,20 @@ class ChatService:
             "conversation_history": history,
             "input_metadata": user_operation_metadata or {},
         }
+        # Attempt multimodal-aware parsing + classification to provide a
+        # pre-classified hint to the orchestrator (reduces extra LLM calls).
+        try:
+            parse_event = {
+                "text": normalized_text,
+                "images": [],
+                "attachments": [],
+                "modality": user_operation_metadata.get("input_type", "text") if user_operation_metadata else "text",
+            }
+            classification = await parse_and_classify(parse_event, context=context)
+            # Attach parsed/classification result to context for orchestrator
+            context["client_classification"] = classification
+        except Exception:
+            logger.exception("Pre-classification failed; continuing without it")
 
         try:
             result = await self.orchestrator.execute(context)
@@ -128,6 +144,33 @@ class ChatService:
                 operation=op_type,
                 operation_data=op_data,
             )
+            # Generate TTS audio for assistant response when multimodal is enabled.
+            try:
+                if settings.multimodal_enabled:
+                    provider = get_multimodal_provider()
+                    chunks: list[str] = []
+                    sample_rate: int | None = None
+                    async for ev in provider.stream_tts(store_content):
+                        # ev is expected to be a ServerEvent payload dict
+                        t = ev.get("type")
+                        data = ev.get("data") or {}
+                        if t == "audio_start":
+                            sample_rate = data.get("sample_rate")
+                        elif t == "audio_chunk":
+                            audio_b64 = data.get("audio")
+                            if audio_b64:
+                                chunks.append(audio_b64)
+
+                    if chunks:
+                        op = assistant_message.operation_data or {}
+                        op.setdefault("tts", {})
+                        op["tts"]["sample_rate"] = sample_rate
+                        op["tts"]["chunks"] = chunks
+                        assistant_message.operation_data = op
+                        self.db_session.add(assistant_message)
+                        await self.db_session.flush()
+            except Exception:
+                logger.exception("Failed to generate TTS for assistant message; continuing")
         except Exception as e:
             logger.error(
                 "Error routing message to agent",
@@ -327,6 +370,12 @@ class ChatService:
         result = await self.db_session.execute(query)
         return result.scalars().all()
 
+    async def get_message_by_id(self, message_id: uuid.UUID) -> Optional[Message]:
+        """Retrieve a single message by its UUID."""
+        query = select(Message).where(Message.id == message_id)
+        result = await self.db_session.execute(query)
+        return result.scalar_one_or_none()
+
     async def update_conversation_title(
         self,
         conversation_id: uuid.UUID,
@@ -493,6 +542,8 @@ class ChatService:
                 has_visual_context=extra.get("has_visual_context"),
                 media_duration_ms=extra.get("media_duration_ms"),
                 modality_pipeline=extra.get("modality_pipeline"),
+                tts_sample_rate=(op.get("tts") or {}).get("sample_rate"),
+                tts_chunks=(op.get("tts") or {}).get("chunks"),
             )
 
         return MessageResponse(

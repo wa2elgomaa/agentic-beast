@@ -13,6 +13,7 @@ from app.services.auth_service import get_auth_service
 from app.services.multimodal import get_polar_runtime_service
 from app.services.multimodal.session_protocol import ClientEvent, ServerEvent
 from app.services.user_service import UserService
+from app.services.session_manager import get_session_manager
 import re
 
 router = APIRouter(prefix="/chat/realtime", tags=["chat-realtime"])
@@ -117,6 +118,15 @@ async def realtime_chat(websocket: WebSocket):
         return
     session_id = session["session_id"]
 
+    # Register with central SessionManager to enforce concurrency/queue policies
+    try:
+        manager = get_session_manager()
+        # honor optional queue_policy query param: cancel_oldest|queue|reject
+        queue_policy = websocket.query_params.get("queue_policy") or "cancel_oldest"
+        await manager.create_session(session_id=session_id, metadata={"user_id": str(user.id)}, queue_policy=queue_policy)
+    except Exception:
+        logger.exception("Failed to register session with SessionManager")
+
     if not await _safe_send_json(
         websocket,
         ServerEvent(
@@ -188,4 +198,12 @@ async def realtime_chat(websocket: WebSocket):
     except WebSocketDisconnect:
         logger.info("Realtime chat websocket disconnected", user_id=str(user.id), session_id=session_id)
     finally:
-        await runtime.close_session(session_id)
+        try:
+            await runtime.close_session(session_id)
+        except Exception:
+            logger.exception("Error closing runtime session", session_id=session_id)
+        try:
+            manager = get_session_manager()
+            await manager.close_session(session_id)
+        except Exception:
+            logger.exception("Error unregistering session from SessionManager", session_id=session_id)

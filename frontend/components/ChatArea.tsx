@@ -57,51 +57,51 @@ export default function ChatArea({
   useEffect(() => { messagesRef.current = messages }, [messages])
 
   const token = getAccessToken()
-  const realtime = useRealtimeChat({
-    enabled: !!token,
-    token,
-    conversationId: currentConversationId,
-    onEvent: (event) => {
-      try {
-        if (!event || typeof event.type !== 'string') return
+  // const realtime = useRealtimeChat({
+  //   enabled: !!token,
+  //   token,
+  //   conversationId: currentConversationId,
+  //   onEvent: (event) => {
+  //     try {
+  //       if (!event || typeof event.type !== 'string') return
 
-        if (event.type === 'audio_start') {
-          // Pause local listening/transcription while assistant TTS streams
-          setPauseListening(true)
-          const streamId = (event.data && (event.data as any).stream_id) || null
-          const sampleRate = (event.data && (event.data as any).sample_rate) || 24000
-          const targetId = streamId || (messagesRef.current.slice().reverse().find(m => m.role === 'assistant')?.id)
-          if (targetId) {
-            void audioPlayer.startStream(targetId, sampleRate)
-          }
-          return
-        }
+  //       if (event.type === 'audio_start') {
+  //         // Pause local listening/transcription while assistant TTS streams
+  //         setPauseListening(true)
+  //         const streamId = (event.data && (event.data as any).stream_id) || null
+  //         const sampleRate = (event.data && (event.data as any).sample_rate) || 24000
+  //         const targetId = streamId || (messagesRef.current.slice().reverse().find(m => m.role === 'assistant')?.id)
+  //         if (targetId) {
+  //           void audioPlayer.startStream(targetId, sampleRate)
+  //         }
+  //         return
+  //       }
 
-        if (event.type === 'audio_chunk') {
-          const chunk = event.data && (event.data as any).audio
-          const streamId = (event.data && (event.data as any).stream_id) || null
-          const targetId = streamId || (messagesRef.current.slice().reverse().find(m => m.role === 'assistant')?.id)
-          if (typeof chunk === 'string' && targetId) {
-            void audioPlayer.appendChunk(targetId, chunk)
-          }
-          return
-        }
+  //       if (event.type === 'audio_chunk') {
+  //         const chunk = event.data && (event.data as any).audio
+  //         const streamId = (event.data && (event.data as any).stream_id) || null
+  //         const targetId = streamId || (messagesRef.current.slice().reverse().find(m => m.role === 'assistant')?.id)
+  //         if (typeof chunk === 'string' && targetId) {
+  //           void audioPlayer.appendChunk(targetId, chunk)
+  //         }
+  //         return
+  //       }
 
-        if (event.type === 'audio_end') {
-          // Resume listening/transcription after assistant TTS finished
-          setPauseListening(false)
-          const streamId = (event.data && (event.data as any).stream_id) || null
-          const targetId = streamId || (messagesRef.current.slice().reverse().find(m => m.role === 'assistant')?.id)
-          if (targetId) {
-            void audioPlayer.endStream(targetId)
-          }
-          return
-        }
-      } catch {
-        // ignore event processing errors
-      }
-    }
-  })
+  //       if (event.type === 'audio_end') {
+  //         // Resume listening/transcription after assistant TTS finished
+  //         setPauseListening(false)
+  //         const streamId = (event.data && (event.data as any).stream_id) || null
+  //         const targetId = streamId || (messagesRef.current.slice().reverse().find(m => m.role === 'assistant')?.id)
+  //         if (targetId) {
+  //           void audioPlayer.endStream(targetId)
+  //         }
+  //         return
+  //       }
+  //     } catch {
+  //       // ignore event processing errors
+  //     }
+  //   }
+  // })
   const [audioAvailable, setAudioAvailable] = useState<boolean | null>(null)
 
   useEffect(() => {
@@ -380,10 +380,12 @@ export default function ChatArea({
   
 
   const handleVoiceCaptured = useCallback(async ({ audioBase64, durationMs }: VoiceCapturePayload) => {
-    if (isLoading) {
+    // Prevent capturing new voice inputs while already processing or
+    // while assistant TTS is streaming from the backend.
+    if (isLoading || pauseListening) {
       return
     }
-
+    
     const userMessageId = `${Date.now()}-voice-user`
     const assistantMessageId = `${Date.now()}-voice-assistant`
     const imageFrame = captureFrame()
@@ -439,7 +441,7 @@ export default function ChatArea({
     } finally {
       setIsLoading(false)
     }
-  }, [captureFrame, currentConversationId, isLoading, onAddMessage, onUpdateMessage, runRealtimeVoiceTurn])
+  }, [captureFrame, currentConversationId, isLoading, onAddMessage, onUpdateMessage, runRealtimeVoiceTurn, pauseListening])
 
   const handleSendMessage = async (content: string) => {
     if (!content.trim() || isLoading) return

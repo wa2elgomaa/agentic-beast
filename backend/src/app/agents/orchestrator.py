@@ -249,19 +249,28 @@ class AgentOrchestrator:
         if not message:
             return "No message provided."
 
-        # Classify intent first — treat classification failures specially.
-        try:
-            intent = await handle_intent(message, context=context)
-            logger.info("Orchestrator classified intent", intent=intent, message_snippet=message[:80])
-        except ValueError as e:
-            logger.warning("Intent classification failed", error=str(e))
-            return {
-                "error": "classification_error",
-                "message": (
-                    "I'm not sure how to handle that request. "
-                    "Could you try rephrasing it?"
-                ),
-            }
+        # Classify intent first — prefer client-side pre-classification when available
+        client_cls = context.get("client_classification") if isinstance(context, dict) else None
+        if client_cls and isinstance(client_cls, dict):
+            intent = client_cls.get("intent")
+            logger.info("Using client-side preclassification", intent=intent, confidence=client_cls.get("confidence"))
+            if intent not in ("analytics", "tag_suggestions", "article_recommendations", "unknown"):
+                logger.warning("Client classification produced invalid intent", intent=intent)
+                intent = None
+
+        if not client_cls:
+            try:
+                intent = await handle_intent(message, context=context)
+                logger.info("Orchestrator classified intent", intent=intent, message_snippet=message[:80])
+            except ValueError as e:
+                logger.warning("Intent classification failed", error=str(e))
+                return {
+                    "error": "classification_error",
+                    "message": (
+                        "I'm not sure how to handle that request. "
+                        "Could you try rephrasing it?"
+                    ),
+                }
 
         # Proceed with routing and downstream processing. Any non-classification
         # errors should be surfaced as an agent error, not a classification error.

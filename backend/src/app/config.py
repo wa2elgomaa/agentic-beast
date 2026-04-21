@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Literal, Optional
 
 from pydantic import Field, computed_field, field_validator
+from typing import Dict
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 try:
@@ -13,6 +14,12 @@ try:
     HAS_BOTO3 = True
 except ImportError:
     HAS_BOTO3 = False
+
+try:
+    import yaml
+    HAS_PYYAML = True
+except Exception:
+    HAS_PYYAML = False
 
 
 BASE_DIR = Path(__file__).resolve().parents[2]
@@ -393,6 +400,29 @@ class Settings(BaseSettings):
     def is_development(self) -> bool:
         """Check if running in development."""
         return self.environment == "development"
+
+    @computed_field
+    @property
+    def model_settings(self) -> Dict[str, object]:
+        """Load `model_settings.yaml` from the configured `config_dir` under backend.
+
+        Returns an empty dict if the file is missing or PyYAML is not installed.
+        """
+        file_path = BASE_DIR / self.config_dir / "model_settings.yaml"
+        if not file_path.exists():
+            return {}
+
+        if not HAS_PYYAML:
+            logger.warning("PyYAML not installed; cannot parse model_settings.yaml")
+            return {}
+
+        try:
+            with open(file_path, "r", encoding="utf-8") as fh:
+                data = yaml.safe_load(fh)
+                return data or {}
+        except Exception as e:
+            logger.error(f"Failed to load model_settings.yaml: {e}")
+            return {}
 
     @computed_field
     @property

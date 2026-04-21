@@ -82,6 +82,12 @@ def get_ai_provider(
             base_url=opts.get("base_url"),
         )
 
+    elif provider_name in ("litert", "polar"):
+        # Multimodal / LiteRT / Polar adapter
+        from app.providers.litert_adapter import LiteRTAdapter  # noqa: PLC0415
+        logger.info("Creating LiteRT/Polar adapter", model=model)
+        inst = LiteRTAdapter(model=model, url=opts.get("base_url") or None)
+
     else:
         raise ValueError(
             f"Unknown AI provider: {provider_name!r}. "
@@ -95,3 +101,17 @@ def get_ai_provider(
 def clear_provider_cache() -> None:
     """Clear the provider instance cache (useful in tests)."""
     _CACHE.clear()
+
+
+def get_multimodal_provider(options: Optional[dict] = None):
+    """Return a provider instance suitable for multimodal workloads.
+
+    This inspects `settings.model_settings` for a configured multimodal
+    `provider` and falls back to 'litert' if not specified.
+    """
+    opts = options or {}
+    ms = getattr(settings, "model_settings", {}) or {}
+    multimodal = ms.get("multimodal", {}) if isinstance(ms, dict) else {}
+    provider_name = multimodal.get("provider") or opts.get("provider") or "litert"
+    model = (multimodal.get("models") or {}).get("chat") or opts.get("model")
+    return get_ai_provider(name=provider_name, model=model, options=opts)

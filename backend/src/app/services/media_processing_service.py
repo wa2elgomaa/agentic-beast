@@ -125,7 +125,7 @@ class MediaProcessingService:
 
         normalized_text = transcript_text
         if visual_context:
-            base_text = transcript_text or "The user sent camera context without spoken audio."
+            base_text = transcript_text or "I received a camera context without spoken audio."
             normalized_text = (
                 f"{base_text}\n\n"
                 f"Camera context:\n{visual_context}"
