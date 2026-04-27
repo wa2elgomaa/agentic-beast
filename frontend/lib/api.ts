@@ -1,4 +1,4 @@
-import { APIBaseURL, APIPrefix, CHAT_URL, CONVERSATION_URL, MEDIA_CHAT_URL, REALTIME_CHAT_URL, buildApiUrl, buildWebSocketUrl } from '@/constants/urls'
+import { APIBaseURL, APIPrefix, CHAT_URL, CHAT_STREAM_URL, VOICE_CHAT_URL, CONVERSATION_URL, MEDIA_CHAT_URL, REALTIME_CHAT_URL, buildApiUrl, buildWebSocketUrl } from '@/constants/urls'
 import {
   ChatMediaRequestPayload,
   QueryResponse,
@@ -35,8 +35,84 @@ function getAuthHeaders(): HeadersInit {
   }
 }
 
+export class GmailCredentialExpiredError extends Error {
+  reauth_url: string
+  task_id: string
+  constructor(reauth_url: string, task_id: string) {
+    super('Gmail credentials have expired. Re-authorization is required.')
+    this.name = 'GmailCredentialExpiredError'
+    this.reauth_url = reauth_url
+    this.task_id = task_id
+  }
+}
+
 export function getAccessToken(): string | null {
   return typeof window !== 'undefined' ? localStorage.getItem('access_token') : null
+}
+
+/** Call the refresh endpoint and update localStorage with the new token.
+ *  Returns the new access token, or throws if the refresh fails. */
+export async function refreshToken(): Promise<string> {
+  const response = await fetch(buildApiUrl(`${APIPrefix}/users/refresh`), {
+    method: 'POST',
+    headers: getAuthHeaders(),
+  })
+  if (!response.ok) {
+    throw new Error(`Token refresh failed: ${response.status}`)
+  }
+  const data = await response.json()
+  const newToken: string = data.access_token
+  if (typeof window !== 'undefined') {
+    localStorage.setItem('access_token', newToken)
+  }
+  return newToken
+}
+
+/** fetch() wrapper that automatically retries once with a refreshed token on 401. */
+export async function fetchWithAuth(input: string, init: RequestInit = {}): Promise<Response> {
+  const first = await fetch(input, { ...init, headers: { ...getAuthHeaders(), ...(init.headers as Record<string, string> ?? {}) } })
+  if (first.status !== 401) return first
+
+  try {
+    await refreshToken()
+  } catch {
+    return first   // surfacing original 401 if refresh itself fails
+  }
+
+  return fetch(input, { ...init, headers: { ...getAuthHeaders(), ...(init.headers as Record<string, string> ?? {}) } })
+}
+
+export interface VoiceTurnResult {
+  transcript: string | null
+  assistant_text: string
+  audio_base64: string | null
+  audio_sample_rate: number
+  conversation_id: string | null
+}
+
+/** Submit a base64-encoded audio clip and get back transcript + assistant text + TTS audio. */
+export async function submitVoiceTurn(
+  audioBase64: string,
+  conversationId?: string | null,
+): Promise<VoiceTurnResult> {
+  const response = await fetchWithAuth(buildApiUrl(VOICE_CHAT_URL), {
+    method: 'POST',
+    body: JSON.stringify({ audio: audioBase64, conversation_id: conversationId ?? null }),
+  })
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ detail: 'Unknown error' }))
+    throw new Error(err.detail || `Voice turn failed: HTTP ${response.status}`)
+  }
+  return response.json()
+}
+
+export function buildChatStreamWsUrl(token: string, conversationId?: string | null): string {
+  const url = new URL(buildWebSocketUrl(CHAT_STREAM_URL))
+  url.searchParams.set('token', token)
+  if (conversationId) {
+    url.searchParams.set('conversation_id', conversationId)
+  }
+  return url.toString()
 }
 
 export function buildRealtimeChatWsUrl(token: string, conversationId?: string | null): string {
@@ -251,7 +327,7 @@ function toOrchestratorResponse(payload: any): OrchestratorResponse {
     analyticsContent?.result_data ||
     parsedContent?.result_data ||
     parsedContent?.results ||
-    undefined
+    (Array.isArray(payload?.message?.metadata?.raw_rows) ? payload.message.metadata.raw_rows : undefined)
 
   const note =
     analyticsContent?.verification ||
@@ -679,7 +755,10 @@ export async function previewEmailsForTask(taskId: string, limit: number = 10, p
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: 'Unknown error' }))
-    throw new Error(error.detail || `HTTP ${response.status}`)
+    if (response.status === 401 && error.detail?.error === 'credential_expired' && error.detail?.reauth_url) {
+      throw new GmailCredentialExpiredError(error.detail.reauth_url, error.detail.task_id)
+    }
+    throw new Error(typeof error.detail === 'string' ? error.detail : `HTTP ${response.status}`)
   }
 
   return response.json()
@@ -694,7 +773,10 @@ export async function runTaskWithSelections(taskId: string, selectedMessageIds: 
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: 'Unknown error' }))
-    throw new Error(error.detail || `HTTP ${response.status}`)
+    if (response.status === 401 && error.detail?.error === 'credential_expired' && error.detail?.reauth_url) {
+      throw new GmailCredentialExpiredError(error.detail.reauth_url, error.detail.task_id)
+    }
+    throw new Error(typeof error.detail === 'string' ? error.detail : `HTTP ${response.status}`)
   }
 
   return response.json()

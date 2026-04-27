@@ -15,6 +15,7 @@ export default function useAudioPlayer(opts: UseAudioPlayerOptions = {}) {
     playbackOffset: number
     state: StreamState
     pendingTimeout?: number
+    sources: AudioBufferSourceNode[]
   }>())
 
   const ensureAudioContext = useCallback(async () => {
@@ -61,6 +62,7 @@ export default function useAudioPlayer(opts: UseAudioPlayerOptions = {}) {
       sampleRate,
       playbackOffset: audioCtx.currentTime + 0.05,
       state: 'playing',
+      sources: [],
     })
     onStreamStart?.(streamId)
   }, [ensureAudioContext, onStreamStart])
@@ -88,6 +90,7 @@ export default function useAudioPlayer(opts: UseAudioPlayerOptions = {}) {
     const startAt = Math.max(now, effective.playbackOffset || now)
     source.start(startAt)
     effective.playbackOffset = startAt + audioBuffer.duration
+    effective.sources.push(source)
     streamsRef.current.set(streamId, effective)
   }, [ensureAudioContext, decodeBase64ToInt16, startStream])
 
@@ -117,6 +120,17 @@ export default function useAudioPlayer(opts: UseAudioPlayerOptions = {}) {
     onStreamEnd?.(streamId)
   }, [onStreamEnd])
 
+  const stopAll = useCallback(() => {
+    for (const [streamId, meta] of streamsRef.current) {
+      if (meta.pendingTimeout) clearTimeout(meta.pendingTimeout)
+      for (const src of meta.sources) {
+        try { src.stop() } catch { /* already stopped or not yet started */ }
+      }
+      streamsRef.current.delete(streamId)
+      onStreamEnd?.(streamId)
+    }
+  }, [onStreamEnd])
+
   const isPlaying = useCallback((streamId: string) => {
     const meta = streamsRef.current.get(streamId)
     return !!meta && meta.state === 'playing'
@@ -127,6 +141,7 @@ export default function useAudioPlayer(opts: UseAudioPlayerOptions = {}) {
     appendChunk,
     endStream,
     stopStream,
+    stopAll,
     isPlaying,
     ensureAudioContext,
     resume,

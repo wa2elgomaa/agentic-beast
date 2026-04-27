@@ -59,7 +59,7 @@ def test_realtime_websocket_event_sequence(monkeypatch):
     # Monkeypatch authentication, user lookup, and runtime used by the websocket handler
     monkeypatch.setattr(chat_realtime, "get_auth_service", lambda: FakeAuthService())
     monkeypatch.setattr(chat_realtime, "UserService", FakeUserService)
-    monkeypatch.setattr(chat_realtime, "get_polar_runtime_service", lambda: FakeRuntime())
+    monkeypatch.setattr(chat_realtime, "get_LiteRT_runtime_service", lambda: FakeRuntime())
 
     client = TestClient(app)
 

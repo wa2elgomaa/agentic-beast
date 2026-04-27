@@ -35,7 +35,7 @@ async def test_litert_stream_tts_monotonic_events(monkeypatch):
     # Patch the runtime accessor used by the adapter
     import app.providers.litert_adapter as adapter_mod
 
-    monkeypatch.setattr(adapter_mod, "get_polar_runtime_service", lambda: fake)
+    monkeypatch.setattr(adapter_mod, "get_LiteRT_runtime_service", lambda: fake)
 
     adapter = LiteRTAdapter(model="test-model")
     events = []

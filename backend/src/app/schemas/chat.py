@@ -1,7 +1,7 @@
 """Chat API request and response schemas."""
 
 from datetime import datetime
-from typing import Any, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
@@ -84,6 +84,7 @@ class ChatMessageMetadata(BaseModel):
     modality_pipeline: Optional[str] = None
     tts_sample_rate: Optional[int] = None
     tts_chunks: Optional[List[str]] = None
+    raw_rows: Optional[List[Dict[str, Any]]] = None
 
 
 class MessageResponse(BaseModel):

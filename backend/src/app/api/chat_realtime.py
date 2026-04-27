@@ -10,7 +10,7 @@ from app.config import settings
 from app.db.session import AsyncSessionLocal
 from app.logging import get_logger
 from app.services.auth_service import get_auth_service
-from app.services.multimodal import get_polar_runtime_service
+from app.services.multimodal import get_LiteRT_runtime_service
 from app.services.multimodal.session_protocol import ClientEvent, ServerEvent
 from app.services.user_service import UserService
 from app.services.session_manager import get_session_manager
@@ -97,8 +97,8 @@ async def realtime_chat(websocket: WebSocket):
 
     await websocket.accept()
 
-    runtime = get_polar_runtime_service()
-    provider_status = await runtime.dependency_status()
+    runtime = get_LiteRT_runtime_service()
+    # provider_status = await runtime.dependency_status()
     try:
         session = await runtime.create_session(
             user_id=str(user.id),
@@ -134,9 +134,9 @@ async def realtime_chat(websocket: WebSocket):
             session_id=session_id,
             message="Realtime multimodal session initialized.",
             data={
-                "provider": provider_status["provider"],
-                "enabled": provider_status["enabled"],
-                "ready": provider_status["ready"],
+                # "provider": provider_status["provider"],
+                # "enabled": provider_status["enabled"],
+                # "ready": provider_status["ready"],
             },
         ).as_payload(),
     ):
@@ -168,7 +168,7 @@ async def realtime_chat(websocket: WebSocket):
                 )
                 continue
 
-            if event.audio and len(event.audio) > settings.multimodal_max_audio_bytes:
+            if event.audio and len(event.audio) > settings.max_audio_bytes:
                 await websocket.send_json(
                     ServerEvent(
                         type="error",
@@ -178,7 +178,7 @@ async def realtime_chat(websocket: WebSocket):
                 )
                 continue
 
-            if event.image and len(event.image) > settings.multimodal_max_image_bytes:
+            if event.image and len(event.image) > settings.max_image_bytes:
                 await websocket.send_json(
                     ServerEvent(
                         type="error",

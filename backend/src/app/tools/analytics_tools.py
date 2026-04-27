@@ -7,7 +7,7 @@ from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.logging import get_logger
-from app.models import Document
+from app.schemas import Document
 from app.schemas.analytics import (
     Aggregation,
     AnalyticsQuery,

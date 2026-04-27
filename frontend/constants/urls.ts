@@ -15,6 +15,8 @@ export const CONVERSATION_URL = `${APIPrefix}/chat/conversations`
 export const CHAT_URL = `${APIPrefix}/chat`
 export const MEDIA_CHAT_URL = `${APIPrefix}/chat/media`
 export const REALTIME_CHAT_URL = `${APIPrefix}/chat/realtime/ws`
+export const CHAT_STREAM_URL = `${APIPrefix}/chat/ws`
+export const VOICE_CHAT_URL = `${APIPrefix}/chat/voice`
 
 export const VALIDATE_RESET_TOKEN_URL = (token: string) => `${APIPrefix}/auth/validate-reset-token/${token}`
 

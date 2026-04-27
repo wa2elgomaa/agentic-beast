@@ -9,8 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db_session
 from app.logging import get_logger
-from app.models.conversation import Conversation, Message
-from app.models.user import User
+from app.schemas.conversation import Conversation, Message
+from app.schemas.user import User
 from app.schemas.chat import (
     ChatRequest,
     ChatMediaRequest,
@@ -23,6 +23,7 @@ from app.schemas.chat import (
     ConversationTitleUpdateRequest,
 )
 from app.api.users import get_current_user
+from app.api.auth_apikey import get_authenticated_user
 from app.config import settings
 from app.services.chat_service import ChatService
 from fastapi.responses import StreamingResponse
@@ -69,7 +70,8 @@ async def get_chat_service(
 async def chat(
     request: ChatRequest,
     chat_service: Annotated[ChatService, Depends(get_chat_service)],
-    current_user: Annotated[User, Depends(get_current_user)],
+    # Support either API Key auth (x-api-key) or JWT. We prefer API key if provided.
+    current_user: Annotated[User, Depends(get_authenticated_user)],
 ):
     """Send a message to the AI assistant.
 
@@ -223,9 +225,13 @@ async def stream_message_tts(
         # Otherwise synthesize on-demand and stream directly
         provider = None
         try:
-            from app.providers.factory import get_multimodal_provider
+            from app.providers.factory import get_ai_provider
 
-            provider = get_multimodal_provider()
+            provider = get_ai_provider()
+            if not hasattr(provider, "stream_tts"):
+                payload = {"type": "error", "message": "TTS is not supported by the configured AI provider"}
+                yield f"data: {json.dumps(payload)}\n\n"
+                return
             # Ensure message.content is the assistant text
             async for ev in provider.stream_tts(message.content):
                 yield f"data: {json.dumps(ev)}\n\n"

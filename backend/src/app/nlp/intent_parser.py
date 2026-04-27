@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.config import settings
 from app.nlp.column_mapper import WHITELISTED_METRICS, WHITELISTED_DIMENSIONS
-from app.utilities.json_chat import generate_json_object
+from app.utils.json_chat import generate_json_object
 
 logger = logging.getLogger(__name__)
 
@@ -320,10 +320,10 @@ async def parse_query(
     Raises:
         UnsupportedQueryError: If provider is unreachable or returns invalid JSON.
     """
-    if settings.ai_provider in ("openai", "strands"):
-        parse_model = (settings.openai_parse_model or "").strip() or settings.openai_model
+    if settings.main_llm_provider in ("openai", "strands"):
+        parse_model = (settings.main_model or "").strip() or settings.main_model
     else:
-        parse_model = settings.ollama_model
+        parse_model = settings.main_model
 
     # Build message list: system + few-shot + optional history + current query
     messages: list[dict] = [

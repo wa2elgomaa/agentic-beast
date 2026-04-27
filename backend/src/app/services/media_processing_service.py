@@ -35,8 +35,8 @@ class MediaProcessingService:
 
     def __init__(self) -> None:
         client_args: dict[str, str] = {
-            "api_key": settings.effective_openai_api_key,
-            "base_url": settings.effective_openai_base_url,
+            "api_key": settings.main_api_key,
+            "base_url": settings.main_model_base_url,
         }
         self._client = AsyncOpenAI(**client_args)
 
@@ -63,22 +63,35 @@ class MediaProcessingService:
         }.get(normalized, "application/octet-stream")
 
     async def transcribe_audio(self, audio_base64: str, audio_format: str) -> tuple[str, float | None]:
-        """Transcribe a base64-encoded audio payload via OpenAI."""
+        """Transcribe a base64-encoded audio payload.
+
+        Delegates to `tools.v1.audio_transcript_tool` which may use litert
+        if available, otherwise falls back to the OpenAI transcription
+        path. Returns (transcript, confidence).
+        """
         audio_bytes = self._decode_base64(audio_base64, label="audio")
-        response = await self._client.audio.transcriptions.create(
-            model=settings.openai_transcription_model,
-            file=(f"chat-input.{audio_format}", audio_bytes, self._content_type_for_audio(audio_format)),
-        )
-        if not (transcript := (getattr(response, "text", "") or "").strip()):
-            raise ValueError("Audio transcription returned no text.")
-        return transcript, None
+        try:
+            from app.tools.v1.audio_transcript_tool import get_audio_transcript_tool
+
+            tool = get_audio_transcript_tool()
+            result = await tool.transcribe_bytes(audio_bytes, audio_format)
+            return result.get("transcript"), result.get("confidence")
+        except Exception:
+            # Fall back to original OpenAI transcription if the tool call fails
+            response = await self._client.audio.transcriptions.create(
+                model=settings.main_model,
+                file=(f"chat-input.{audio_format}", audio_bytes, self._content_type_for_audio(audio_format)),
+            )
+            if not (transcript := (getattr(response, "text", "") or "").strip()):
+                raise ValueError("Audio transcription returned no text.")
+            return transcript, None
 
     async def extract_visual_context(self, image_frames: list[str]) -> Optional[str]:
         """Summarize sampled camera frames into compact text context."""
         if not image_frames:
             return None
 
-        frame_count = min(len(image_frames), settings.openai_vision_max_frames)
+        frame_count = min(len(image_frames), settings.vision_max_frames)
         content: list[dict] = [
             {
                 "type": "text",
@@ -97,7 +110,7 @@ class MediaProcessingService:
             content.append({"type": "image_url", "image_url": {"url": image_url}})
 
         response = await self._client.chat.completions.create(
-            model=settings.openai_model,
+            model=settings.main_model,
             messages=[{"role": "user", "content": content}],
             temperature=0.2,
             max_tokens=180,

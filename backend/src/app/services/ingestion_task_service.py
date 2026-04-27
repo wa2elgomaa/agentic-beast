@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.logging import get_logger
-from app.models import IngestionTask, IngestionTaskRun, AdaptorType, ScheduleType, TaskStatus, RunStatus
+from app.schemas import IngestionTask, IngestionTaskRun, AdaptorType, ScheduleType, TaskStatus, RunStatus
 from app.tasks.celery_app import celery_app
 from app.utils import utc_now
 

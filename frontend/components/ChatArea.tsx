@@ -3,12 +3,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Message, OrchestratorResponse, QuerySuggestion } from '@/types'
 import AudioCanvas from './AudioCanvas'
+import AudioPlaybackBar from './AudioPlaybackBar'
 import ChatMessage from './ChatMessage'
 import MessageInput, { AudioModeState, VoiceCapturePayload } from './MessageInput'
 import WelcomeScreen from './WelcomeScreen'
-import { buildRealtimeChatWsUrl, chat, getAccessToken } from '@/lib/api'
+import { getAccessToken } from '@/lib/api'
 import useAudioPlayer from '@/hooks/useAudioPlayer'
-import { useRealtimeChat } from '@/hooks/useRealtimeChat'
+import { useChatStream } from '@/hooks/useChatStream'
 import clsx from 'clsx'
 
 type VoiceState = 'loading' | 'listening' | 'processing' | 'speaking'
@@ -49,7 +50,11 @@ export default function ChatArea({
   const [playingStreams, setPlayingStreams] = useState<Record<string, boolean>>({})
   const audioPlayer = useAudioPlayer({
     onStreamStart: (id) => setPlayingStreams((s) => ({ ...s, [id]: true })),
-    onStreamEnd: (id) => setPlayingStreams((s) => ({ ...s, [id]: false })),
+    onStreamEnd: (id) => {
+      setPlayingStreams((s) => ({ ...s, [id]: false }))
+      // Resume mic only after audio has actually finished playing
+      setPauseListening(false)
+    },
   })
   const [pauseListening, setPauseListening] = useState(false)
 
@@ -57,6 +62,99 @@ export default function ChatArea({
   useEffect(() => { messagesRef.current = messages }, [messages])
 
   const token = getAccessToken()
+
+  // Streaming text/audio chat via WebSocket
+  const streamingAssistantIdRef = useRef<string | null>(null)
+  const streamingUserIdRef = useRef<string | null>(null)
+  const streamingContentRef = useRef<string>('')
+  // Track last user input so onComplete can use it as conversation title
+  const lastUserInputRef = useRef<string>('')
+  // Ref mirror of currentConversationId to avoid stale closures in WS callbacks
+  const currentConversationIdRef = useRef<string | null>(currentConversationId)
+  useEffect(() => { currentConversationIdRef.current = currentConversationId }, [currentConversationId])
+  const chatStream = useChatStream({
+    token,
+    conversationId: currentConversationId,
+    onThinking: () => {
+      // Loading skeleton already shown via isLoading state
+    },
+    onChunk: (text) => {
+      const id = streamingAssistantIdRef.current
+      if (!id) return
+      streamingContentRef.current += text
+      onUpdateMessage(id, {
+        content: streamingContentRef.current,
+        isLoading: false,
+      })
+    },
+    onComplete: (data) => {
+      const id = streamingAssistantIdRef.current
+      if (!id) return
+      // For audio turns don't clear refs yet — wait for audio_end
+      const results = data?.results ?? []
+      const operation = results.length > 0 ? 'query_documents' : undefined
+      const operationData = { answer: data?.response_text, results, conversation_id: data?.conversation_id }
+      onUpdateMessage(id, {
+        operation: operation as any,
+        operationData,
+        conversation_id: data?.conversation_id,
+        isLoading: false,
+      })
+      // If this was the first message in a new conversation, register it so the
+      // sidebar refreshes and currentConversationId is set in ChatContainer.
+      if (!currentConversationIdRef.current && data?.conversation_id) {
+        void onConversationReady?.(data.conversation_id, lastUserInputRef.current || 'Conversation')
+        lastUserInputRef.current = ''
+      }
+      // Only set isLoading=false for text turns (audio turns handle this in onAudioEnd)
+      if (!streamingUserIdRef.current) {
+        streamingAssistantIdRef.current = null
+        streamingContentRef.current = ''
+        setIsLoading(false)
+      }
+    },
+    onError: (message) => {
+      const id = streamingAssistantIdRef.current
+      if (id) onUpdateMessage(id, { content: `Error: ${message}`, isLoading: false })
+      streamingAssistantIdRef.current = null
+      streamingUserIdRef.current = null
+      streamingContentRef.current = ''
+      setIsLoading(false)
+    },
+    onTranscript: (text) => {
+      // Capture transcript as potential conversation title for new conversations
+      lastUserInputRef.current = text || 'Voice message'
+      const userId = streamingUserIdRef.current
+      if (userId) {
+        onUpdateMessage(userId, { content: text || 'Voice message' })
+      }
+    },
+    onAudioStart: (sampleRate) => {
+      const assistantId = streamingAssistantIdRef.current
+      if (assistantId) {
+        setPauseListening(true)
+        void audioPlayer.startStream(assistantId, sampleRate)
+      }
+    },
+    onAudioChunk: (audio) => {
+      const assistantId = streamingAssistantIdRef.current
+      if (assistantId && audio) {
+        void audioPlayer.appendChunk(assistantId, audio)
+      }
+    },
+    onAudioEnd: () => {
+      const assistantId = streamingAssistantIdRef.current
+      if (assistantId) {
+        void audioPlayer.endStream(assistantId)
+      }
+      streamingAssistantIdRef.current = null
+      streamingUserIdRef.current = null
+      streamingContentRef.current = ''
+      // Do NOT resume mic here — audio is still playing in Web Audio API.
+      // onStreamEnd fires after actual playback completes and resumes the mic.
+      setIsLoading(false)
+    },
+  })
   // const realtime = useRealtimeChat({
   //   enabled: !!token,
   //   token,
@@ -210,185 +308,24 @@ export default function ChatArea({
   }, [cameraEnabled])
 
   // audioPlayer provides scheduling and playback lifecycle
+  const isAnyAudioPlaying = Object.values(playingStreams).some(Boolean)
 
-  const runRealtimeVoiceTurn = useCallback(async (payload: {
-    audioBase64: string
-    imageBase64?: string | null
-    durationMs: number
-  }, streamId?: string) => {
-    const token = getAccessToken()
-    if (!token) {
-      throw new Error('Missing authentication token for realtime chat.')
-    }
+  const handleStopAudio = useCallback(() => {
+    audioPlayer.stopAll()
+    streamingAssistantIdRef.current = null
+    streamingUserIdRef.current = null
+    streamingContentRef.current = ''
+    setPauseListening(false)
+    setIsLoading(false)
+  }, [audioPlayer])
 
-    return new Promise<{ transcript: string | null; assistantText: string }>((resolve, reject) => {
-      let finalized = false
-      let transcript: string | null = null
-      let assistantText = ''
-      let sampleRate = 24000
-      let audioStarted = false
-        let assistantTextTimeout: number | null = null
-
-      const wsUrl = buildRealtimeChatWsUrl(token, currentConversationId)
-      const socket = new WebSocket(wsUrl)
-      console.debug('[realtime] opening websocket', wsUrl)
-      const timeoutId = window.setTimeout(() => {
-        if (finalized) {
-          return
-        }
-        finalized = true
-        socket.close()
-        reject(new Error('Realtime voice response timed out.'))
-      }, 45000)
-
-      const finishSuccess = () => {
-        if (finalized) {
-          return
-        }
-        finalized = true
-        window.clearTimeout(timeoutId)
-        socket.close()
-        resolve({
-          transcript,
-          assistantText: assistantText.trim(),
-        })
-      }
-
-      const finishError = (message: string) => {
-        if (finalized) {
-          return
-        }
-        finalized = true
-        window.clearTimeout(timeoutId)
-        socket.close()
-        reject(new Error(message || 'Realtime voice processing failed.'))
-      }
-
-      socket.onopen = () => {
-        console.debug('[realtime] websocket open, sending audio event')
-        try {
-          socket.send(JSON.stringify({
-            type: 'audio',
-            audio: payload.audioBase64,
-            image: payload.imageBase64 || undefined,
-            conversation_id: currentConversationId,
-            metadata: {
-              media_duration_ms: payload.durationMs,
-            },
-          }))
-        } catch (err) {
-          console.error('[realtime] failed to send audio event', err)
-        }
-      }
-
-      socket.onmessage = (event) => {
-        console.debug('[realtime] websocket message received', event.data)
-        try {
-          let parsed: any
-          try {
-            parsed = JSON.parse(event.data)
-          } catch (err) {
-            console.error('[realtime] failed to parse incoming message as JSON', event.data, err)
-            throw err
-          }
-
-          if (parsed.type === 'error') {
-            finishError(parsed.message || 'Realtime provider returned an error.')
-            return
-          }
-
-          if (parsed.type === 'transcript') {
-            transcript = parsed.message || transcript
-            return
-          }
-
-          if (parsed.type === 'assistant_text') {
-            assistantText = parsed.message || assistantText
-            // Wait briefly for a possible audio_start to arrive; if none arrives
-            // within the grace period, finalize the turn so speechless providers
-            // still return promptly.
-            if (assistantTextTimeout) {
-              clearTimeout(assistantTextTimeout)
-            }
-            assistantTextTimeout = window.setTimeout(() => {
-              if (!audioStarted && !finalized) {
-                finishSuccess()
-              }
-            }, 300)
-            return
-          }
-          if (parsed.type === 'audio_start') {
-            audioStarted = true
-            // If assistant begins streaming audio for this voice turn,
-            // pause local listening/transcription while playback occurs.
-            setPauseListening(true)
-            const maybeRate = parsed.data?.sample_rate
-            if (typeof maybeRate === 'number' && maybeRate > 0) {
-              sampleRate = maybeRate
-            }
-            if (assistantTextTimeout) {
-              clearTimeout(assistantTextTimeout)
-              assistantTextTimeout = null
-            }
-            // map incoming audio stream to provided streamId (assistant message id)
-            if (streamId) {
-              void audioPlayer.startStream(streamId, sampleRate)
-            }
-            return
-          }
-
-          if (parsed.type === 'audio_chunk') {
-            const chunk = parsed.data?.audio
-            if (typeof chunk === 'string' && chunk.length > 0) {
-              if (streamId) {
-                void audioPlayer.appendChunk(streamId, chunk)
-              }
-            }
-            return
-          }
-
-          if (parsed.type === 'audio_end') {
-            // Resume listening/transcription once the assistant finishes.
-            setPauseListening(false)
-            if (streamId) {
-              void audioPlayer.endStream(streamId)
-            }
-            finishSuccess()
-          }
-        } catch {
-          finishError('Received invalid realtime response payload.')
-        }
-      }
-
-      socket.onerror = (ev) => {
-        console.error('[realtime] websocket error', ev)
-        finishError('Realtime websocket connection failed.')
-      }
-
-      socket.onclose = (ev) => {
-        console.debug('[realtime] websocket closed', ev)
-        if (!finalized) {
-          if (assistantText.trim()) {
-            finishSuccess()
-          } else {
-            finishError('Realtime websocket closed before a response was completed.')
-          }
-        }
-      }
-    })
-  }, [currentConversationId, audioPlayer, setPauseListening])
-  
-
-  const handleVoiceCaptured = useCallback(async ({ audioBase64, durationMs }: VoiceCapturePayload) => {
+  const handleVoiceCaptured = useCallback(({ audioBase64, durationMs }: VoiceCapturePayload) => {
     // Prevent capturing new voice inputs while already processing or
     // while assistant TTS is streaming from the backend.
-    if (isLoading || pauseListening) {
-      return
-    }
-    
+    if (isLoading || pauseListening) return
+
     const userMessageId = `${Date.now()}-voice-user`
     const assistantMessageId = `${Date.now()}-voice-assistant`
-    const imageFrame = captureFrame()
 
     onAddMessage({
       id: userMessageId,
@@ -401,7 +338,7 @@ export default function ChatArea({
     onAddMessage({
       id: assistantMessageId,
       role: 'assistant',
-      content: 'Working on your question...',
+      content: '',
       timestamp: new Date(),
       conversation_id: currentConversationId || undefined,
       isLoading: true,
@@ -409,39 +346,13 @@ export default function ChatArea({
 
     setIsLoading(true)
 
-    try {
-      const result = await runRealtimeVoiceTurn({
-        audioBase64,
-        imageBase64: imageFrame,
-        durationMs,
-      }, assistantMessageId)
+    // Track IDs so the shared chatStream callbacks can update the right messages
+    streamingUserIdRef.current = userMessageId
+    streamingAssistantIdRef.current = assistantMessageId
+    streamingContentRef.current = ''
 
-      onUpdateMessage(userMessageId, {
-        content: result.transcript || 'Voice message',
-        conversation_id: currentConversationId || undefined,
-        metadata: {
-          input_type: imageFrame ? 'camera_audio' : 'audio',
-          transcript_source: 'polar_runtime',
-          has_visual_context: Boolean(imageFrame),
-          media_duration_ms: durationMs,
-          modality_pipeline: 'polar_realtime_websocket',
-        },
-      })
-
-      onUpdateMessage(assistantMessageId, {
-        content: result.assistantText || 'No response generated.',
-        conversation_id: currentConversationId || undefined,
-        isLoading: false,
-      })
-    } catch (error) {
-      onUpdateMessage(assistantMessageId, {
-        content: `Error: ${error instanceof Error ? error.message : 'Voice processing failed.'}`,
-        isLoading: false,
-      })
-    } finally {
-      setIsLoading(false)
-    }
-  }, [captureFrame, currentConversationId, isLoading, onAddMessage, onUpdateMessage, runRealtimeVoiceTurn, pauseListening])
+    chatStream.sendAudio(audioBase64, currentConversationId)
+  }, [currentConversationId, isLoading, pauseListening, onAddMessage, chatStream])
 
   const handleSendMessage = async (content: string) => {
     if (!content.trim() || isLoading) return
@@ -455,7 +366,7 @@ export default function ChatArea({
     }
     const conversationId = await onNewMessage(userMessage)
 
-    // Add loading assistant message directly with the conversation ID
+    // Add loading assistant message
     const assistantMessageId = (Date.now() + 1).toString()
     const assistantMessage: Message = {
       id: assistantMessageId,
@@ -465,9 +376,7 @@ export default function ChatArea({
       isLoading: true,
       conversation_id: conversationId,
     }
-    // Add assistant message directly without creating a conversation
     onAddMessage(assistantMessage)
-
     setIsLoading(true)
 
     const resolvedConversationId = conversationId || currentConversationId || null
@@ -475,51 +384,13 @@ export default function ChatArea({
       await onConversationReady?.(resolvedConversationId, content)
     }
 
-    try {
-      // Use new orchestrator API with conversation ID
-      const response: OrchestratorResponse = await chat(
-        content,
-        conversationId,
-        true,  // include context
-        2      // context window (last 2 messages)
-      )
+    // Track which assistant message the stream events belong to
+    streamingAssistantIdRef.current = assistantMessageId
+    // Store input text in case this is the first message (used as conversation title in onComplete)
+    lastUserInputRef.current = content
 
-      const backendConversationId = response.data.conversation_id || conversationId
-
-      if (!response.success) {
-        // Handle error response
-        onUpdateMessage(assistantMessageId, {
-          content: `Error: ${response.data.error || 'Operation failed'}`,
-          isLoading: false,
-        })
-        return
-      }
-
-      const messageContent = buildAssistantContent(response)
-
-      // Update assistant message with operation data
-      onUpdateMessage(assistantMessageId, {
-        content: messageContent,
-        operation: response.operation,
-        operationData: response.data,
-        operationMetadata: response.metadata,
-        // Expose chart/code interpreter output via typed metadata field
-        metadata: response.metadata.chart_b64 || response.metadata.code_output ? {
-          chart_b64: response.metadata.chart_b64,
-          code_output: response.metadata.code_output,
-          generated_sql: response.metadata.generated_sql,
-        } : undefined,
-        conversation_id: backendConversationId,
-        isLoading: false,
-      })
-    } catch (error) {
-      onUpdateMessage(assistantMessageId, {
-        content: `Error: ${error instanceof Error ? error.message : 'Unknown error occurred'}`,
-        isLoading: false,
-      })
-    } finally {
-      setIsLoading(false)
-    }
+    // Send via WebSocket streaming — chatStream callbacks handle all updates
+    chatStream.sendMessage(content, resolvedConversationId)
   }
 
   const handleSuggestionClick = async (suggestion: QuerySuggestion) => {
@@ -617,14 +488,6 @@ export default function ChatArea({
                 key={message.id}
                 message={message}
                 onSelectSuggestion={handleSuggestionClick}
-                isPlaying={!!playingStreams[message.id]}
-                onPlayToggle={() => {
-                  if (playingStreams[message.id]) {
-                    audioPlayer.stopStream(message.id)
-                  } else {
-                    void audioPlayer.startStream(message.id)
-                  }
-                }}
               />
             ))}
             <div ref={messagesEndRef} />
@@ -655,6 +518,8 @@ export default function ChatArea({
           ></div>
           <video id="video" autoPlay muted playsInline></video>
         </div> : null}
+
+        <AudioPlaybackBar isPlaying={isAnyAudioPlaying} onStop={handleStopAudio} />
 
         {/* Audio enable banner when autoplay is blocked */}
         {audioAvailable === false && (

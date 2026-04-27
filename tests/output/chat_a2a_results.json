@@ -1,0 +1,830 @@
+[
+  {
+    "scenario_name": "top_5_instagram_videos",
+    "message": "What is the top 5 viewed videos on instagram",
+    "expected_agent": "analytics",
+    "conversation_id": "20bb764b-c542-4de2-97fa-6685a9ff369b",
+    "status_code": 200,
+    "response_status": "success",
+    "response_text": "The top 5 viewed videos on Instagram are as follows:\n\n1. **Video ID:** 0efc3bc3-6034-4d18-bb17-0a768f71ef5b  \n   **Views:** 12,311,643  \n   *Published on:* March 1, 2026\n\n2. **Video ID:** c34ac597-b43a-4c39-ad1b-1a714897ca32  \n   **Views:** 6,046,936  \n   *Published on:* March 2, 2026\n\n3. **Video ID:** 99056d01-ee70-4684-9403-930bb7b241d1  \n   **Views:** 4,935,416  \n   *Published on:* March 7, 2026\n\n4. **Video ID:** 5f8e1360-bec5-4ae2-8637-13159b297f5f  \n   **Views:** 2,810,908  \n   *Published on:* March 13, 2026\n\n5. **Video ID:** 8a303b7c-475d-46b7-b2e1-57f5acb515e3  \n   **Views:** 2,754,572  \n   *Published on:* February 28, 2026\n",
+    "has_analytics_data": false,
+    "duration_ms": 19091.7352080578,
+    "passed": true,
+    "failure_reason": null,
+    "raw_response": {
+      "conversation_id": "20bb764b-c542-4de2-97fa-6685a9ff369b",
+      "message": {
+        "id": "e946c606-8c50-4739-af47-7e561bfd124a",
+        "role": "assistant",
+        "content": "The top 5 viewed videos on Instagram are as follows:\n\n1. **Video ID:** 0efc3bc3-6034-4d18-bb17-0a768f71ef5b  \n   **Views:** 12,311,643  \n   *Published on:* March 1, 2026\n\n2. **Video ID:** c34ac597-b43a-4c39-ad1b-1a714897ca32  \n   **Views:** 6,046,936  \n   *Published on:* March 2, 2026\n\n3. **Video ID:** 99056d01-ee70-4684-9403-930bb7b241d1  \n   **Views:** 4,935,416  \n   *Published on:* March 7, 2026\n\n4. **Video ID:** 5f8e1360-bec5-4ae2-8637-13159b297f5f  \n   **Views:** 2,810,908  \n   *Published on:* March 13, 2026\n\n5. **Video ID:** 8a303b7c-475d-46b7-b2e1-57f5acb515e3  \n   **Views:** 2,754,572  \n   *Published on:* February 28, 2026\n",
+        "metadata": null,
+        "created_at": "2026-04-25T17:11:40.511960"
+      },
+      "user_message": {
+        "id": "564301cb-80d8-4f2e-9b6e-1bca2e41e73e",
+        "role": "user",
+        "content": "What is the top 5 viewed videos on instagram",
+        "metadata": {
+          "operation": null,
+          "citations": null,
+          "agents_involved": null,
+          "chart_b64": null,
+          "code_output": null,
+          "generated_sql": null,
+          "input_type": "text",
+          "transcript_source": null,
+          "transcript_confidence": null,
+          "has_visual_context": null,
+          "media_duration_ms": null,
+          "modality_pipeline": "text_direct",
+          "tts_sample_rate": null,
+          "tts_chunks": null
+        },
+        "created_at": "2026-04-25T17:11:40.511960"
+      },
+      "status": "success"
+    }
+  },
+  {
+    "scenario_name": "followup_cross_platform_comparison",
+    "message": "Compare the first video from your previous answer across all platforms",
+    "expected_agent": "analytics",
+    "conversation_id": "20bb764b-c542-4de2-97fa-6685a9ff369b",
+    "status_code": 200,
+    "response_status": "success",
+    "response_text": "The performance metrics of the first video across various social media platforms are as follows:\n\n- **TikTok**: \n  - **Views**: 43,469,020 \n  - **Shares**: 0 \n  - **Comments**: 0 \n\n- **Facebook**: \n  - **Views**: 2,337,902 \n  - **Shares**: 6,551 \n  - **Comments**: 0 \n\n- **Instagram**: \n  - **Views**: 2,019,687 \n  - **Shares**: 0 \n  - **Comments**: 0 \n\n- **LinkedIn**: \n  - **Views**: 32,485 \n  - **Comments**: 4 \n\n- **Twitter**: \n  - **Views**: 12,628 \n  - **Comments**: 0 \n\nFrom this analysis, TikTok has the highest views, while Facebook shows the most engagement with shares. Note that like metrics are not available for any platform.\n",
+    "has_analytics_data": false,
+    "duration_ms": 23281.865417025983,
+    "passed": true,
+    "failure_reason": null,
+    "raw_response": {
+      "conversation_id": "20bb764b-c542-4de2-97fa-6685a9ff369b",
+      "message": {
+        "id": "012f7063-673b-4fe7-a779-b5bd06ad9fc9",
+        "role": "assistant",
+        "content": "The performance metrics of the first video across various social media platforms are as follows:\n\n- **TikTok**: \n  - **Views**: 43,469,020 \n  - **Shares**: 0 \n  - **Comments**: 0 \n\n- **Facebook**: \n  - **Views**: 2,337,902 \n  - **Shares**: 6,551 \n  - **Comments**: 0 \n\n- **Instagram**: \n  - **Views**: 2,019,687 \n  - **Shares**: 0 \n  - **Comments**: 0 \n\n- **LinkedIn**: \n  - **Views**: 32,485 \n  - **Comments**: 4 \n\n- **Twitter**: \n  - **Views**: 12,628 \n  - **Comments**: 0 \n\nFrom this analysis, TikTok has the highest views, while Facebook shows the most engagement with shares. Note that like metrics are not available for any platform.\n",
+        "metadata": null,
+        "created_at": "2026-04-25T17:11:59.481292"
+      },
+      "user_message": {
+        "id": "2d70c5ac-7f09-47c7-90b3-15294d00a83d",
+        "role": "user",
+        "content": "Compare the first video from your previous answer across all platforms",
+        "metadata": {
+          "operation": null,
+          "citations": null,
+          "agents_involved": null,
+          "chart_b64": null,
+          "code_output": null,
+          "generated_sql": null,
+          "input_type": "text",
+          "transcript_source": null,
+          "transcript_confidence": null,
+          "has_visual_context": null,
+          "media_duration_ms": null,
+          "modality_pipeline": "text_direct",
+          "tts_sample_rate": null,
+          "tts_chunks": null
+        },
+        "created_at": "2026-04-25T17:11:59.481292"
+      },
+      "status": "success"
+    }
+  },
+  {
+    "scenario_name": "best_day_tiktok",
+    "message": "Which day is the best to publish on TikTok?",
+    "expected_agent": "analytics",
+    "conversation_id": "b9174205-c005-4db6-82a0-79fb8300fcbf",
+    "status_code": 200,
+    "response_status": "success",
+    "response_text": "The best day to publish on TikTok is **March 6, 2026**, with a total of **2,491,484 engagements**. Other strong days include **March 8, 2026** (777,152 engagements) and **February 25, 2026** (753,832 engagements).\n",
+    "has_analytics_data": false,
+    "duration_ms": 7195.844667032361,
+    "passed": true,
+    "failure_reason": null,
+    "raw_response": {
+      "conversation_id": "b9174205-c005-4db6-82a0-79fb8300fcbf",
+      "message": {
+        "id": "832c64fe-bf3a-48b7-9965-e6830f3b5d4c",
+        "role": "assistant",
+        "content": "The best day to publish on TikTok is **March 6, 2026**, with a total of **2,491,484 engagements**. Other strong days include **March 8, 2026** (777,152 engagements) and **February 25, 2026** (753,832 engagements).\n",
+        "metadata": null,
+        "created_at": "2026-04-25T17:12:22.762579"
+      },
+      "user_message": {
+        "id": "56c2013b-7fb0-46e8-9acb-0b9f19670463",
+        "role": "user",
+        "content": "Which day is the best to publish on TikTok?",
+        "metadata": {
+          "operation": null,
+          "citations": null,
+          "agents_involved": null,
+          "chart_b64": null,
+          "code_output": null,
+          "generated_sql": null,
+          "input_type": "text",
+          "transcript_source": null,
+          "transcript_confidence": null,
+          "has_visual_context": null,
+          "media_duration_ms": null,
+          "modality_pipeline": "text_direct",
+          "tts_sample_rate": null,
+          "tts_chunks": null
+        },
+        "created_at": "2026-04-25T17:12:22.762579"
+      },
+      "status": "success"
+    }
+  },
+  {
+    "scenario_name": "videos_featuring_trump",
+    "message": "What are the top videos featuring \"Donald Trump\"?",
+    "expected_agent": "analytics",
+    "conversation_id": "3a40282e-ffc8-4e1f-a4f5-44e6be1993c1",
+    "status_code": 200,
+    "response_status": "success",
+    "response_text": "Here are the top videos featuring \"Donald Trump\":\n\n1. **US President Donald Trump Criticizes NYC Mayor** - Critiques New York mayor Mamdani's policies but calls him a 'nice guy'. *(705,311 engagements, TikTok, February 25, 2026)*\n   \n2. **Trump's State of the Union Address on Iran** - States that Iran could develop long-range missiles capable of reaching the US. *(284,287 engagements, Facebook, February 25, 2026)*\n\n3. **Forceful Warning to Iran in State of the Union** - Vows that Tehran will never be allowed to develop a nuclear weapon. *(216,858 engagements, Facebook, February 25, 2026)*\n\n4. **Palestinian Actor's Travel Ban Story** - Motaz Malhees discusses a travel ban imposed by Trump's administration affecting his Academy Awards attendance. *(118,665 engagements, Instagram, March 15, 2026)*\n\n5. **Trump Threatens Iran with Air Strikes** - Warns of intensified air strikes if Tehran disrupts oil flow in the Gulf. *(115,784 engagements, Facebook, March 10, 2026)*\n\nThese videos reflect a variety of topics related to Trump, highlighting his ongoing engagement in political discussions and international relations.\n",
+    "has_analytics_data": false,
+    "duration_ms": 12554.598417016678,
+    "passed": true,
+    "failure_reason": null,
+    "raw_response": {
+      "conversation_id": "3a40282e-ffc8-4e1f-a4f5-44e6be1993c1",
+      "message": {
+        "id": "481e540f-7ff3-4c05-aec4-87f7640f3ee2",
+        "role": "assistant",
+        "content": "Here are the top videos featuring \"Donald Trump\":\n\n1. **US President Donald Trump Criticizes NYC Mayor** - Critiques New York mayor Mamdani's policies but calls him a 'nice guy'. *(705,311 engagements, TikTok, February 25, 2026)*\n   \n2. **Trump's State of the Union Address on Iran** - States that Iran could develop long-range missiles capable of reaching the US. *(284,287 engagements, Facebook, February 25, 2026)*\n\n3. **Forceful Warning to Iran in State of the Union** - Vows that Tehran will never be allowed to develop a nuclear weapon. *(216,858 engagements, Facebook, February 25, 2026)*\n\n4. **Palestinian Actor's Travel Ban Story** - Motaz Malhees discusses a travel ban imposed by Trump's administration affecting his Academy Awards attendance. *(118,665 engagements, Instagram, March 15, 2026)*\n\n5. **Trump Threatens Iran with Air Strikes** - Warns of intensified air strikes if Tehran disrupts oil flow in the Gulf. *(115,784 engagements, Facebook, March 10, 2026)*\n\nThese videos reflect a variety of topics related to Trump, highlighting his ongoing engagement in political discussions and international relations.\n",
+        "metadata": null,
+        "created_at": "2026-04-25T17:12:29.958230"
+      },
+      "user_message": {
+        "id": "235b2d6c-d5d4-4e8e-8c23-bdda0fa23bc9",
+        "role": "user",
+        "content": "What are the top videos featuring \"Donald Trump\"?",
+        "metadata": {
+          "operation": null,
+          "citations": null,
+          "agents_involved": null,
+          "chart_b64": null,
+          "code_output": null,
+          "generated_sql": null,
+          "input_type": "text",
+          "transcript_source": null,
+          "transcript_confidence": null,
+          "has_visual_context": null,
+          "media_duration_ms": null,
+          "modality_pipeline": "text_direct",
+          "tts_sample_rate": null,
+          "tts_chunks": null
+        },
+        "created_at": "2026-04-25T17:12:29.958230"
+      },
+      "status": "success"
+    }
+  },
+  {
+    "scenario_name": "most_engagement_last_month",
+    "message": "Which videos got the most engagement last month?",
+    "expected_agent": "analytics",
+    "conversation_id": "93652306-0dce-431e-b4c4-a5c1306fbc46",
+    "status_code": 200,
+    "response_status": "success",
+    "response_text": "The videos with the most engagement last month are as follows:\n\n1. **Platform:** TikTok\n   - **Engagements:** **2,450,200**\n   - **Content:** Foreign Minister Abbas Araghchi asserts that Iran is not asking for a ceasefire or negotiations with the US.\n\n2. **Platform:** Facebook\n   - **Engagements:** **1,214,969**\n   - **Content:** Trump claims Russia's Putin, who supports Iran, is impressed by America's war performance.\n\n3. **Platform:** Facebook\n   - **Engagements:** **682,974**\n   - **Content:** The UAE has intercepted numerous drones and missiles.\n\n4. **Platform:** Facebook\n   - **Engagements:** **606,933**\n   - **Content:** Reem Al Hashimy, the UAE's Minister of State for International Cooperation, discusses significant topics.\n\n5. **Platform:** TikTok\n   - **Engagements:** **605,019**\n   - **Content:** The UAE Ministry of Defence shares footage of air defences intercepting threats.\n\nThese videos highlight political statements and security events, reflecting high engagement on TikTok and Facebook.\n",
+    "has_analytics_data": false,
+    "duration_ms": 15145.935625070706,
+    "passed": true,
+    "failure_reason": null,
+    "raw_response": {
+      "conversation_id": "93652306-0dce-431e-b4c4-a5c1306fbc46",
+      "message": {
+        "id": "8cfd7073-38f2-4cf8-930b-60602b694fb2",
+        "role": "assistant",
+        "content": "The videos with the most engagement last month are as follows:\n\n1. **Platform:** TikTok\n   - **Engagements:** **2,450,200**\n   - **Content:** Foreign Minister Abbas Araghchi asserts that Iran is not asking for a ceasefire or negotiations with the US.\n\n2. **Platform:** Facebook\n   - **Engagements:** **1,214,969**\n   - **Content:** Trump claims Russia's Putin, who supports Iran, is impressed by America's war performance.\n\n3. **Platform:** Facebook\n   - **Engagements:** **682,974**\n   - **Content:** The UAE has intercepted numerous drones and missiles.\n\n4. **Platform:** Facebook\n   - **Engagements:** **606,933**\n   - **Content:** Reem Al Hashimy, the UAE's Minister of State for International Cooperation, discusses significant topics.\n\n5. **Platform:** TikTok\n   - **Engagements:** **605,019**\n   - **Content:** The UAE Ministry of Defence shares footage of air defences intercepting threats.\n\nThese videos highlight political statements and security events, reflecting high engagement on TikTok and Facebook.\n",
+        "metadata": null,
+        "created_at": "2026-04-25T17:12:42.512988"
+      },
+      "user_message": {
+        "id": "b8babb99-96ff-4690-84a9-6ceb034eefa8",
+        "role": "user",
+        "content": "Which videos got the most engagement last month?",
+        "metadata": {
+          "operation": null,
+          "citations": null,
+          "agents_involved": null,
+          "chart_b64": null,
+          "code_output": null,
+          "generated_sql": null,
+          "input_type": "text",
+          "transcript_source": null,
+          "transcript_confidence": null,
+          "has_visual_context": null,
+          "media_duration_ms": null,
+          "modality_pipeline": "text_direct",
+          "tts_sample_rate": null,
+          "tts_chunks": null
+        },
+        "created_at": "2026-04-25T17:12:42.512988"
+      },
+      "status": "success"
+    }
+  },
+  {
+    "scenario_name": "avg_engagement_per_platform",
+    "message": "Show me the average engagement rate per platform",
+    "expected_agent": "analytics",
+    "conversation_id": "a600563e-8680-47f0-896f-ab6ed422abbd",
+    "status_code": 200,
+    "response_status": "success",
+    "response_text": "It seems that there are no recorded engagement rates available for social media platforms in the database. If you have something else you'd like to know or if you have specific data in mind, feel free to ask!\n",
+    "has_analytics_data": false,
+    "duration_ms": 8958.193833008409,
+    "passed": true,
+    "failure_reason": null,
+    "raw_response": {
+      "conversation_id": "a600563e-8680-47f0-896f-ab6ed422abbd",
+      "message": {
+        "id": "8617f9bf-dbd2-4467-8e42-0d2794356282",
+        "role": "assistant",
+        "content": "It seems that there are no recorded engagement rates available for social media platforms in the database. If you have something else you'd like to know or if you have specific data in mind, feel free to ask!\n",
+        "metadata": null,
+        "created_at": "2026-04-25T17:12:57.658373"
+      },
+      "user_message": {
+        "id": "fcf2d595-4898-4e86-96a1-fbc2b48200c4",
+        "role": "user",
+        "content": "Show me the average engagement rate per platform",
+        "metadata": {
+          "operation": null,
+          "citations": null,
+          "agents_involved": null,
+          "chart_b64": null,
+          "code_output": null,
+          "generated_sql": null,
+          "input_type": "text",
+          "transcript_source": null,
+          "transcript_confidence": null,
+          "has_visual_context": null,
+          "media_duration_ms": null,
+          "modality_pipeline": "text_direct",
+          "tts_sample_rate": null,
+          "tts_chunks": null
+        },
+        "created_at": "2026-04-25T17:12:57.658373"
+      },
+      "status": "success"
+    }
+  },
+  {
+    "scenario_name": "video_count_total",
+    "message": "What is the total number of videos in the database?",
+    "expected_agent": "analytics",
+    "conversation_id": "6cb228ed-e941-4ba6-bedd-5f9a6996d419",
+    "status_code": 200,
+    "response_status": "success",
+    "response_text": "There are currently no videos in the database.\n",
+    "has_analytics_data": false,
+    "duration_ms": 3722.4500839365646,
+    "passed": true,
+    "failure_reason": null,
+    "raw_response": {
+      "conversation_id": "6cb228ed-e941-4ba6-bedd-5f9a6996d419",
+      "message": {
+        "id": "2d2c0ca8-e025-4c09-8d10-11315001e61d",
+        "role": "assistant",
+        "content": "There are currently no videos in the database.\n",
+        "metadata": null,
+        "created_at": "2026-04-25T17:13:06.616844"
+      },
+      "user_message": {
+        "id": "a1a24ab7-8d66-40a4-8123-92d6c0b2a7da",
+        "role": "user",
+        "content": "What is the total number of videos in the database?",
+        "metadata": {
+          "operation": null,
+          "citations": null,
+          "agents_involved": null,
+          "chart_b64": null,
+          "code_output": null,
+          "generated_sql": null,
+          "input_type": "text",
+          "transcript_source": null,
+          "transcript_confidence": null,
+          "has_visual_context": null,
+          "media_duration_ms": null,
+          "modality_pipeline": "text_direct",
+          "tts_sample_rate": null,
+          "tts_chunks": null
+        },
+        "created_at": "2026-04-25T17:13:06.616844"
+      },
+      "status": "success"
+    }
+  },
+  {
+    "scenario_name": "top_hashtags",
+    "message": "What are the top 10 hashtags used across all platforms this year?",
+    "expected_agent": "analytics",
+    "conversation_id": "f3f24ec6-9c75-49ce-b855-4f1ba6c4de00",
+    "status_code": 200,
+    "response_status": "success",
+    "response_text": "It seems there are currently no available data on the top hashtags used across all social media platforms for this year. If you have a specific platform in mind, I can look into that for you!\n",
+    "has_analytics_data": false,
+    "duration_ms": 4752.427750034258,
+    "passed": true,
+    "failure_reason": null,
+    "raw_response": {
+      "conversation_id": "f3f24ec6-9c75-49ce-b855-4f1ba6c4de00",
+      "message": {
+        "id": "7e7d33ec-7c46-4822-bdf6-864b778f5f5a",
+        "role": "assistant",
+        "content": "It seems there are currently no available data on the top hashtags used across all social media platforms for this year. If you have a specific platform in mind, I can look into that for you!\n",
+        "metadata": null,
+        "created_at": "2026-04-25T17:13:10.339738"
+      },
+      "user_message": {
+        "id": "58b62cfc-94c3-4b53-a19a-ae8a4073b905",
+        "role": "user",
+        "content": "What are the top 10 hashtags used across all platforms this year?",
+        "metadata": {
+          "operation": null,
+          "citations": null,
+          "agents_involved": null,
+          "chart_b64": null,
+          "code_output": null,
+          "generated_sql": null,
+          "input_type": "text",
+          "transcript_source": null,
+          "transcript_confidence": null,
+          "has_visual_context": null,
+          "media_duration_ms": null,
+          "modality_pipeline": "text_direct",
+          "tts_sample_rate": null,
+          "tts_chunks": null
+        },
+        "created_at": "2026-04-25T17:13:10.339738"
+      },
+      "status": "success"
+    }
+  },
+  {
+    "scenario_name": "engagement_followup",
+    "message": "Which platform has the highest average engagement overall?",
+    "expected_agent": "analytics",
+    "conversation_id": "a600563e-8680-47f0-896f-ab6ed422abbd",
+    "status_code": 200,
+    "response_status": "success",
+    "response_text": "The social media platform with the highest average engagement overall is **TikTok**, with an average engagement of approximately **6807.19**.\n",
+    "has_analytics_data": false,
+    "duration_ms": 3836.2710830988362,
+    "passed": true,
+    "failure_reason": null,
+    "raw_response": {
+      "conversation_id": "a600563e-8680-47f0-896f-ab6ed422abbd",
+      "message": {
+        "id": "f4fe9d22-b6be-4ca6-b92f-f42a113d7f1a",
+        "role": "assistant",
+        "content": "The social media platform with the highest average engagement overall is **TikTok**, with an average engagement of approximately **6807.19**.\n",
+        "metadata": null,
+        "created_at": "2026-04-25T17:13:15.092148"
+      },
+      "user_message": {
+        "id": "49496779-4cf5-489f-bc13-a1d1cb4c7334",
+        "role": "user",
+        "content": "Which platform has the highest average engagement overall?",
+        "metadata": {
+          "operation": null,
+          "citations": null,
+          "agents_involved": null,
+          "chart_b64": null,
+          "code_output": null,
+          "generated_sql": null,
+          "input_type": "text",
+          "transcript_source": null,
+          "transcript_confidence": null,
+          "has_visual_context": null,
+          "media_duration_ms": null,
+          "modality_pipeline": "text_direct",
+          "tts_sample_rate": null,
+          "tts_chunks": null
+        },
+        "created_at": "2026-04-25T17:13:15.092148"
+      },
+      "status": "success"
+    }
+  },
+  {
+    "scenario_name": "greeting",
+    "message": "Hi there! How are you?",
+    "expected_agent": "chat",
+    "conversation_id": "645dc1d1-73af-44ae-8e51-a467a4fcbcc7",
+    "status_code": 200,
+    "response_status": "success",
+    "response_text": "Hi there! It's great to meet you. How can I assist you today?\n",
+    "has_analytics_data": false,
+    "duration_ms": 2236.0619999235496,
+    "passed": true,
+    "failure_reason": null,
+    "raw_response": {
+      "conversation_id": "645dc1d1-73af-44ae-8e51-a467a4fcbcc7",
+      "message": {
+        "id": "943f9b61-7dba-44e3-89e3-64a457e45800",
+        "role": "assistant",
+        "content": "Hi there! It's great to meet you. How can I assist you today?\n",
+        "metadata": null,
+        "created_at": "2026-04-25T17:13:18.929114"
+      },
+      "user_message": {
+        "id": "009388a4-9720-471a-abaf-ad054251f7dc",
+        "role": "user",
+        "content": "Hi there! How are you?",
+        "metadata": {
+          "operation": null,
+          "citations": null,
+          "agents_involved": null,
+          "chart_b64": null,
+          "code_output": null,
+          "generated_sql": null,
+          "input_type": "text",
+          "transcript_source": null,
+          "transcript_confidence": null,
+          "has_visual_context": null,
+          "media_duration_ms": null,
+          "modality_pipeline": "text_direct",
+          "tts_sample_rate": null,
+          "tts_chunks": null
+        },
+        "created_at": "2026-04-25T17:13:18.929114"
+      },
+      "status": "success"
+    }
+  },
+  {
+    "scenario_name": "sentiment_simple",
+    "message": "Can you analyze the sentiment of this text: I love sunny days but I hate the rain.",
+    "expected_agent": "chat",
+    "conversation_id": "30bc987b-f808-47c9-b43b-4aed1421b384",
+    "status_code": 200,
+    "response_status": "success",
+    "response_text": "The text expresses a mix of positive and negative emotions. \"I love sunny days\" conveys a positive sentiment, while \"I hate the rain\" indicates a negative sentiment. Overall, it reflects a dual feeling about weather conditions, suggesting a clear preference for sunny weather over rainy days.\n",
+    "has_analytics_data": false,
+    "duration_ms": 3922.833333024755,
+    "passed": true,
+    "failure_reason": null,
+    "raw_response": {
+      "conversation_id": "30bc987b-f808-47c9-b43b-4aed1421b384",
+      "message": {
+        "id": "e83c9ce8-b0d9-4ae3-85b9-b119bd062a64",
+        "role": "assistant",
+        "content": "The text expresses a mix of positive and negative emotions. \"I love sunny days\" conveys a positive sentiment, while \"I hate the rain\" indicates a negative sentiment. Overall, it reflects a dual feeling about weather conditions, suggesting a clear preference for sunny weather over rainy days.\n",
+        "metadata": null,
+        "created_at": "2026-04-25T17:13:21.165078"
+      },
+      "user_message": {
+        "id": "abe70b6d-0090-4162-93b7-fb0cdec59d3a",
+        "role": "user",
+        "content": "Can you analyze the sentiment of this text: I love sunny days but I hate the rain.",
+        "metadata": {
+          "operation": null,
+          "citations": null,
+          "agents_involved": null,
+          "chart_b64": null,
+          "code_output": null,
+          "generated_sql": null,
+          "input_type": "text",
+          "transcript_source": null,
+          "transcript_confidence": null,
+          "has_visual_context": null,
+          "media_duration_ms": null,
+          "modality_pipeline": "text_direct",
+          "tts_sample_rate": null,
+          "tts_chunks": null
+        },
+        "created_at": "2026-04-25T17:13:21.165078"
+      },
+      "status": "success"
+    }
+  },
+  {
+    "scenario_name": "joke_plus_sentiment",
+    "message": "Can you tell me a joke and also analyze the sentiment of this joke? The joke is: Why don't scientists trust atoms? Because they make up everything!",
+    "expected_agent": "chat",
+    "conversation_id": "65d9066e-af90-40d0-b83b-738eb9c08e18",
+    "status_code": 200,
+    "response_status": "success",
+    "response_text": "Here's a joke for you: \n\n**Why don't scientists trust atoms?**  \n**Because they make up everything!**\n\nAs for the sentiment analysis of the joke, it generally conveys a positive and humorous sentiment, as it aims to entertain with a clever play on words. If you need more detailed metrics or insights, please let me know!\n",
+    "has_analytics_data": false,
+    "duration_ms": 4396.903582965024,
+    "passed": true,
+    "failure_reason": null,
+    "raw_response": {
+      "conversation_id": "65d9066e-af90-40d0-b83b-738eb9c08e18",
+      "message": {
+        "id": "dac1b400-f730-4c4b-bf49-d86af803ba62",
+        "role": "assistant",
+        "content": "Here's a joke for you: \n\n**Why don't scientists trust atoms?**  \n**Because they make up everything!**\n\nAs for the sentiment analysis of the joke, it generally conveys a positive and humorous sentiment, as it aims to entertain with a clever play on words. If you need more detailed metrics or insights, please let me know!\n",
+        "metadata": null,
+        "created_at": "2026-04-25T17:13:25.088592"
+      },
+      "user_message": {
+        "id": "d529de87-6f79-4ddd-baed-b7d5e524bef1",
+        "role": "user",
+        "content": "Can you tell me a joke and also analyze the sentiment of this joke? The joke is: Why don't scientists trust atoms? Because they make up everything!",
+        "metadata": {
+          "operation": null,
+          "citations": null,
+          "agents_involved": null,
+          "chart_b64": null,
+          "code_output": null,
+          "generated_sql": null,
+          "input_type": "text",
+          "transcript_source": null,
+          "transcript_confidence": null,
+          "has_visual_context": null,
+          "media_duration_ms": null,
+          "modality_pipeline": "text_direct",
+          "tts_sample_rate": null,
+          "tts_chunks": null
+        },
+        "created_at": "2026-04-25T17:13:25.088592"
+      },
+      "status": "success"
+    }
+  },
+  {
+    "scenario_name": "weather_external",
+    "message": "What's the weather like today in Paris?",
+    "expected_agent": "chat",
+    "conversation_id": "fac99fe9-6688-4d96-ba4b-151115451917",
+    "status_code": 200,
+    "response_status": "success",
+    "response_text": "I can't provide real-time weather updates. You can check a reliable weather website or app for the current conditions in Paris.\n",
+    "has_analytics_data": false,
+    "duration_ms": 2526.598166907206,
+    "passed": true,
+    "failure_reason": null,
+    "raw_response": {
+      "conversation_id": "fac99fe9-6688-4d96-ba4b-151115451917",
+      "message": {
+        "id": "71cb50dd-11ce-4a73-931b-1da5a9ac0f27",
+        "role": "assistant",
+        "content": "I can't provide real-time weather updates. You can check a reliable weather website or app for the current conditions in Paris.\n",
+        "metadata": null,
+        "created_at": "2026-04-25T17:13:29.484601"
+      },
+      "user_message": {
+        "id": "a0c5f44b-7a69-4aa3-8b09-f56d861455b4",
+        "role": "user",
+        "content": "What's the weather like today in Paris?",
+        "metadata": {
+          "operation": null,
+          "citations": null,
+          "agents_involved": null,
+          "chart_b64": null,
+          "code_output": null,
+          "generated_sql": null,
+          "input_type": "text",
+          "transcript_source": null,
+          "transcript_confidence": null,
+          "has_visual_context": null,
+          "media_duration_ms": null,
+          "modality_pipeline": "text_direct",
+          "tts_sample_rate": null,
+          "tts_chunks": null
+        },
+        "created_at": "2026-04-25T17:13:29.484601"
+      },
+      "status": "success"
+    }
+  },
+  {
+    "scenario_name": "gibberish",
+    "message": "asdjkl qwerty 12345",
+    "expected_agent": "chat",
+    "conversation_id": "af4b2955-6afe-4f0b-bed8-3e6d8b7b9e55",
+    "status_code": 200,
+    "response_status": "success",
+    "response_text": "It looks like you've entered a random string of characters. Is there something specific you'd like to know or discuss?\n",
+    "has_analytics_data": false,
+    "duration_ms": 2563.35095805116,
+    "passed": true,
+    "failure_reason": null,
+    "raw_response": {
+      "conversation_id": "af4b2955-6afe-4f0b-bed8-3e6d8b7b9e55",
+      "message": {
+        "id": "c4b2c9a3-c847-4e91-8db7-ab62c68410cf",
+        "role": "assistant",
+        "content": "It looks like you've entered a random string of characters. Is there something specific you'd like to know or discuss?\n",
+        "metadata": null,
+        "created_at": "2026-04-25T17:13:32.010864"
+      },
+      "user_message": {
+        "id": "530d7a29-5a76-409e-9c37-5620e79e363f",
+        "role": "user",
+        "content": "asdjkl qwerty 12345",
+        "metadata": {
+          "operation": null,
+          "citations": null,
+          "agents_involved": null,
+          "chart_b64": null,
+          "code_output": null,
+          "generated_sql": null,
+          "input_type": "text",
+          "transcript_source": null,
+          "transcript_confidence": null,
+          "has_visual_context": null,
+          "media_duration_ms": null,
+          "modality_pipeline": "text_direct",
+          "tts_sample_rate": null,
+          "tts_chunks": null
+        },
+        "created_at": "2026-04-25T17:13:32.010864"
+      },
+      "status": "success"
+    }
+  },
+  {
+    "scenario_name": "short_form_trends",
+    "message": "What are the latest trends in short-form video content in general?",
+    "expected_agent": "chat",
+    "conversation_id": "08baa8bf-e7bc-4c6b-afbb-7e8754d56392",
+    "status_code": 200,
+    "response_status": "success",
+    "response_text": "Here are the latest trends in short-form video content as of late 2023:\n\n1. **Authenticity and Relatability**: Content that feels genuine, such as behind-the-scenes footage, is gaining more traction.\n\n2. **Vertical Video Dominance**: Vertical formats remain popular due to their mobile-friendliness and ease of consumption on platforms like TikTok and Instagram Reels.\n\n3. **Educational Content**: Quick, informative videos in areas like cooking and DIY are increasingly sought after.\n\n4. **Community Engagement**: Creators are focusing on interactive content, creating a sense of community through polls and challenges.\n\n5. **Augmented Reality (AR) Effects**: The use of AR filters and effects is on the rise, enhancing entertainment value.\n\n6. **Music Integration**: Catchy music tracks and sound bites play a crucial role in making videos shareable.\n\n7. **Short Series or Episodic Content**: Creators are developing thematic series, encouraging viewers to return for more.\n\n8. **Brand Collaborations**: Partnerships with creators are a strategy for brands to authentically connect with younger audiences.\n\n9. **Mental Health Awareness**: Content focusing on mental health and wellness is resonating with viewers.\n\n10. **Live Streaming**: Live short-form video allows real-time interaction, enhancing audience engagement.\n\nThese trends highlight the changing dynamics of audience preferences and creator strategies in the short-form video landscape.\n",
+    "has_analytics_data": false,
+    "duration_ms": 11339.553292025812,
+    "passed": true,
+    "failure_reason": null,
+    "raw_response": {
+      "conversation_id": "08baa8bf-e7bc-4c6b-afbb-7e8754d56392",
+      "message": {
+        "id": "e6cf2f05-538e-4aa4-af42-fe7adc9ab4c0",
+        "role": "assistant",
+        "content": "Here are the latest trends in short-form video content as of late 2023:\n\n1. **Authenticity and Relatability**: Content that feels genuine, such as behind-the-scenes footage, is gaining more traction.\n\n2. **Vertical Video Dominance**: Vertical formats remain popular due to their mobile-friendliness and ease of consumption on platforms like TikTok and Instagram Reels.\n\n3. **Educational Content**: Quick, informative videos in areas like cooking and DIY are increasingly sought after.\n\n4. **Community Engagement**: Creators are focusing on interactive content, creating a sense of community through polls and challenges.\n\n5. **Augmented Reality (AR) Effects**: The use of AR filters and effects is on the rise, enhancing entertainment value.\n\n6. **Music Integration**: Catchy music tracks and sound bites play a crucial role in making videos shareable.\n\n7. **Short Series or Episodic Content**: Creators are developing thematic series, encouraging viewers to return for more.\n\n8. **Brand Collaborations**: Partnerships with creators are a strategy for brands to authentically connect with younger audiences.\n\n9. **Mental Health Awareness**: Content focusing on mental health and wellness is resonating with viewers.\n\n10. **Live Streaming**: Live short-form video allows real-time interaction, enhancing audience engagement.\n\nThese trends highlight the changing dynamics of audience preferences and creator strategies in the short-form video landscape.\n",
+        "metadata": null,
+        "created_at": "2026-04-25T17:13:34.574315"
+      },
+      "user_message": {
+        "id": "78b73cbf-28a3-4ed0-8cea-29eeac173663",
+        "role": "user",
+        "content": "What are the latest trends in short-form video content in general?",
+        "metadata": {
+          "operation": null,
+          "citations": null,
+          "agents_involved": null,
+          "chart_b64": null,
+          "code_output": null,
+          "generated_sql": null,
+          "input_type": "text",
+          "transcript_source": null,
+          "transcript_confidence": null,
+          "has_visual_context": null,
+          "media_duration_ms": null,
+          "modality_pipeline": "text_direct",
+          "tts_sample_rate": null,
+          "tts_chunks": null
+        },
+        "created_at": "2026-04-25T17:13:34.574315"
+      },
+      "status": "success"
+    }
+  },
+  {
+    "scenario_name": "explain_metric",
+    "message": "What is engagement rate and how is it calculated?",
+    "expected_agent": "chat",
+    "conversation_id": "a352c92f-1ea4-468e-8bd4-597551653619",
+    "status_code": 200,
+    "response_status": "success",
+    "response_text": "Engagement rate is a metric used to measure the level of interaction that content receives from its audience. It is commonly used in social media analytics to assess how effectively content resonates with its viewers.\n\nThe engagement rate can be calculated using the following formula:\n\n\\[\n\\text{Engagement Rate} = \\frac{\\text{Total Engagements}}{\\text{Total Followers}} \\times 100\n\\]\n\nWhere total engagements include likes, comments, shares, and any other interactions on a post.\n\nThere are different variations of the engagement rate depending on the platform and specific goals:\n1. **Post Engagement Rate:** Often calculated per post based on the interactions relative to the reach of that specific post.\n2. **Overall Engagement Rate:** Measures total engagements across multiple posts relative to total followers or reach over a given period.\n\nIn summary, the engagement rate provides insights into how engaging and effective your content is in fostering interaction with your audience. If you have any specific questions or need further clarification on calculating or interpreting engagement rates, feel free to ask!\n",
+    "has_analytics_data": false,
+    "duration_ms": 9404.84579198528,
+    "passed": true,
+    "failure_reason": null,
+    "raw_response": {
+      "conversation_id": "a352c92f-1ea4-468e-8bd4-597551653619",
+      "message": {
+        "id": "843d0c8f-d68e-4a3f-9577-c691cb3c6cab",
+        "role": "assistant",
+        "content": "Engagement rate is a metric used to measure the level of interaction that content receives from its audience. It is commonly used in social media analytics to assess how effectively content resonates with its viewers.\n\nThe engagement rate can be calculated using the following formula:\n\n\\[\n\\text{Engagement Rate} = \\frac{\\text{Total Engagements}}{\\text{Total Followers}} \\times 100\n\\]\n\nWhere total engagements include likes, comments, shares, and any other interactions on a post.\n\nThere are different variations of the engagement rate depending on the platform and specific goals:\n1. **Post Engagement Rate:** Often calculated per post based on the interactions relative to the reach of that specific post.\n2. **Overall Engagement Rate:** Measures total engagements across multiple posts relative to total followers or reach over a given period.\n\nIn summary, the engagement rate provides insights into how engaging and effective your content is in fostering interaction with your audience. If you have any specific questions or need further clarification on calculating or interpreting engagement rates, feel free to ask!\n",
+        "metadata": null,
+        "created_at": "2026-04-25T17:13:45.914277"
+      },
+      "user_message": {
+        "id": "7d91d04f-0e27-440b-8cc7-9f85c843a5b3",
+        "role": "user",
+        "content": "What is engagement rate and how is it calculated?",
+        "metadata": {
+          "operation": null,
+          "citations": null,
+          "agents_involved": null,
+          "chart_b64": null,
+          "code_output": null,
+          "generated_sql": null,
+          "input_type": "text",
+          "transcript_source": null,
+          "transcript_confidence": null,
+          "has_visual_context": null,
+          "media_duration_ms": null,
+          "modality_pipeline": "text_direct",
+          "tts_sample_rate": null,
+          "tts_chunks": null
+        },
+        "created_at": "2026-04-25T17:13:45.914277"
+      },
+      "status": "success"
+    }
+  },
+  {
+    "scenario_name": "very_long_message",
+    "message": "I have a very important question about social media analytics. I need to understand which content strategy works best. Specifically, I want to know: out of all the videos posted on Instagram and TikTok combined, which 3 videos had the highest view count? Please include the title, platform, view count, and posting date. Also, could you tell me what time of day those videos were posted?",
+    "expected_agent": "analytics",
+    "conversation_id": "c08247a9-23b2-4bde-9785-dbf10265d3e0",
+    "status_code": 200,
+    "response_status": "success",
+    "response_text": "I found the top 3 videos with the highest view counts, but all of them are from TikTok and do not include titles. Here are the details:\n\n1. **Platform:** TikTok  \n   **View Count:** 45,173,846  \n   **Posted Date:** March 6, 2026  \n\n2. **Platform:** TikTok  \n   **View Count:** 23,753,622  \n   **Posted Date:** February 28, 2026  \n\n3. **Platform:** TikTok  \n   **View Count:** 22,078,280  \n   **Posted Date:** March 20, 2026  \n\nUnfortunately, I do not have the posting times or any videos from Instagram in the top ranks. If you need more specific analytics or details, feel free to ask!\n",
+    "has_analytics_data": false,
+    "duration_ms": 10638.819749932736,
+    "passed": true,
+    "failure_reason": null,
+    "raw_response": {
+      "conversation_id": "c08247a9-23b2-4bde-9785-dbf10265d3e0",
+      "message": {
+        "id": "c584bf8f-679d-405b-8890-ca24a5da8c06",
+        "role": "assistant",
+        "content": "I found the top 3 videos with the highest view counts, but all of them are from TikTok and do not include titles. Here are the details:\n\n1. **Platform:** TikTok  \n   **View Count:** 45,173,846  \n   **Posted Date:** March 6, 2026  \n\n2. **Platform:** TikTok  \n   **View Count:** 23,753,622  \n   **Posted Date:** February 28, 2026  \n\n3. **Platform:** TikTok  \n   **View Count:** 22,078,280  \n   **Posted Date:** March 20, 2026  \n\nUnfortunately, I do not have the posting times or any videos from Instagram in the top ranks. If you need more specific analytics or details, feel free to ask!\n",
+        "metadata": null,
+        "created_at": "2026-04-25T17:13:55.320244"
+      },
+      "user_message": {
+        "id": "9fe47403-79f6-44ad-a4a9-149f23041399",
+        "role": "user",
+        "content": "I have a very important question about social media analytics. I need to understand which content strategy works best. Specifically, I want to know: out of all the videos posted on Instagram and TikTok combined, which 3 videos had the highest view count? Please include the title, platform, view count, and posting date. Also, could you tell me what time of day those videos were posted?",
+        "metadata": {
+          "operation": null,
+          "citations": null,
+          "agents_involved": null,
+          "chart_b64": null,
+          "code_output": null,
+          "generated_sql": null,
+          "input_type": "text",
+          "transcript_source": null,
+          "transcript_confidence": null,
+          "has_visual_context": null,
+          "media_duration_ms": null,
+          "modality_pipeline": "text_direct",
+          "tts_sample_rate": null,
+          "tts_chunks": null
+        },
+        "created_at": "2026-04-25T17:13:55.320244"
+      },
+      "status": "success"
+    }
+  },
+  {
+    "scenario_name": "mixed_analytics_and_chat",
+    "message": "Can you first tell me the top 3 most liked videos on all platforms, and then explain what makes a video go viral in general?",
+    "expected_agent": "any",
+    "conversation_id": "d65b6a7e-18ef-4332-9cdf-327f45fc2d61",
+    "status_code": 200,
+    "response_status": "success",
+    "response_text": "It seems there was no data available on the top 3 most liked videos across all social media platforms.\n\nHowever, I can provide insight on what makes a video go viral:\n\n1. **Relatable Content**: Videos that resonate with a wide audience, often due to humor, emotions, or shared experiences, tend to spread more easily.\n   \n2. **Engaging Thumbnails and Titles**: Eye-catching thumbnails and compelling titles can entice viewers to click and watch.\n\n3. **Length and Format**: Shorter videos (often under 2-3 minutes) are easier to share and retain attention. Formats that fit social media platforms (like TikTok's vertical videos) are also effective.\n\n4. **Emotional Appeal**: Content that evokes strong emotions, whether it's laughter, joy, surprise, or even empathy, often encourages sharing.\n\n5. **Timing**: Posting relevant content at the right time (e.g., trending topics, current events) can boost visibility.\n\n6. **Social Sharing**: Encouraging viewers to share the video on their social networks can help it reach a larger audience.\n\n7. **Influencer Promotion**: Having an influencer or popular figure share or promote the video can significantly increase its reach.\n\n8. **Quality Production**: Well-produced videos with good visuals and sound are more likely to be shared.\n\n9. **Unique Concepts or Trends**: Videos that showcase something novel or participate in current trends or challenges can capture interest.\n\n10. **Audience Engagement**: Videos that invite comments and engagement often perform better, as interaction can help the video get more visibility in algorithms.\n\nThese factors can vary in importance depending on the target audience and platform, but combining several of them increases the chances of a video going viral.\n",
+    "has_analytics_data": false,
+    "duration_ms": 14322.361707920209,
+    "passed": true,
+    "failure_reason": null,
+    "raw_response": {
+      "conversation_id": "d65b6a7e-18ef-4332-9cdf-327f45fc2d61",
+      "message": {
+        "id": "d1aaa072-54a2-47f6-b1de-1f7e2ccca76a",
+        "role": "assistant",
+        "content": "It seems there was no data available on the top 3 most liked videos across all social media platforms.\n\nHowever, I can provide insight on what makes a video go viral:\n\n1. **Relatable Content**: Videos that resonate with a wide audience, often due to humor, emotions, or shared experiences, tend to spread more easily.\n   \n2. **Engaging Thumbnails and Titles**: Eye-catching thumbnails and compelling titles can entice viewers to click and watch.\n\n3. **Length and Format**: Shorter videos (often under 2-3 minutes) are easier to share and retain attention. Formats that fit social media platforms (like TikTok's vertical videos) are also effective.\n\n4. **Emotional Appeal**: Content that evokes strong emotions, whether it's laughter, joy, surprise, or even empathy, often encourages sharing.\n\n5. **Timing**: Posting relevant content at the right time (e.g., trending topics, current events) can boost visibility.\n\n6. **Social Sharing**: Encouraging viewers to share the video on their social networks can help it reach a larger audience.\n\n7. **Influencer Promotion**: Having an influencer or popular figure share or promote the video can significantly increase its reach.\n\n8. **Quality Production**: Well-produced videos with good visuals and sound are more likely to be shared.\n\n9. **Unique Concepts or Trends**: Videos that showcase something novel or participate in current trends or challenges can capture interest.\n\n10. **Audience Engagement**: Videos that invite comments and engagement often perform better, as interaction can help the video get more visibility in algorithms.\n\nThese factors can vary in importance depending on the target audience and platform, but combining several of them increases the chances of a video going viral.\n",
+        "metadata": null,
+        "created_at": "2026-04-25T17:14:05.958599"
+      },
+      "user_message": {
+        "id": "823d2662-23f0-427e-b1be-2bad24cd0c1a",
+        "role": "user",
+        "content": "Can you first tell me the top 3 most liked videos on all platforms, and then explain what makes a video go viral in general?",
+        "metadata": {
+          "operation": null,
+          "citations": null,
+          "agents_involved": null,
+          "chart_b64": null,
+          "code_output": null,
+          "generated_sql": null,
+          "input_type": "text",
+          "transcript_source": null,
+          "transcript_confidence": null,
+          "has_visual_context": null,
+          "media_duration_ms": null,
+          "modality_pipeline": "text_direct",
+          "tts_sample_rate": null,
+          "tts_chunks": null
+        },
+        "created_at": "2026-04-25T17:14:05.958599"
+      },
+      "status": "success"
+    }
+  }
+]

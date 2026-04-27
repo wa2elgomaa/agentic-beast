@@ -242,7 +242,10 @@ function DetailModal({ run, childRuns, isOpen, onClose, onCancelRun, cancelingRu
                   const execTime = getSubtaskExecutionTime(subtask)
                   const isExpanded = expandedSubtasks[subtask.id]
                   const emailSubject = subtask.run_metadata?.email_subject || 'Unknown Subject'
-                  const messageId = subtask.run_metadata?.selected_message_id ? subtask.run_metadata.selected_message_id.substring(0, 16) : '-'
+                  const emailSentAt = subtask.run_metadata?.email_sent_at
+                  const sentAtDisplay = emailSentAt
+                    ? new Date(emailSentAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+                    : '-'
 
                   return (
                     <div key={subtask.id} className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden hover:shadow-md transition-shadow">
@@ -269,7 +272,7 @@ function DetailModal({ run, childRuns, isOpen, onClose, onCancelRun, cancelingRu
                                 </p>
                               </div>
                               <p className="text-xs text-gray-500 dark:text-gray-400 font-mono mt-0.5">
-                                ID: {messageId}
+                                Received At: {sentAtDisplay}
                               </p>
                             </div>
                           </div>

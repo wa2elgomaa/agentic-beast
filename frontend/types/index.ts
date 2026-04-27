@@ -13,6 +13,40 @@ export type OperationType =
   | 'log_analytics'
 
 // ============================================================================
+// Chat Streaming Event Types
+// ============================================================================
+
+export type ChatStreamEventType =
+  | 'session_ready'
+  | 'ack'
+  | 'thinking'
+  | 'text_chunk'
+  | 'complete'
+  | 'error'
+  | 'transcript'
+  | 'audio_start'
+  | 'audio_chunk'
+  | 'audio_end'
+
+export interface ChatStreamEvent {
+  type: ChatStreamEventType
+  message?: string
+  data?: {
+    text?: string
+    index?: number
+    response_text?: string
+    results?: Record<string, any>[]
+    operation?: string
+    conversation_id?: string
+    sample_rate?: number
+    audio?: string
+    [key: string]: any
+  }
+}
+
+export type ChatStreamState = 'idle' | 'connecting' | 'connected' | 'streaming' | 'error'
+
+// ============================================================================
 // Tag Suggestion Types
 // ============================================================================
 
@@ -75,6 +109,7 @@ export interface ChatMessageMetadata {
   has_visual_context?: boolean
   media_duration_ms?: number
   modality_pipeline?: string
+  raw_rows?: Record<string, any>[]
 }
 
 export interface ChatMediaRequestPayload {

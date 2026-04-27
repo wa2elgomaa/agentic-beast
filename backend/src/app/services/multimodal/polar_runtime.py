@@ -1,4 +1,4 @@
-"""Polar-compatible runtime service for multimodal realtime chat."""
+"""LiteRT-compatible runtime service for multimodal realtime chat."""
 
 from __future__ import annotations
 
@@ -6,16 +6,19 @@ import asyncio
 import base64
 import importlib.util
 import os
+from pathlib import Path
 import re
 import time
-from typing import Any
+from typing import Any, Optional
 from uuid import uuid4
 
 from app.config import settings
 from app.logging import get_logger
-from app.services.multimodal.provider import MultimodalProvider
 from app.services.multimodal.tts_backend import load_tts_backend
+from app.services.session_manager import get_session_manager
+from app.services.v1 import tts as tts_service
 from app.services.multimodal.session_protocol import ServerEvent
+from app.services.multimodal.model_utils import resolve_model_spec
 
 logger = get_logger(__name__)
 
@@ -30,10 +33,19 @@ SYSTEM_PROMPT = (
 SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 
 
-class PolarRuntimeService(MultimodalProvider):
-    """Polar-derived local runtime service with lazy model loading."""
+class LiteRTRuntimeService:
+    """LiteRT-derived local runtime service with lazy model loading.
 
-    def __init__(self) -> None:
+    This runtime may be configured at creation time (or re-configured)
+    by passing a `config` dict. When present the runtime will prefer
+    values from `self._config` over global `settings` or env vars. The
+    service remains a singleton but callers (adapters) may provide
+    configuration via `get_LiteRT_runtime_service(config=...)`.
+    """
+
+    def __init__(self, config: Optional[dict] = None) -> None:
+        print("Initializing LiteRT runtime service with config:", config)
+        self._config: dict = dict((config or {}))
         self._sessions: dict[str, dict[str, Any]] = {}
         self._engine: Any | None = None
         self._tts_backend: Any | None = None
@@ -41,18 +53,16 @@ class PolarRuntimeService(MultimodalProvider):
         self._load_lock = asyncio.Lock()
         self._session_lock = asyncio.Lock()
 
-    def _resolve_model_path(self) -> str:
-        """Resolve multimodal model path from settings or Hugging Face download."""
-        if settings.multimodal_model_path:
-            return settings.multimodal_model_path
+    def configure(self, config: Optional[dict] = None) -> None:
+        """Update runtime configuration at runtime.
 
-        if model_path := os.environ.get("MODEL_PATH", ""):
-            return model_path
-
-        from huggingface_hub import hf_hub_download
-
-        logger.info("Downloading multimodal model from Hugging Face", repo=HF_REPO, filename=HF_FILENAME)
-        return hf_hub_download(repo_id=HF_REPO, filename=HF_FILENAME)
+        New config keys overwrite existing ones.
+        """
+        if not config:
+            return
+        self._config.update(config)
+        print("Initializing LiteRT runtime service with configure:", config)
+        
 
     def _split_sentences(self, text: str) -> list[str]:
         """Split text into sentences for streamed TTS."""
@@ -69,12 +79,57 @@ class PolarRuntimeService(MultimodalProvider):
         except ImportError as exc:
             raise RuntimeError(
                 "litert_lm is not installed in this environment. "
-                "The Polar multimodal provider requires litert_lm. "
+                "The LiteRT multimodal provider requires litert_lm. "
                 "Install it via: pip install litert-lm"
             ) from exc
 
-        self._model_path = self._resolve_model_path()
-        logger.info("Loading Polar multimodal runtime", model_path=self._model_path)
+        # Resolve model path from config/env/HF before initializing the engine.
+        # Prefer config-provided value, then env, then settings.main_model. Use
+        # our shared resolver and provide an explicit models_dir and hf_token
+        # so downloads happen into the repo-local cache.
+        model_spec = self._config.get("model_path") or os.environ.get("MODEL_PATH") or getattr(settings, "main_model", "")
+        repo_root = Path(__file__).resolve().parents[5]
+        models_dir = str(repo_root / (settings.models_dir or "models"))
+        hf_token = self._config.get("hf_token") or getattr(settings, "hf_token", None) or os.environ.get("HF_TOKEN")
+
+        try:
+            self._model_path = resolve_model_spec(model_spec, models_dir=models_dir, hf_token=hf_token)
+        except Exception:
+            logger.exception("Failed to resolve multimodal model path via resolver")
+            self._model_path = None
+
+        # If resolver returned a non-existent path but the spec looks like a HF spec
+        # (contains a '/'), attempt a direct HF download as a best-effort fallback.
+        try:
+            if (not self._model_path or not os.path.exists(self._model_path)) and model_spec and "/" in str(model_spec):
+                try:
+                    from huggingface_hub import hf_hub_download
+
+                    repo_id, filename = str(model_spec).rsplit("/", 1)
+                    Path(models_dir).mkdir(parents=True, exist_ok=True)
+                    downloaded = hf_hub_download(repo_id=repo_id, filename=filename, cache_dir=models_dir, token=hf_token)
+                    if downloaded and os.path.exists(downloaded):
+                        self._model_path = downloaded
+                        logger.info("Downloaded multimodal model from HF Hub", repo=repo_id, filename=filename, target=downloaded)
+                except Exception as exc_download:
+                    logger.warning("HF Hub download fallback failed", spec=model_spec, error=str(exc_download))
+        except Exception:
+            logger.exception("Unexpected error during HF download fallback")
+
+        logger.info("Loading LiteRT multimodal runtime", model_path=self._model_path)
+
+        # Ensure the resolved model path points to an actual local file. If
+        # resolution returned a HF spec or a non-existent path, fail fast with
+        # a clear error to avoid passing invalid paths into litert_lm.Engine.
+        if not self._model_path or not os.path.exists(self._model_path):
+            logger.error(
+                "Resolved multimodal model path does not exist",
+                model_path=self._model_path,
+            )
+            raise RuntimeError(
+                f"Multimodal model not available at resolved path: {self._model_path!r}. "
+                "Set a valid local model path or ensure HuggingFace download is possible (set HF_TOKEN and MODELS_DIR)."
+            )
 
         # Prefer GPU backends but fall back to CPU if GPU/WebGPU initialization fails
         try:
@@ -98,7 +153,7 @@ class PolarRuntimeService(MultimodalProvider):
                     audio_backend=litert_lm.Backend.CPU,
                 )
                 engine.__enter__()
-                logger.info("Polar multimodal runtime loaded with CPU backend", model_path=self._model_path)
+                logger.info("LiteRT multimodal runtime loaded with CPU backend", model_path=self._model_path)
             except Exception as exc_cpu:
                 logger.exception(
                     "Failed to initialize multimodal runtime with GPU and CPU backends",
@@ -107,9 +162,9 @@ class PolarRuntimeService(MultimodalProvider):
                 raise
 
         self._engine = engine
-        self._tts_backend = load_tts_backend(settings.multimodal_tts_backend)
+        self._tts_backend = load_tts_backend(self._config.get("tts_backend") or settings.tts_backend)
         logger.info(
-            "Polar multimodal runtime loaded",
+            "LiteRT multimodal runtime loaded",
             tts_sample_rate=self._tts_backend.sample_rate,
             model_path=self._model_path,
         )
@@ -228,59 +283,26 @@ class PolarRuntimeService(MultimodalProvider):
         )
         return events
 
-    async def dependency_status(self) -> dict[str, Any]:
-        """Return current runtime dependency readiness."""
-        required_modules = [
-            "litert_lm",
-            "numpy",
-            "huggingface_hub",
-        ]
-        optional_modules = [
-            "mlx_audio",
-            "kokoro_onnx",
-        ]
-
-        missing_required = [name for name in required_modules if importlib.util.find_spec(name) is None]
-        available_optional = [name for name in optional_modules if importlib.util.find_spec(name) is not None]
-        ready = settings.multimodal_enabled and not missing_required
-
-        return {
-            "enabled": settings.multimodal_enabled,
-            "provider": settings.multimodal_provider,
-            "ready": ready,
-            "model_path": self._model_path or settings.multimodal_model_path or None,
-            "missing_required": missing_required,
-            "available_optional": available_optional,
-            "max_sessions": settings.multimodal_max_sessions,
-            "loaded": self._engine is not None and self._tts_backend is not None,
-        }
+    # dependency_status removed; diagnostics are available via external monitoring
 
     async def create_session(self, user_id: str, conversation_id: str | None = None) -> dict[str, Any]:
         """Create an in-memory realtime session backed by a model conversation."""
         session_id = str(uuid4())
         await self._ensure_runtime_loaded()
 
-        # Ensure only one active conversation exists for backends that require it.
-        async with self._session_lock:
-            # Close any existing conversations to satisfy runtimes that only
-            # permit a single active session (litert_lm currently enforces this).
-            if self._sessions:
-                logger.info("Closing existing multimodal sessions before creating a new one", existing_sessions=len(self._sessions))
-                for sid, sess in list(self._sessions.items()):
-                    try:
-                        if sess.get("conversation") is not None:
-                            sess["conversation"].__exit__(None, None, None)
-                    except Exception as exc:
-                        logger.warning("Failed to close existing conversation during new session creation", session_id=sid, error=str(exc))
-                    self._sessions.pop(sid, None)
+        # Delegate concurrency/session accounting to SessionManager
+        manager = get_session_manager()
+        # This will raise if capacity policy rejects the session
+        await manager.create_session(session_id, metadata={"user_id": user_id, "conversation_id": conversation_id})
 
-            # Create a fresh conversation now that previous ones are closed.
+        # Create runtime conversation and store it in local mapping
+        async with self._session_lock:
             session_runtime = self._create_session_conversation()
             session = {
                 "session_id": session_id,
                 "user_id": user_id,
                 "conversation_id": conversation_id,
-                "provider": settings.multimodal_provider,
+                "provider": settings.main_llm_provider,
                 **session_runtime,
             }
             self._sessions[session_id] = session
@@ -288,7 +310,7 @@ class PolarRuntimeService(MultimodalProvider):
         return session
 
     async def handle_event(self, session_id: str, event: dict[str, Any]) -> list[dict[str, Any]]:
-        """Handle a client event with the Polar-derived local runtime."""
+        """Handle a client event with the LiteRT-derived local runtime."""
         session = self._sessions.get(session_id)
         if session is None:
             return [
@@ -315,20 +337,12 @@ class PolarRuntimeService(MultimodalProvider):
             ]
 
         if event_type in {"text", "audio", "image"}:
-            if not settings.multimodal_enabled:
-                return [
-                    ServerEvent(
-                        type="error",
-                        session_id=session_id,
-                        message="Multimodal runtime is disabled.",
-                    ).as_payload()
-                ]
 
             session["interrupted"] = False
             try:
                 transcription, text_response, llm_time = await self._run_conversation_turn(session, event)
             except Exception as exc:
-                logger.exception("Polar runtime turn failed", session_id=session_id, error=str(exc))
+                logger.exception("LiteRT runtime turn failed", session_id=session_id, error=str(exc))
                 return [
                     ServerEvent(
                         type="error",
@@ -371,9 +385,11 @@ class PolarRuntimeService(MultimodalProvider):
                 return responses
 
             try:
-                responses.extend(await self._generate_tts_events(session_id, text_response))
+                # Offload TTS synthesis to dedicated TTS service
+                events = await tts_service.generate_tts_events(session_id, text_response, self._tts_backend)
+                responses.extend(events)
             except Exception as exc:
-                logger.warning("Polar TTS generation failed", session_id=session_id, error=str(exc))
+                logger.warning("LiteRT TTS generation failed", session_id=session_id, error=str(exc))
                 responses.append(
                     ServerEvent(
                         type="error",
@@ -394,7 +410,7 @@ class PolarRuntimeService(MultimodalProvider):
         ]
 
     async def close_session(self, session_id: str) -> None:
-        """Release session resources."""
+        """Release session resources and inform SessionManager."""
         session = self._sessions.pop(session_id, None)
         if session and session.get("conversation") is not None:
             try:
@@ -402,13 +418,34 @@ class PolarRuntimeService(MultimodalProvider):
             except Exception as exc:
                 logger.warning("Failed to close multimodal conversation", session_id=session_id, error=str(exc))
 
+        # Notify session manager to free capacity
+        try:
+            manager = get_session_manager()
+            await manager.close_session(session_id)
+        except Exception:
+            logger.exception("Failed to notify SessionManager on close")
 
-_polar_runtime_service: PolarRuntimeService | None = None
+
+_LiteRT_runtime_service: LiteRTRuntimeService | None = None
 
 
-def get_polar_runtime_service() -> PolarRuntimeService:
-    """Return the shared Polar runtime service instance."""
-    global _polar_runtime_service
-    if _polar_runtime_service is None:
-        _polar_runtime_service = PolarRuntimeService()
-    return _polar_runtime_service
+def get_LiteRT_runtime_service(config: Optional[dict] = None) -> LiteRTRuntimeService:
+    """Return the shared LiteRT runtime service instance.
+
+    If `config` is provided and the singleton already exists the runtime
+    will be re-configured with the provided values. If the singleton does
+    not yet exist it is created using `config`.
+    """
+    global _LiteRT_runtime_service
+    if _LiteRT_runtime_service is None:
+        _LiteRT_runtime_service = LiteRTRuntimeService(config=config)
+        return _LiteRT_runtime_service
+
+    # Update existing singleton with new config when provided
+    if config:
+        try:
+            _LiteRT_runtime_service.configure(config)
+        except Exception:
+            logger.exception("Failed to configure existing LiteRT runtime")
+
+    return _LiteRT_runtime_service

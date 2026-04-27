@@ -17,7 +17,7 @@ from sqlalchemy import and_, func, select
 from app.config import settings
 from app.db.session import AsyncSessionLocal
 import logging
-from app.models.document import Document
+from app.schemas.document import Document
 
 _logger = logging.getLogger(__name__)
 

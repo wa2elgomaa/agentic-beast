@@ -34,7 +34,7 @@ class SessionManager:
     """
 
     def __init__(self, max_concurrent: Optional[int] = None):
-        self._max = max_concurrent or settings.multimodal_max_sessions
+        self._max = max_concurrent or settings.max_sessions
         self._active: Dict[str, SessionRecord] = {}
         self._queue: List[SessionRecord] = []
         self._lock = asyncio.Lock()

@@ -1,7 +1,7 @@
 """Admin ingestion API endpoints."""
 
 import secrets
-from typing import Annotated, Optional
+from typing import Annotated, Any, Optional
 from uuid import UUID
 from datetime import datetime
 
@@ -16,8 +16,8 @@ from app.api.users import get_current_user
 from app.db.session import get_db_session
 from app.config import settings
 from app.logging import get_logger
-from app.models.user import User
-from app.models import AdaptorType, ScheduleType, RunStatus
+from app.schemas.user import User
+from app.schemas import AdaptorType, ScheduleType, RunStatus
 from app.schemas.ingestion import (
     IngestionTaskCreate,
     IngestionTaskUpdate,
@@ -45,7 +45,7 @@ from app.services.gmail_credential_service import (
     GmailCredentialHealthStatus,
 )
 from app.services.failed_email_service import FailedEmailService
-from app.adapters.gmail_adapter import GMAIL_SCOPES
+from app.adapters.gmail_adapter import GMAIL_SCOPES, CredentialExpiredError
 from app.tasks.celery_app import celery_app
 from app.utils import utc_now
 
@@ -296,7 +296,7 @@ async def preview_emails(
         from app.adapters.gmail_adapter import GmailAdapter
         from app.services.gmail_credential_service import get_gmail_credential_service
         from sqlalchemy import select
-        from app.models import IngestionTask
+        from app.schemas import IngestionTask
 
         # Load task and oauth config
         stmt = select(IngestionTask).where(IngestionTask.id == task_id)
@@ -322,7 +322,7 @@ async def preview_emails(
         try:
             await gmail_adapter.connect()
             # Exclude already-processed message IDs for this task.
-            from app.models import ProcessedEmail
+            from app.schemas import ProcessedEmail
 
             processed_stmt = select(ProcessedEmail.message_id).where(ProcessedEmail.task_id == task_id)
             processed_result = await db.execute(processed_stmt)
@@ -357,6 +357,18 @@ async def preview_emails(
     except ValueError as e:
         logger.error("Task not found", error=str(e))
         raise HTTPException(status_code=404, detail=str(e))
+    except CredentialExpiredError:
+        logger.warning("Gmail credential expired during preview, auto-generating reauth URL", task_id=task_id)
+        try:
+            reauth_url = await _generate_reauth_url_for_task(task_id, task, db)
+        except Exception as reauth_err:
+            logger.error("Failed to generate reauth URL", error=str(reauth_err), task_id=task_id)
+            reauth_url = None
+        detail: dict = {"error": "credential_expired", "task_id": str(task_id),
+                        "message": "Gmail credentials have expired. Re-authorization is required."}
+        if reauth_url:
+            detail["reauth_url"] = reauth_url
+        raise HTTPException(status_code=401, detail=detail)
     except Exception as e:
         logger.error("Failed to preview emails", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
@@ -385,7 +397,7 @@ async def trigger_run_with_selections(
 
         # Get task to fetch full email objects
         from sqlalchemy import select
-        from app.models import IngestionTask, ProcessedEmail
+        from app.schemas import IngestionTask, ProcessedEmail
         stmt = select(IngestionTask).where(IngestionTask.id == task_id)
         result = await db.execute(stmt)
         task = result.scalar_one_or_none()
@@ -533,6 +545,18 @@ async def trigger_run_with_selections(
     except ValueError as e:
         logger.error("Validation error", error=str(e))
         raise HTTPException(status_code=400, detail=str(e))
+    except CredentialExpiredError:
+        logger.warning("Gmail credential expired during run-with-selections, auto-generating reauth URL", task_id=task_id)
+        try:
+            reauth_url = await _generate_reauth_url_for_task(task_id, task, db)
+        except Exception as reauth_err:
+            logger.error("Failed to generate reauth URL", error=str(reauth_err), task_id=task_id)
+            reauth_url = None
+        detail: dict = {"error": "credential_expired", "task_id": str(task_id),
+                        "message": "Gmail credentials have expired. Re-authorization is required."}
+        if reauth_url:
+            detail["reauth_url"] = reauth_url
+        raise HTTPException(status_code=401, detail=detail)
     except Exception as e:
         logger.error("Failed to trigger run with selections", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
@@ -819,6 +843,35 @@ def _build_google_client_config() -> dict:
     }
 
 
+async def _generate_reauth_url_for_task(task_id: UUID, task: Any, db: AsyncSession) -> str:
+    """Generate a Gmail OAuth re-auth URL for a task and persist the PKCE state."""
+    nonce = secrets.token_urlsafe(32)
+    combined_state = f"{task_id}:{nonce}"
+    redirect_uri = (task.adaptor_config or {}).get("oauth_redirect_uri") or settings.gmail_oauth_redirect_uri
+
+    flow = Flow.from_client_config(
+        _build_google_client_config(),
+        scopes=GMAIL_SCOPES,
+        state=combined_state,
+        redirect_uri=redirect_uri,
+    )
+    auth_uri, _ = flow.authorization_url(
+        access_type="offline",
+        include_granted_scopes="true",
+        prompt="consent",
+    )
+
+    config = dict(task.adaptor_config or {})
+    config["oauth_state"] = combined_state
+    config["oauth_redirect_uri"] = redirect_uri
+    if flow.code_verifier:
+        config["oauth_code_verifier"] = flow.code_verifier
+    task.adaptor_config = config
+    db.add(task)
+    await db.commit()
+    return auth_uri
+
+
 @router.post("/tasks/{task_id}/gmail/auth-url", response_model=GmailAuthUrlResponse)
 async def get_gmail_auth_url(
     task_id: UUID,
@@ -1001,7 +1054,7 @@ async def get_test_runs(
     """Get test execution history for a task."""
     try:
         from sqlalchemy import select, desc
-        from app.models import CronTestRun
+        from app.schemas import CronTestRun
 
         stmt = (
             select(CronTestRun)
@@ -1089,7 +1142,7 @@ async def get_credential_status(
 ) -> CredentialStatusResponse:
     """Get current Gmail credential status and health for a task."""
     try:
-        from app.models import GmailCredentialStatus
+        from app.schemas import GmailCredentialStatus
         from sqlalchemy import select
 
         # Verify task exists
@@ -1139,7 +1192,7 @@ async def get_credential_audit_log(
 ) -> CredentialAuditLogResponse:
     """Get Gmail credential audit log for a task."""
     try:
-        from app.models import GmailCredentialAuditLog
+        from app.schemas import GmailCredentialAuditLog
         from sqlalchemy import select, desc, func
 
         # Verify task exists
@@ -1195,7 +1248,6 @@ async def re_authenticate_gmail(
 ):
     """Trigger Gmail re-authentication by returning OAuth URL."""
     try:
-        # Verify task exists and is Gmail type
         service = get_ingestion_task_service(db)
         task = await service.get_task(task_id)
         if not task:
@@ -1207,42 +1259,13 @@ async def re_authenticate_gmail(
                 detail="Task is not a Gmail ingestion task"
             )
 
-        # Generate new OAuth URL using the same flow as initial auth
-        # Embed task_id into state so callback page can identify the task
-        nonce = secrets.token_urlsafe(32)
-        combined_state = f"{task_id}:{nonce}"
-        
-        # Use stored redirect URI from task config, or default to configured one
-        redirect_uri = (task.adaptor_config or {}).get("oauth_redirect_uri") or settings.gmail_oauth_redirect_uri
-
-        flow = Flow.from_client_config(
-            _build_google_client_config(),
-            scopes=GMAIL_SCOPES,
-            state=combined_state,
-            redirect_uri=redirect_uri
-        )
-        auth_uri, _ = flow.authorization_url(
-            access_type="offline",
-            include_granted_scopes="true",
-            prompt="consent",
-        )
-
-        # Update task config with state and code_verifier for callback
-        config = dict(task.adaptor_config or {})
-        config["oauth_state"] = combined_state
-        config["oauth_redirect_uri"] = redirect_uri
-        if flow.code_verifier:
-            config["oauth_code_verifier"] = flow.code_verifier
-        task.adaptor_config = config
-        db.add(task)
-        await db.commit()
+        auth_uri = await _generate_reauth_url_for_task(task_id, task, db)
 
         logger.info("Gmail re-authentication initiated", task_id=task_id, initiated_by=_admin.id)
 
         return {
             "task_id": str(task_id),
             "auth_url": auth_uri,
-            "state": combined_state,
             "message": "Complete the authentication to re-authorize Gmail access",
         }
 
@@ -1332,7 +1355,7 @@ async def list_failed_emails(
         from sqlalchemy import select
 
         # Verify task exists
-        from app.models import IngestionTask
+        from app.schemas import IngestionTask
 
         stmt = select(IngestionTask).where(IngestionTask.id == task_id)
         result = await db.execute(stmt)
@@ -1403,7 +1426,7 @@ async def manual_retry_failed_email(
         Status and next retry information
     """
     try:
-        from app.models import FailedEmailQueue
+        from app.schemas import FailedEmailQueue
 
         # Get the failed email record
         failed_email = await db.get(FailedEmailQueue, email_id)
@@ -1468,7 +1491,7 @@ async def remove_failed_email(
         email_id: ID of the failed email record in the queue
     """
     try:
-        from app.models import FailedEmailQueue
+        from app.schemas import FailedEmailQueue
 
         # Get the failed email record
         failed_email = await db.get(FailedEmailQueue, email_id)
@@ -1525,7 +1548,7 @@ async def get_failed_emails_retry_schedule(
         from sqlalchemy import select
 
         # Verify task exists
-        from app.models import IngestionTask
+        from app.schemas import IngestionTask
 
         stmt = select(IngestionTask).where(IngestionTask.id == task_id)
         result = await db.execute(stmt)

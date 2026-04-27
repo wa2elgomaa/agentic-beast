@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.users import get_current_user
 from app.db.session import get_db_session
 from app.logging import get_logger
-from app.models.user import User
+from app.schemas.user import User
 from app.schemas.ingestion import IngestStatusResponse, IngestTriggerRequest, IngestTriggerResponse
 from app.tasks.celery_app import celery_app
 from app.tasks.excel_ingest import process_excel_file

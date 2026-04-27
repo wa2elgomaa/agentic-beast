@@ -28,7 +28,7 @@ MANIFEST
 venv/
 ENV/
 env/
-.env
+.env*
 .env.local
 .env.*.local
 
@@ -72,3 +72,4 @@ Thumbs.db
 *.tmp
 
 polar
+local_models/

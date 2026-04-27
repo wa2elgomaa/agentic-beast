@@ -95,11 +95,11 @@ def test_sse_stream_on_demand(monkeypatch):
             yield make_event("audio_chunk", {"audio": "ZmFrZQ==", "index": 0})
             yield make_event("audio_end", {})
 
-    monkeypatch.setattr("app.api.chat.get_multimodal_provider", lambda: FakeProvider(), raising=False)
+    monkeypatch.setattr("app.api.chat.get_ai_provider", lambda: FakeProvider(), raising=False)
     # Also patch factory import used in endpoint
     import app.providers.factory as pf
 
-    monkeypatch.setattr(pf, "get_multimodal_provider", lambda options=None: FakeProvider())
+    monkeypatch.setattr(pf, "get_ai_provider", lambda options=None: FakeProvider())
 
     client = TestClient(app)
     url = f"/api/v1/chat/conversations/00000000-0000-0000-0000-000000000000/messages/22222222-2222-2222-2222-222222222222/tts/stream"

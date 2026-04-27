@@ -2,11 +2,11 @@
 
 import { Message as MessageType, QuerySuggestion } from '@/types'
 import { motion } from 'framer-motion'
-import { Bot, Download, User, Play, Pause, Volume2 } from 'lucide-react'
-import ResultCard from './ResultCard'
-import DashboardStats from './DashboardStats'
+import { Bot, User } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import rehypeRaw from 'rehype-raw'
 import LoadingSkeleton from './LoadingSkeleton'
-import AggregationDashboard from './AggregationDashboard'
 import OperationRenderer from './OperationRenderer'
 import QuerySuggestions from './QuerySuggestions'
 import { exportToCSV } from '@/lib/api'
@@ -14,11 +14,9 @@ import { exportToCSV } from '@/lib/api'
 interface ChatMessageProps {
   message: MessageType
   onSelectSuggestion?: (suggestion: QuerySuggestion) => void
-  isPlaying?: boolean
-  onPlayToggle?: () => void
 }
 
-export default function ChatMessage({ message, onSelectSuggestion, isPlaying, onPlayToggle }: ChatMessageProps) {
+export default function ChatMessage({ message, onSelectSuggestion }: ChatMessageProps) {
   const isUser = message.role === 'user'
 
   return (
@@ -48,17 +46,7 @@ export default function ChatMessage({ message, onSelectSuggestion, isPlaying, on
             <span className="text-xs text-gray-500 ml-2">
               {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
             </span>
-            {!isUser && typeof props !== 'undefined' && (
-              <span className="ml-3 inline-flex items-center">
-                <button
-                  onClick={onPlayToggle}
-                  className="p-1 rounded hover:bg-gray-100"
-                  aria-label={isPlaying ? 'Pause audio' : 'Play audio'}
-                >
-                  {isPlaying ? <Pause size={14} /> : <Play size={14} />}
-                </button>
-              </span>
-            )}
+
           </div>
 
           {message.isLoading ? (
@@ -67,31 +55,9 @@ export default function ChatMessage({ message, onSelectSuggestion, isPlaying, on
             <>
               {(message.content && typeof message.content === 'string') && (
                 <div className="text-gray-800 mb-4 prose prose-sm max-w-none">
-                  {message.content.split('\n').map((line, idx) => {
-                    // Handle bold markdown
-                    const boldRegex = /\*\*(.*?)\*\*/g
-                    const parts = []
-                    let lastIndex = 0
-                    let match
-
-                    while ((match = boldRegex.exec(line)) !== null) {
-                      if (match.index > lastIndex) {
-                        parts.push(line.substring(lastIndex, match.index))
-                      }
-                      parts.push(<strong key={`bold-${idx}-${match.index}`} className="font-semibold text-gray-900">{match[1]}</strong>)
-                      lastIndex = match.index + match[0].length
-                    }
-
-                    if (lastIndex < line.length) {
-                      parts.push(line.substring(lastIndex))
-                    }
-
-                    return (
-                      <div key={idx} className={line.startsWith('•') ? 'ml-4' : ''}>
-                        {parts.length > 0 ? parts : line || <br />}
-                      </div>
-                    )
-                  })}
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>
+                    {message.content}
+                  </ReactMarkdown>
                 </div>
               )}
 

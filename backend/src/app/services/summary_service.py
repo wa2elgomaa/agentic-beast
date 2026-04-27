@@ -7,7 +7,7 @@ from sqlalchemy import and_, delete, func, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.logging import get_logger
-from app.models import Document, Summary, TimeOfDayMetric
+from app.schemas import Document, Summary, TimeOfDayMetric
 
 logger = get_logger(__name__)
 
@@ -281,7 +281,7 @@ class SummaryService:
         for metric in metrics:
             # Query by hour-of-day and platform
             stmt = select(
-                func.extract("hour", Document.reported_at).label("hour"),
+                func.extract("hour", Document.received_at).label("hour"),
                 Document.platform,
                 func.count(Document.id).label("sample_count"),
                 func.avg(getattr(Document, metric)).label("metric_avg"),
@@ -289,7 +289,7 @@ class SummaryService:
             ).where(
                 Document.is_current == True,
             ).group_by(
-                func.extract("hour", Document.reported_at),
+                func.extract("hour", Document.received_at),
                 Document.platform,
             )
 

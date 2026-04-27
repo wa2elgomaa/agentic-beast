@@ -38,9 +38,9 @@ Add after the Bedrock config:
 
 ```python
 # Ollama Local LLM Configuration
-ollama_base_url: str = Field(default="http://localhost:11434")
-ollama_model: str = Field(default="mistral")
-ollama_embedding_model: str = Field(default="nomic-embed-text")
+main_model_base_url: str = Field(default="http://localhost:11434")
+main_model: str = Field(default="mistral")
+main_model: str = Field(default="nomic-embed-text")
 ```
 
 ### 2. File: Create `backend/src/app/providers/ollama_provider.py`
@@ -66,17 +66,17 @@ logger = get_logger(__name__)
 
 def get_ai_provider() -> AIProvider:
     """Get the configured AI provider instance."""
-    if settings.ai_provider == "openai":
+    if settings.main_llm_provider == "openai":
         logger.info("Using OpenAI provider")
         return OpenAIProvider()
-    elif settings.ai_provider == "bedrock":
+    elif settings.main_llm_provider == "bedrock":
         logger.info("Using AWS Bedrock provider")
         return BedrockProvider()
-    elif settings.ai_provider == "ollama":
+    elif settings.main_llm_provider == "ollama":
         logger.info("Using Ollama local LLM provider")
         return OllamaProvider()
     else:
-        raise ValueError(f"Unknown AI provider: {settings.ai_provider}")
+        raise ValueError(f"Unknown AI provider: {settings.main_llm_provider}")
 
 
 __all__ = ["get_ai_provider", "AIProvider", "OpenAIProvider", "BedrockProvider", "OllamaProvider"]
@@ -357,7 +357,7 @@ Want safety? Use local Ollama, fallback to OpenAI if it fails:
 
 ```python
 # In providers/__init__.py
-elif settings.ai_provider == "hybrid":
+elif settings.main_llm_provider == "hybrid":
     return HybridProvider()  # Tries Ollama first, then OpenAI
 ```
 

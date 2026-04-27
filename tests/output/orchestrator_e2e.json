@@ -1,0 +1,44 @@
+[
+  {
+    "prompt": "What is the top 5 viewed videos on instagram",
+    "result": {
+      "response_text": "Refine the following agent response for the user. Ensure it is professional and clear.\n\nRaw Response: response_text=\"Processing the analytics request using the 'data_analysis' workflow for top 5 viewed videos on Instagram.\" response_json='{\"workflow_id\":\"data_analysis\",\"request\":{\"platform\":\"Instagram\",\"query_category\":\"metrics\",\"limit\":5,\"metric\":\"video_views\",\"operation\":\"sum\"}}'",
+      "response_json": "{}"
+    }
+  },
+  {
+    "prompt": "Which day is the best to publish on tiktok",
+    "result": {
+      "response_text": "Refine the following agent response for the user. Ensure it is professional and clear.\n\nRaw Response: response_text='The request to analyze the best day to publish on TikTok will be processed with the defined analytics workflow. \\n\\n1. **SQL Query Generation**: The first step will involve generating SQL queries to retrieve relevant insights based on TikTok publishing data concerning date and engagement metrics.\\n2. **Database Execution**: The generated SQL query will then be executed to fetch the required data from the documents table.\\n3. **Report Generation**: Finally, using the retrieved data, a comprehensive analysis report will be created to determine the best day to publish based on the engagement metrics collected from TikTok posts.' response_json='{\"query_category\": \"publishing_insights\", \"metric\": \"engagements\", \"operation\": \"sum\", \"sql\": \"SELECT published_date, SUM(engagements) AS metric_value FROM documents WHERE LOWER(platform) = LOWER(:platform) GROUP BY published_date ORDER BY metric_value DESC LIMIT :max_rows\", \"params\": {\"platform\": \"tiktok\", \"max_rows\": 100}}'",
+      "response_json": "{}"
+    }
+  },
+  {
+    "prompt": "What are the top video featuring \"Donald Trump\"",
+    "result": {
+      "response_text": "Refine the following agent response for the user. Ensure it is professional and clear.\n\nRaw Response: response_text='Processing your request to find the top videos featuring \"Donald Trump\" using the data_analysis workflow.' response_json='{\"workflow_id\":\"data_analysis\",\"query\":\"SELECT beast_uuid, content, platform, published_date, title FROM documents WHERE (title ILIKE \\'%Donald Trump%\\' OR content ILIKE \\'%Donald Trump%\\') ORDER BY engagements DESC LIMIT :max_rows\",\"params\":{\"max_rows\":20}}'",
+      "response_json": "{}"
+    }
+  },
+  {
+    "prompt": "Which videos got the most engagement last month?",
+    "result": {
+      "response_text": "Refine the following agent response for the user. Ensure it is professional and clear.\n\nRaw Response: response_text='Processing your request to find out which videos got the most engagement last month using the data_analysis workflow.' response_json='{\"action\":\"execute\",\"workflow_id\":\"data_analysis\",\"input\":{\"query\":\"SELECT beast_uuid, content, platform, published_date, SUM(engagements) AS metric_value FROM documents WHERE published_date BETWEEN :start_date AND :end_date GROUP BY beast_uuid, content, platform, published_date ORDER BY metric_value DESC LIMIT :max_rows\",\"params\":{\"start_date\":\"2023-09-01\",\"end_date\":\"2023-09-30\",\"max_rows\":20},\"metric\":\"engagements\",\"operation\":\"sum\",\"query_category\":\"metrics\"}}'",
+      "response_json": "{}"
+    }
+  },
+  {
+    "prompt": "Can you analyze the sentiment of this text: I love sunny days but I hate the rain.",
+    "result": {
+      "response_text": "Refine the following agent response for the user. Ensure it is professional and clear.\n\nRaw Response: response_text=\"To analyze the sentiment of the given text, I will need to structure the request into relevant queries and operations. However, the current `data_analysis` workflow primarily focuses on generating SQL queries and executing them against a database, specifically for social media data analytics. It doesn't directly support text sentiment analysis or similar operations at this stage.\\n\\nInstead, I can suggest utilizing a natural language processing (NLP) tool designed for sentiment analysis to achieve this. If you need assistance in a different way or if you have any other request within the realm of data analysis as initially intended, please let me know!\" response_json='{\"error\":\"Sentiment analysis not supported in the current workflow. Please use an NLP tool for this task.\"}'",
+      "response_json": "{}"
+    }
+  },
+  {
+    "prompt": "Can you tell me a joke and also analyze the sentiment of this joke? The joke is: Why don't scientists trust atoms? Because they make up everything!",
+    "result": {
+      "response_text": "Refine the following agent response for the user. Ensure it is professional and clear.\n\nRaw Response: response_text='To analyze the sentiment of the joke using the data_analysis workflow, we will begin by generating the SQL query needed to retrieve sentiment analysis data from our database. Thus, the SQL will be constructed based on the necessary metrics and content related to sentiment analysis. However, please note that I am also programmed to entertain! In this case, the joke itself is: \"Why don\\'t scientists trust atoms? Because they make up everything!\" Now, let\\'s proceed with the analytic action!' response_json='{\"action\":\"analyze\",\"joke\":\"Why don\\'t scientists trust atoms? Because they make up everything!\",\"sentiment_analysis_required\":true}'",
+      "response_json": "{}"
+    }
+  }
+]

@@ -13,7 +13,7 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 import logging
 
-from app.models import IngestionDeduplication, IngestionTaskRun
+from app.schemas import IngestionDeduplication, IngestionTaskRun
 from app.utils import get_beast_uuid_hex, clean_and_truncate
 
 logger = logging.getLogger(__name__)

@@ -25,7 +25,7 @@ These columns appear directly in the Excel files with compatible names/data:
 
 | # | Excel Column | Database Column | Type | Notes |
 |---|--------------|-----------------|------|-------|
-| 1 | Reported at | reported_at | DATE | Convert from datetime |
+| 1 | Reported at | received_at | DATE | Convert from datetime |
 | 2 | Profile name | profile_name | TEXT | |
 | 3 | Profile URL | profile_url | TEXT | |
 | 4 | Profile ID | profile_id | TEXT | |
@@ -214,7 +214,7 @@ Row Processing:
   text = f"{title} {content}"        # Combined searchable text
   
   Direct mappings:
-  reported_at → published_date
+  received_at → published_date
   profile_name, platform, content_type, media_type → as-is
   total_reach, impressions, engagements → INT conversion
   

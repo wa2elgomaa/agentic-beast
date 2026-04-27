@@ -12,7 +12,7 @@ from sqlalchemy import create_engine
 
 from app.config import settings
 from app.logging import get_logger
-from app.models import IngestionTask, ScheduleType
+from app.schemas import IngestionTask, ScheduleType
 
 logger = get_logger(__name__)
 

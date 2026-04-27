@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db_session
 from app.logging import get_logger
-from app.models import IngestionTask
+from app.schemas import IngestionTask
 from app.schemas.ingestion import WebhookPayload
 from app.services.ingestion_task_service import get_ingestion_task_service
 from app.tasks.celery_app import celery_app

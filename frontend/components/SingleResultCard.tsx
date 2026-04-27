@@ -76,7 +76,7 @@ export default function SingleResultCard({ result, metadata }: SingleResultCardP
                                 </span>
                             )}
                         </div>
-                        {result.title && result.title.trim() && (
+                        {(result.title || result.content || "").trim() && (
                             outboundUrl ? (
                                 <a
                                     href={outboundUrl}
@@ -85,11 +85,11 @@ export default function SingleResultCard({ result, metadata }: SingleResultCardP
                                     className="text-white font-bold text-xl mb-1 leading-tight underline decoration-white/40 hover:decoration-white"
                                     title="Open post"
                                 >
-                                    {result.title}
+                                    {result.title || result.content}
                                 </a>
                             ) : (
                                 <h3 className="text-white font-bold text-xl mb-1 leading-tight">
-                                    {result.title}
+                                    {result.title || result.content}
                                 </h3>
                             )
                         )}

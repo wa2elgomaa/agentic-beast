@@ -9,8 +9,8 @@ from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models.password_reset import PasswordResetToken
-from app.models.user import User
+from app.schemas.password_reset import PasswordResetToken
+from app.schemas.user import User
 from app.schemas.users import UserCreate, UserListResponse, UserResponse, UserUpdate
 from app.services.auth_service import get_auth_service
 from app.services.email_service import get_email_service

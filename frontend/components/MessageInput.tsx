@@ -92,6 +92,11 @@ export default function MessageInput({
   const vadRef = useRef<MicVADInstance | null>(null)
   const utteranceSubmittingRef = useRef(false)
   const wasPausedByExternalRef = useRef(false)
+  const isLoadingRef = useRef(isLoading)
+
+  useEffect(() => {
+    isLoadingRef.current = isLoading
+  }, [isLoading])
 
   const hasTypedText = useMemo(() => message.trim().length > 0, [message])
   const isAudioActive = audioModeState === 'listening' || audioModeState === 'requesting_permission'
@@ -300,7 +305,7 @@ export default function MessageInput({
         minSpeechMs: 300,
         preSpeechPadMs: 300,
         onSpeechEnd: async (audio: Float32Array) => {
-          if (!onVoiceCaptured || utteranceSubmittingRef.current) {
+          if (!onVoiceCaptured || utteranceSubmittingRef.current || isLoadingRef.current) {
             return
           }
 
@@ -400,10 +405,9 @@ export default function MessageInput({
                   whileHover={{ scale: 1.03 }}
                   whileTap={{ scale: 0.97 }}
                   onClick={() => void handleCancelAudioMode()}
-                  disabled={isLoading}
                   title="Cancel audio mode"
                   aria-label="Cancel audio mode"
-                  className="h-[36px] px-5 rounded-full bg-black text-white inline-flex items-center gap-2 font-medium disabled:opacity-70 disabled:cursor-not-allowed"
+                  className="h-[36px] px-5 rounded-full bg-black text-white inline-flex items-center gap-2 font-medium"
                 >
                   <X size={15} />
                   <span>Cancel</span>

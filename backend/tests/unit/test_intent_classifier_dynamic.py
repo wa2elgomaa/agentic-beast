@@ -1,7 +1,7 @@
 import pytest
 
 from app.config.registry import initialize_registries
-from app.utilities.intent_classifier import IntentClassifier
+from app.utils.intent_classifier import IntentClassifier
 
 
 @pytest.fixture(scope="module", autouse=True)

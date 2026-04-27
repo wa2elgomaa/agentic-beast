@@ -16,7 +16,7 @@ from app.logging import configure_logging, get_logger
 from app.middleware.metrics import PrometheusMiddleware, get_metrics
 from app.monitoring.sentry import init_sentry
 from app.services.scheduler_service import SchedulerService
-from app.models import IngestionTask, ScheduleType
+from app.schemas import IngestionTask, ScheduleType
 
 # Configure logging on startup
 configure_logging()
@@ -91,6 +91,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         except Exception as e:
             logger.error("Failed to start APScheduler", error=str(e))
 
+    # Pre-warm on-device LiteRT engine (litert) if VOICE_LLM_PROVIDER=litert
+    if (getattr(settings, "voice_llm_provider", "") or "").lower() == "litert":
+        try:
+            from app.services.multimodal.litert_engine_service import get_litert_engine
+            await get_litert_engine()
+            logger.info("LiteRT engine pre-warmed")
+        except Exception as e:
+            logger.warning("Failed to pre-warm LiteRT engine; will retry on first audio turn", error=str(e))
+
     yield
 
     # Shutdown
@@ -104,6 +113,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         except Exception as e:
             logger.error("Error shutting down APScheduler", error=str(e))
     
+    # Close litert engine if it was initialized
+    try:
+        from app.services.multimodal.litert_engine_service import close_litert_engine
+        await close_litert_engine()
+        logger.info("LiteRT engine shut down")
+    except Exception as e:
+        logger.error("Error shutting down LiteRT engine", error=str(e))
     try:
         await close_db()
         logger.info("Database connection closed")
@@ -183,6 +199,29 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Initialize rate limiter stores on app.state (used by RateLimiterMiddleware)
+    app.state.rate_limit_store = {}
+    app.state.rate_limit_locks = {}
+
+    # Attach rate limiter middleware if enabled
+    if settings.rate_limit_enabled:
+        try:
+            from app.middleware.rate_limiter import RateLimiterMiddleware
+            app.add_middleware(RateLimiterMiddleware)
+            logger.info("Rate limiter middleware enabled")
+        except Exception as e:
+            logger.warning("Failed to enable rate limiter middleware", error=str(e))
+
+    # Attach auth middleware only when explicitly enabled
+    if getattr(settings, "auth_middleware_enabled", False):
+        try:
+            from app.middleware.auth import AuthMiddleware
+
+            app.add_middleware(AuthMiddleware)
+            logger.info("Auth middleware enabled")
+        except Exception as e:
+            logger.warning("Failed to enable auth middleware", error=str(e))
 
     # Add error handling middleware
     @app.exception_handler(Exception)
@@ -310,10 +349,10 @@ def create_app() -> FastAPI:
         return get_metrics()
 
     # Register API routers
-    from app.api import admin_ingestion, auth, chat, chat_realtime, ingestion, users, webhooks
+    from app.api import admin_ingestion, auth, chat, chat_stream, ingestion, users, webhooks
     app.include_router(auth.router, prefix="/api/v1", tags=["auth"])
     app.include_router(chat.router, prefix="/api/v1", tags=["chat"])
-    app.include_router(chat_realtime.router, prefix="/api/v1", tags=["chat-realtime"])
+    app.include_router(chat_stream.router, prefix="/api/v1", tags=["chat-stream"])
     app.include_router(ingestion.router, prefix="/api/v1", tags=["ingestion"])
     app.include_router(users.router, prefix="/api/v1", tags=["auth"])
     app.include_router(admin_ingestion.router, prefix="/api/v1", tags=["admin-ingestion"])

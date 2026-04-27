@@ -2,6 +2,13 @@ schema:
   version: "1.0"
   table: "documents"
   description: "Social media analytics schema"
+  required_fields: 
+    - title
+    - content
+    - view_on_platform
+    - published_date
+    - platform
+    - beast_uuid
   
   metrics:
     # Reach metrics

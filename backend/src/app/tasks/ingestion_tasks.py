@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import AsyncSessionLocal
 from app.logging import get_logger
-from app.models import FailedEmailQueue, IngestionTask, IngestionTaskRun, RunStatus
+from app.schemas import FailedEmailQueue, IngestionTask, IngestionTaskRun, RunStatus
 from app.services.failed_email_service import FailedEmailService
 from app.services.ingestion_service import IngestionCanceledError, get_ingestion_service
 from app.services.ingestion_task_service import get_ingestion_task_service
@@ -91,7 +91,7 @@ async def _run_gmail_with_subtasks(
 
         try:
             await gmail_adapter.connect()
-            from app.models import ProcessedEmail
+            from app.schemas import ProcessedEmail
 
             processed_stmt = select(ProcessedEmail.message_id).where(ProcessedEmail.task_id == task_id)
             processed_result = await db.execute(processed_stmt)

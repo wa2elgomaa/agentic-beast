@@ -104,6 +104,20 @@ async def me(current_user=Depends(get_current_user)):
     return UserResponse.model_validate(current_user)
 
 
+@router.post("/refresh", response_model=TokenResponse)
+async def refresh_token(current_user=Depends(get_current_user)):
+    """Issue a fresh JWT for an already-authenticated user.
+
+    The client should call this before the current token expires to maintain
+    a seamless session without forcing a re-login.
+    """
+    auth_service = get_auth_service()
+    access_token = auth_service.create_access_token(
+        user_id=str(current_user.id), username=current_user.username
+    )
+    return TokenResponse(access_token=access_token, user=UserResponse.model_validate(current_user))
+
+
 @router.get("", response_model=UserListResponse)
 async def list_users(
     service: Annotated[UserService, Depends(get_user_service)],
