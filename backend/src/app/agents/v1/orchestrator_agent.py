@@ -124,6 +124,9 @@ class OrchestratorAgent:
         """
         from app.agents.v1.analytics_agent import build_analytics_agent
         from app.agents.v1.chat_agent import build_chat_agent
+        from app.agents.tagging_agent import build_tagging_agent
+        from app.agents.recommendation_agent import build_recommendation_agent
+        from app.agents.document_agent import build_document_agent
 
         model = self._factory.get_model(settings=self._settings)
 
@@ -139,15 +142,49 @@ class OrchestratorAgent:
             name="chat_agent",
             description=(
                 "Use for general conversation, questions, explanations, summaries, "
-                "or anything not related to data analytics. "
+                "general knowledge, trivia, math, coding help, or anything not related "
+                "to data analytics, tag suggestions, article recommendations, or company documents. "
+                "This is also the fallback when no other agent matches. "
                 "Pass the user's exact message as input."
             ),
         )
-
+        tagging_tool = build_tagging_agent(model).as_tool(
+            name="tagging_agent",
+            description=(
+                "Use when the user asks for tag suggestions, content tagging, or wants to find "
+                "relevant tags for an article. Examples: 'suggest tags for article 123', "
+                "'what tags fit this article', 'tag article ID 456 with 5 tags'. "
+                "Pass the user's exact message as input."
+            ),
+        )
+        recommendation_tool = build_recommendation_agent(model).as_tool(
+            name="recommendation_agent",
+            description=(
+                "Use when the user asks for similar, related, or recommended articles. "
+                "Examples: 'find similar articles to 123', 'suggest 3 related stories for article 456', "
+                "'what articles are like article 789'. "
+                "Pass the user's exact message as input."
+            ),
+        )
+        document_tool = build_document_agent(model).as_tool(
+            name="document_agent",
+            description=(
+                "Use when the user asks questions about internal company documents, policies, "
+                "procedures, or uploaded files. Examples: 'what does the onboarding document say', "
+                "'find information about our vacation policy', 'search company documents for X'. "
+                "Pass the user's exact question as input."
+            ),
+        )
         return Agent(
             model=model,
             system_prompt=settings.orchestrator_system_prompt,
-            tools=[analytics_tool, chat_tool],
+            tools=[
+                analytics_tool,
+                chat_tool,
+                tagging_tool,
+                recommendation_tool,
+                document_tool,
+            ],
             # Suppress default stdout printing — responses come via AgentResult.
             callback_handler=None,
         )

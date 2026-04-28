@@ -58,6 +58,8 @@ celery_config = dict(
         "app.tasks.excel_ingest",
         "app.tasks.email_monitor",
         "app.tasks.summary_compute",
+        "app.tasks.document_ingest",
+        "app.tasks.folder_watch",
     ),
 )
 
@@ -68,3 +70,22 @@ if IS_MACOS:
     )
 
 celery_app.conf.update(celery_config)
+
+# Beat schedule for periodic tasks
+celery_app.conf.beat_schedule = {
+    # Email monitoring task runs every 5 minutes
+    "monitor-gmail-inbox": {
+        "task": "app.tasks.email_monitor.monitor_gmail_inbox",
+        "schedule": crontab(minute="*/5"),
+    },
+    # Recompute summaries daily at 2 AM UTC
+    "recompute-summaries": {
+        "task": "app.tasks.summary_compute.recompute_daily_summaries",
+        "schedule": crontab(hour=2, minute=0),
+    },
+    # Monitor watched folder for new documents every minute
+    "watch-document-folder": {
+        "task": "app.tasks.folder_watch.watch_document_folder",
+        "schedule": crontab(minute="*"),
+    },
+}

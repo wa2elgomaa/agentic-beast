@@ -349,7 +349,7 @@ def create_app() -> FastAPI:
         return get_metrics()
 
     # Register API routers
-    from app.api import admin_ingestion, auth, chat, chat_stream, ingestion, users, webhooks
+    from app.api import admin_ingestion, auth, chat, chat_stream, documents, ingestion, users, webhooks
     app.include_router(auth.router, prefix="/api/v1", tags=["auth"])
     app.include_router(chat.router, prefix="/api/v1", tags=["chat"])
     app.include_router(chat_stream.router, prefix="/api/v1", tags=["chat-stream"])
@@ -357,12 +357,7 @@ def create_app() -> FastAPI:
     app.include_router(users.router, prefix="/api/v1", tags=["auth"])
     app.include_router(admin_ingestion.router, prefix="/api/v1", tags=["admin-ingestion"])
     app.include_router(webhooks.router, tags=["webhooks"])
-    
-    # TODO: Add other routers when implemented
-    # from app.api import auth, health, documents
-    # app.include_router(health.router, prefix="/api/v1", tags=["health"])
-    # app.include_router(auth.router, prefix="/api/v1", tags=["auth"])
-    # app.include_router(documents.router, prefix="/api/v1", tags=["documents"])
+    app.include_router(documents.router, prefix="/api/v1", tags=["documents"])
 
     logger.info("FastAPI application created successfully")
     return app

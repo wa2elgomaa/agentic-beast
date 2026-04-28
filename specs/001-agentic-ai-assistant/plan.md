@@ -7,18 +7,18 @@
 
 Build a multi-agent AI assistant platform with pluggable data adapters, prioritizing Gmail Excel report ingestion and analytics querying. The system uses AWS Strands Agents SDK for agentic orchestration, a hybrid data access layer (structured query objects + tool functions + RAG + pre-computed summaries), and supports multiple AI providers (OpenAI + AWS Bedrock). REST API + Admin React frontend for ingestion management.
 
-**Status as of 2026-03-18**: User Stories 1-2 (Analytics + Ingestion) fully implemented and tested. User Stories 3-6 scaffolded. Admin UI complete. Ready for production deployment of MVP or continued implementation of remaining features.
+**Status as of 2026-04-28**: US1–6 (Analytics + Ingestion + Tag Suggestion + Recommendation + Document Q&A + General Agent) fully implemented and tested. Phase 2 specified: US7–17 cover Webhook ingestion, S3/multi-source document pipeline, Admin Settings/Datasets/Tags dashboards, CMS article vectorization, pgvector-enhanced agents, Google CSE search agent, and frontend tool selector. Next.js admin frontend added as Phase 2 scope.
 
 ## Technical Context
 
 **Language/Version**: Python 3.11+
 **Primary Dependencies**: FastAPI, Strands Agents SDK, LangChain, Pydantic V2, SQLAlchemy (async), Celery, Redis, Pandas, Openpyxl
-**Storage**: PostgreSQL 15+ (pgvector, table partitioning), MongoDB (articles via CMS/direct), Redis (agent state/cache)
+**Storage**: PostgreSQL 15+ (pgvector, table partitioning), MongoDB (articles via CMS/direct), Redis (agent state/cache), S3 (document storage — Phase 2)
 **Testing**: pytest, pytest-asyncio, pytest-httpx (for CMS API mocking)
 **Target Platform**: Linux server (Docker Compose for local dev, AWS for production)
-**Project Type**: web-service (API-only, no frontend)
+**Project Type**: full-stack web application (FastAPI backend + Next.js frontend admin board — frontend added in Phase 2)
 **Performance Goals**: Analytics queries <10s for 1 year of daily data; Excel ingestion <2min for 10k rows
-**Constraints**: API-only (no frontend), local-first development, async-first I/O, idempotent data ingestion
+**Constraints**: local-first development, async-first I/O, idempotent data ingestion (frontend admin board added in Phase 2; Phase 1 was API-only)
 **Scale/Scope**: Single-team internal tool, ~10 concurrent users, ~365k analytics records/year, ~1000 articles in MongoDB
 
 ## Constitution Check
@@ -36,6 +36,24 @@ Build a multi-agent AI assistant platform with pluggable data adapters, prioriti
 | VII. Incremental Delivery | PASS | Gmail adapter + Excel processor = MVP (US1+US2); each agent independently deployable |
 
 No violations. All gates pass.
+
+### Phase 2 Constitution Re-check *(2026-04-28)*
+
+*Re-gate triggered by: S3 cloud dependency, Next.js frontend scope, Fernet secret encryption, webhook HMAC security, pgvector article corpus*
+
+| Principle | Status | Phase 2 Evidence |
+|-----------|--------|-----------------|
+| I. Pluggable Adapter Architecture | PASS | Webhook ingestion added as new adapter path; folder-watch and API upload converge on the same `document_ingest_task` pipeline |
+| II. Agent Autonomy with Orchestration | PASS | Search, Recommendation (pgvector), Tag agents added; each independently testable; orchestrator dispatches via `tool_hint` or LLM routing |
+| III. Multi-Provider AI Abstraction | PASS | `settings_service` makes provider switchable at runtime from the Admin Settings UI without code changes |
+| IV. Async-First Processing | PASS | Article scraper uses `asyncio.Semaphore` + httpx; webhook handler is async; all admin API endpoints are async |
+| V. Structured Observability | PASS | Scraper logs progress every 500 articles; webhook events logged to `webhook_events`; settings cache-miss events are logged |
+| VI. Data Integrity and Schema Validation | PASS | HMAC signature verified before webhook processing; Fernet encryption for secrets (`is_secret=true` rows in `app_settings`); all Phase 2 Pydantic schemas in strict mode |
+| VII. Incremental Delivery | PASS | Phase 2 features are independently deployable: S3 (T069–T073), Admin Settings (T082–T086), Article Scraper (T093–T097), Tool Selector (T109–T113) |
+| **NEW — SC-009 Local-First Dev** | PASS | LocalStack replaces real S3 in local dev (`AWS_ENDPOINT_URL` override in `s3_service`, T123); no cloud account required for development |
+| **NEW — OWASP A02 Cryptographic Failures** | PASS | Admin setting secrets Fernet-encrypted at rest (T120); secret values masked in `GET /admin/settings` response and not returned in plaintext |
+
+No Phase 2 constitution violations.
 
 ## Project Structure
 
