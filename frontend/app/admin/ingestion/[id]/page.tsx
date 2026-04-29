@@ -12,6 +12,7 @@ import {
     triggerIngestionTaskRun,
     previewEmailsForTask,
     runTaskWithSelections,
+    GmailCredentialExpiredError,
 } from '@/lib/api'
 import SchemaMapper from '@/components/admin/SchemaMapper'
 import TaskRunHistory from '@/components/admin/TaskRunHistory'
@@ -91,6 +92,10 @@ export default function TaskDetailPage() {
                     setEmailsForSelection(result.emails)
                     setShowEmailSelection(true)
                 } catch (err) {
+                    if (err instanceof GmailCredentialExpiredError) {
+                        window.location.href = err.reauth_url
+                        return
+                    }
                     setEmailLoadError(err instanceof Error ? err.message : 'Failed to load emails')
                 }
                 setIsLoadingEmails(false)
@@ -155,6 +160,10 @@ export default function TaskDetailPage() {
                 setActiveTab('runs')
             }, 1000)
         } catch (err) {
+            if (err instanceof GmailCredentialExpiredError) {
+                window.location.href = err.reauth_url
+                return
+            }
             setError(err instanceof Error ? err.message : 'Failed to start task with selected emails')
         } finally {
             setIsRunning(false)

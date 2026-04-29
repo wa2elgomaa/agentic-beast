@@ -1,0 +1,35 @@
+# Model and provider settings for Agentic Beast
+# This file is loaded by backend/src/app/config.py (property `settings.model_settings`)
+
+multimodal:
+  provider: polar
+  default_language: en-US
+  models:
+    chat: litert-multimodal-v1
+    intent: litert-intent-v1
+    tts: litert-tts-v1
+
+providers:
+  litert:
+    enabled: true
+    url: "http://localhost:11435"  # local LiteRT server if applicable
+    default_models:
+      chat: litert-multimodal-v1
+      intent: litert-intent-v1
+      tts: litert-tts-v1
+
+  ollama:
+    enabled: false
+    base_url: "http://localhost:11434"
+    default_model: mistral
+
+  openai:
+    enabled: false
+    default_model: gpt-4
+    embedding_model: text-embedding-3-small
+
+# Per-task overrides (optional)
+overrides:
+  analytics:
+    provider: openai
+    model: gpt-4o-mini

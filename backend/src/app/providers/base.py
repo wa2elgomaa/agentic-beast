@@ -8,9 +8,9 @@ from typing import List, Optional
 
 from pydantic import BaseModel
 
-from app.logging import get_logger
+import logging
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class Message(BaseModel):
@@ -69,11 +69,17 @@ class AIProvider(ABC):
                 
                 # Check if this is a retryable error (rate limiting, temporary failures)
                 if not self._is_retryable_error(e):
-                    logger.error("Non-retryable error", error=str(e), error_type=type(e).__name__)
+                    logger.error(
+                        "Non-retryable error",
+                        extra={"error": str(e), "error_type": type(e).__name__},
+                    )
                     raise e
                 
                 if attempt == self.max_retries:
-                    logger.error("Max retries exhausted", attempts=attempt + 1, error=str(e))
+                    logger.error(
+                        "Max retries exhausted",
+                        extra={"attempts": attempt + 1, "error": str(e)},
+                    )
                     break
                 
                 # Calculate delay with exponential backoff and jitter
@@ -84,14 +90,21 @@ class AIProvider(ABC):
                 
                 logger.warning(
                     "Retrying operation",
-                    attempt=attempt + 1,
-                    max_retries=self.max_retries,
-                    delay=delay,
-                    error=str(e)
+                    extra={
+                        "attempt": attempt + 1,
+                        "max_retries": self.max_retries,
+                        "delay": delay,
+                        "error": str(e),
+                    },
                 )
                 
                 await asyncio.sleep(delay)
         
+        # `last_exception` should be set if we exited the retry loop due to
+        # an exception. Defensive check for static type-checkers and any
+        # unexpected control flow: raise a RuntimeError if not present.
+        if last_exception is None:
+            raise RuntimeError("Retry loop exited without an exception")
         raise last_exception
 
     def _is_retryable_error(self, error: Exception) -> bool:

@@ -236,6 +236,27 @@ class GmailAdapter(DataAdapter):
                 raise
             except Exception as e:
                 error_msg = str(e)
+                # Catch invalid_grant that surfaces through lazy token refresh inside execute()
+                if "invalid_grant" in error_msg.lower():
+                    logger.error(
+                        "Gmail token invalid/revoked (detected in outer handler)",
+                        error=error_msg,
+                        task_id=self.task_id,
+                    )
+                    if self.credential_service and self.task_id:
+                        from app.services.gmail_credential_service import (
+                            GmailCredentialHealthStatus,
+                            ErrorCode,
+                        )
+                        await self.credential_service.update_credential_status(
+                            task_id=self.task_id,
+                            status=GmailCredentialHealthStatus.INVALID,
+                            error_code=ErrorCode.INVALID_GRANT,
+                            error_message="Refresh token is invalid or revoked",
+                        )
+                    raise CredentialExpiredError(
+                        "Gmail refresh token invalid/expired. User must re-authenticate."
+                    ) from e
                 logger.error(
                     "Gmail connection failed",
                     error=error_msg,

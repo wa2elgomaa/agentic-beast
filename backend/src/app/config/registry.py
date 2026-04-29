@@ -39,6 +39,11 @@ class SchemaRegistry:
         return self.schema.get("table", "documents")
 
     @property
+    def required_fields(self) -> list[str]:
+        """Get required fields with their types."""
+        return self.schema.get("required_fields", [])
+
+    @property
     def metrics(self) -> dict[str, dict]:
         """Get all metrics definitions."""
         return self.schema.get("metrics", {})
@@ -331,15 +336,22 @@ _INTENT_REGISTRY: Optional[IntentRegistry] = None
 _AGENT_SETTINGS_REGISTRY: Optional[AgentSettingsRegistry] = None
 
 
-def initialize_registries(config_dir: str | Path = "config") -> None:
+_DEFAULT_CONFIG_DIR = Path(__file__).resolve().parents[3] / "config"
+
+
+def initialize_registries(config_dir: str | Path | None = None) -> None:
     """
     Initialize all registries from YAML files in config directory.
-    
-    Call this once at application startup.
+
+    Call this once at application startup. Subsequent calls are no-ops if
+    registries are already loaded.
     """
     global _SCHEMA_REGISTRY, _INTENT_REGISTRY, _AGENT_SETTINGS_REGISTRY
-    
-    config_dir = Path(config_dir)
+
+    if _SCHEMA_REGISTRY is not None:
+        return
+
+    config_dir = Path(config_dir) if config_dir is not None else _DEFAULT_CONFIG_DIR
     
     try:
         _SCHEMA_REGISTRY = SchemaRegistry(config_dir / "schema_registry.yaml")

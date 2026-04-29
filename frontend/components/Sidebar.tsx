@@ -132,10 +132,18 @@ export default function Sidebar({
                 {/* Conversation History */}
                 {conversations.length > 0 && (
                   <div className="mb-6">
-                    <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3 flex items-center gap-2">
-                      <Clock size={14} />
-                      Recent Conversations
-                    </h3>
+                    <div className='flex items-center justify-between gap-2 text-xs text-gray-400 uppercase tracking-wider mb-3 w-full'>
+                      <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider flex items-center gap-2">
+                        <Clock size={14} />
+                        Recent Conversations
+                      </h3>
+                      <button
+                        onClick={onClearChat}
+                        className="px-2 py-2.5 rounded-lg hover:bg-red-100 hover:text-red-600 transition-colors text-sm text-gray-600"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
                     <div className="space-y-1">
                       {conversations.map((conv) => (
                         <div
@@ -278,9 +286,9 @@ export default function Sidebar({
               </div>
 
               {/* Footer */}
-              <div className="p-4 border-t border-gray-200">
+              <div className="px-2 py-2 border-t border-gray-200">
                 {/* Admin Section */}
-                {user?.is_admin && (
+                {/* {user?.is_admin && (
                   <div className="px-4 py-2 text-xs text-gray-600 border-b border-gray-200 pb-3 mb-2">
                     <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3 flex items-center gap-2">
                       <Settings size={14} />
@@ -294,33 +302,49 @@ export default function Sidebar({
                       <span>Data Ingestion</span>
                     </a>
                   </div>
-                )}
+                )} */}
                 {user && (
-                  <div className="px-4 py-2 text-xs text-gray-600 border-b border-gray-200 pb-3 mb-2">
+                  <div className="px-4 text-xs text-gray-600 ">
                     <div className="font-medium text-gray-900">{user.username}</div>
                     <div className="text-gray-500 truncate">{user.email}</div>
-                    {user.is_admin && <div className="text-orange-600 font-medium text-xs mt-1">Admin</div>}
+                    <div className='mt-2 flex items-center justify-between gap-2 border-t border-gray-200 text-xs text-gray-400 uppercase tracking-wider mt-2'>
+
+                      {user.is_admin && <a
+                        href="/admin/ingestion"
+                        className=" flex gap-2 items-center text-orange-600 font-medium text-xs mt-1">
+                        <Settings size={14} />
+                        Admin
+                      </a>}
+                      <button
+                        onClick={logout}
+                        className="flex items-center gap-3 p-2 rounded-lg transition-colors text-sm text-gray-600 hover:text-red-600"
+                      >
+                        <LogOut size={16} />
+                        Sign out
+                      </button>
+                    </div>
+
                   </div>
                 )}
-                <button
+                {/* <button
                   onClick={onClearChat}
                   className="w-full flex items-center gap-3 px-4 py-2.5 rounded-lg hover:bg-gray-100 transition-colors text-sm text-gray-600 hover:text-gray-900"
                 >
                   <Trash2 size={16} />
                   Clear conversations
-                </button>
-                <button
+                </button> */}
+                {/* <button
                   onClick={logout}
                   className="w-full flex items-center gap-3 px-4 py-2.5 rounded-lg hover:bg-red-50 transition-colors text-sm text-gray-600 hover:text-red-600"
                 >
                   <LogOut size={16} />
                   Sign out
-                </button>
+                </button> */}
               </div>
             </motion.aside>
           </>
         )}
-      </AnimatePresence>
+      </AnimatePresence >
     </>
   )
 }

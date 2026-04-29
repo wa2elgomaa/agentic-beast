@@ -1,5 +1,6 @@
-import { APIBaseURL, APIPrefix, CHAT_URL, CONVERSATION_URL, buildApiUrl } from '@/constants/urls'
+import { APIBaseURL, APIPrefix, CHAT_URL, CHAT_STREAM_URL, VOICE_CHAT_URL, CONVERSATION_URL, MEDIA_CHAT_URL, REALTIME_CHAT_URL, buildApiUrl, buildWebSocketUrl } from '@/constants/urls'
 import {
+  ChatMediaRequestPayload,
   QueryResponse,
   OrchestratorResponse,
   OperationType,
@@ -32,6 +33,95 @@ function getAuthHeaders(): HeadersInit {
     'Content-Type': 'application/json',
     ...(token ? { 'Authorization': `Bearer ${token}` } : {})
   }
+}
+
+export class GmailCredentialExpiredError extends Error {
+  reauth_url: string
+  task_id: string
+  constructor(reauth_url: string, task_id: string) {
+    super('Gmail credentials have expired. Re-authorization is required.')
+    this.name = 'GmailCredentialExpiredError'
+    this.reauth_url = reauth_url
+    this.task_id = task_id
+  }
+}
+
+export function getAccessToken(): string | null {
+  return typeof window !== 'undefined' ? localStorage.getItem('access_token') : null
+}
+
+/** Call the refresh endpoint and update localStorage with the new token.
+ *  Returns the new access token, or throws if the refresh fails. */
+export async function refreshToken(): Promise<string> {
+  const response = await fetch(buildApiUrl(`${APIPrefix}/users/refresh`), {
+    method: 'POST',
+    headers: getAuthHeaders(),
+  })
+  if (!response.ok) {
+    throw new Error(`Token refresh failed: ${response.status}`)
+  }
+  const data = await response.json()
+  const newToken: string = data.access_token
+  if (typeof window !== 'undefined') {
+    localStorage.setItem('access_token', newToken)
+  }
+  return newToken
+}
+
+/** fetch() wrapper that automatically retries once with a refreshed token on 401. */
+export async function fetchWithAuth(input: string, init: RequestInit = {}): Promise<Response> {
+  const first = await fetch(input, { ...init, headers: { ...getAuthHeaders(), ...(init.headers as Record<string, string> ?? {}) } })
+  if (first.status !== 401) return first
+
+  try {
+    await refreshToken()
+  } catch {
+    return first   // surfacing original 401 if refresh itself fails
+  }
+
+  return fetch(input, { ...init, headers: { ...getAuthHeaders(), ...(init.headers as Record<string, string> ?? {}) } })
+}
+
+export interface VoiceTurnResult {
+  transcript: string | null
+  assistant_text: string
+  audio_base64: string | null
+  audio_sample_rate: number
+  conversation_id: string | null
+}
+
+/** Submit a base64-encoded audio clip and get back transcript + assistant text + TTS audio. */
+export async function submitVoiceTurn(
+  audioBase64: string,
+  conversationId?: string | null,
+): Promise<VoiceTurnResult> {
+  const response = await fetchWithAuth(buildApiUrl(VOICE_CHAT_URL), {
+    method: 'POST',
+    body: JSON.stringify({ audio: audioBase64, conversation_id: conversationId ?? null }),
+  })
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ detail: 'Unknown error' }))
+    throw new Error(err.detail || `Voice turn failed: HTTP ${response.status}`)
+  }
+  return response.json()
+}
+
+export function buildChatStreamWsUrl(token: string, conversationId?: string | null): string {
+  const url = new URL(buildWebSocketUrl(CHAT_STREAM_URL))
+  url.searchParams.set('token', token)
+  if (conversationId) {
+    url.searchParams.set('conversation_id', conversationId)
+  }
+  return url.toString()
+}
+
+export function buildRealtimeChatWsUrl(token: string, conversationId?: string | null): string {
+  const url = new URL(buildWebSocketUrl(REALTIME_CHAT_URL))
+  url.searchParams.set('token', token)
+  if (conversationId) {
+    url.searchParams.set('conversation_id', conversationId)
+  }
+  return url.toString()
 }
 
 function tryParseJsonContent(value: unknown): Record<string, any> | null {
@@ -185,11 +275,13 @@ function normalizeAnalyticsResultData(resultData: unknown[]): AnalyticsResultDat
 function toAnalyticsContent(parsedContent: Record<string, any> | null): AnalyticsResponseContent | undefined {
   if (!parsedContent) return undefined
 
-  const queryType = parsedContent.query_type
-  const resolvedContext = parsedContent.resolved_context
-  const resultData = parsedContent.result_data
-  const insightSummary = parsedContent.insight_summary
-  const verification = parsedContent.verification
+  const {
+    query_type: queryType,
+    resolved_context: resolvedContext,
+    result_data: resultData,
+    insight_summary: insightSummary,
+    verification,
+  } = parsedContent
 
   if (
     typeof queryType !== 'string' ||
@@ -207,6 +299,78 @@ function toAnalyticsContent(parsedContent: Record<string, any> | null): Analytic
     result_data: resultData,
     insight_summary: insightSummary,
     verification,
+  }
+}
+
+function toOrchestratorResponse(payload: any): OrchestratorResponse {
+  const rawContent = payload?.message?.content
+  const parsedContent = tryParseJsonContent(rawContent)
+  const analyticsContent = toAnalyticsContent(parsedContent)
+  const queryType = analyticsContent?.query_type || parsedContent?.query_type
+  const operation = mapQueryTypeToOperation(queryType || payload?.message?.metadata?.operation)
+
+  const isErrorPayload =
+    parsedContent !== null &&
+    typeof parsedContent === 'object' &&
+    typeof parsedContent.error === 'string'
+
+  const answer = isErrorPayload
+    ? (typeof parsedContent!.message === 'string'
+        ? parsedContent!.message
+        : 'Something went wrong. Please try again.')
+    : (analyticsContent?.insight_summary ||
+        parsedContent?.insight_summary ||
+        parsedContent?.answer ||
+        (typeof rawContent === 'string' ? rawContent : JSON.stringify(rawContent ?? '')))
+
+  const normalizedResults =
+    analyticsContent?.result_data ||
+    parsedContent?.result_data ||
+    parsedContent?.results ||
+    (Array.isArray(payload?.message?.metadata?.raw_rows) ? payload.message.metadata.raw_rows : undefined)
+
+  const note =
+    analyticsContent?.verification ||
+    analyticsContent?.resolved_context ||
+    parsedContent?.verification ||
+    parsedContent?.resolved_context ||
+    undefined
+
+  return {
+    success: !isErrorPayload && payload?.status === 'success',
+    operation,
+    data: {
+      answer,
+      results: normalizedResults,
+      note,
+      analytics_content: analyticsContent,
+      query_type: queryType,
+      resolved_context: analyticsContent?.resolved_context || parsedContent?.resolved_context,
+      verification: analyticsContent?.verification || parsedContent?.verification,
+      conversation_id: payload?.conversation_id,
+      user_transcript:
+        typeof payload?.user_message?.content === 'string'
+          ? payload.user_message.content
+          : undefined,
+      chart_b64: payload?.message?.metadata?.chart_b64 || parsedContent?.chart_b64 || undefined,
+      code_output: payload?.message?.metadata?.code_output || parsedContent?.code_output || undefined,
+      generated_sql: payload?.message?.metadata?.generated_sql || parsedContent?.generated_sql || undefined,
+    },
+    metadata: {
+      source: parsedContent ? 'computed' : undefined,
+      query_type: queryType,
+      citations: payload?.message?.metadata?.citations,
+      agents_involved: payload?.message?.metadata?.agents_involved,
+      chart_b64: payload?.message?.metadata?.chart_b64,
+      code_output: payload?.message?.metadata?.code_output,
+      generated_sql: payload?.message?.metadata?.generated_sql,
+      input_type: payload?.user_message?.metadata?.input_type,
+      transcript_source: payload?.user_message?.metadata?.transcript_source,
+      transcript_confidence: payload?.user_message?.metadata?.transcript_confidence,
+      has_visual_context: payload?.user_message?.metadata?.has_visual_context,
+      media_duration_ms: payload?.user_message?.metadata?.media_duration_ms,
+      modality_pipeline: payload?.user_message?.metadata?.modality_pipeline,
+    },
   }
 }
 
@@ -235,69 +399,22 @@ export async function chat(
     throw new Error(error.detail || `HTTP ${response.status}`)
   }
 
-  const payload = await response.json()
+  return toOrchestratorResponse(await response.json())
+}
 
-  const rawContent = payload?.message?.content
-  const parsedContent = tryParseJsonContent(rawContent)
-  const analyticsContent = toAnalyticsContent(parsedContent)
-  const queryType = analyticsContent?.query_type || parsedContent?.query_type
-  const operation = mapQueryTypeToOperation(queryType || payload?.message?.metadata?.operation)
+export async function chatMedia(payload: ChatMediaRequestPayload): Promise<OrchestratorResponse> {
+  const response = await fetch(buildApiUrl(MEDIA_CHAT_URL), {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify(payload),
+  })
 
-  // Detect a structured error payload returned by the backend agents/service.
-  const isErrorPayload =
-    parsedContent !== null &&
-    typeof parsedContent === 'object' &&
-    typeof parsedContent.error === 'string'
-
-  const answer = isErrorPayload
-    ? (typeof parsedContent!.message === 'string'
-        ? parsedContent!.message
-        : 'Something went wrong. Please try again.')
-    : (analyticsContent?.insight_summary ||
-        parsedContent?.insight_summary ||
-        parsedContent?.answer ||
-        (typeof rawContent === 'string' ? rawContent : JSON.stringify(rawContent ?? '')))
-
-  const normalizedResults =
-    analyticsContent?.result_data ||
-    parsedContent?.result_data ||
-    parsedContent?.results ||
-    undefined
-
-  const note =
-    analyticsContent?.verification ||
-    analyticsContent?.resolved_context ||
-    parsedContent?.verification ||
-    parsedContent?.resolved_context ||
-    undefined
-
-  return {
-    success: !isErrorPayload && payload?.status === 'success',
-    operation,
-    data: {
-      answer,
-      results: normalizedResults,
-      note,
-      analytics_content: analyticsContent,
-      query_type: queryType,
-      resolved_context: analyticsContent?.resolved_context || parsedContent?.resolved_context,
-      verification: analyticsContent?.verification || parsedContent?.verification,
-      conversation_id: payload?.conversation_id,
-      // Code interpreter extras
-      chart_b64: payload?.message?.metadata?.chart_b64 || parsedContent?.chart_b64 || undefined,
-      code_output: payload?.message?.metadata?.code_output || parsedContent?.code_output || undefined,
-      generated_sql: payload?.message?.metadata?.generated_sql || parsedContent?.generated_sql || undefined,
-    },
-    metadata: {
-      source: parsedContent ? 'computed' : undefined,
-      query_type: queryType,
-      citations: payload?.message?.metadata?.citations,
-      agents_involved: payload?.message?.metadata?.agents_involved,
-      chart_b64: payload?.message?.metadata?.chart_b64,
-      code_output: payload?.message?.metadata?.code_output,
-      generated_sql: payload?.message?.metadata?.generated_sql,
-    },
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Unknown error' }))
+    throw new Error(error.detail || `HTTP ${response.status}`)
   }
+
+  return toOrchestratorResponse(await response.json())
 }
 
 // ============================================================================
@@ -638,7 +755,10 @@ export async function previewEmailsForTask(taskId: string, limit: number = 10, p
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: 'Unknown error' }))
-    throw new Error(error.detail || `HTTP ${response.status}`)
+    if (response.status === 401 && error.detail?.error === 'credential_expired' && error.detail?.reauth_url) {
+      throw new GmailCredentialExpiredError(error.detail.reauth_url, error.detail.task_id)
+    }
+    throw new Error(typeof error.detail === 'string' ? error.detail : `HTTP ${response.status}`)
   }
 
   return response.json()
@@ -653,7 +773,10 @@ export async function runTaskWithSelections(taskId: string, selectedMessageIds: 
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: 'Unknown error' }))
-    throw new Error(error.detail || `HTTP ${response.status}`)
+    if (response.status === 401 && error.detail?.error === 'credential_expired' && error.detail?.reauth_url) {
+      throw new GmailCredentialExpiredError(error.detail.reauth_url, error.detail.task_id)
+    }
+    throw new Error(typeof error.detail === 'string' ? error.detail : `HTTP ${response.status}`)
   }
 
   return response.json()

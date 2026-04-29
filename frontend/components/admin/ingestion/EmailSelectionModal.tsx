@@ -204,7 +204,7 @@ export function EmailSelectionModal({
                         </div>
                         {email.date && (
                           <div className="text-xs text-gray-600 dark:text-gray-400 truncate">
-                            Sent: {formatSentDate(email.date)}
+                            Received At: {formatSentDate(email.date)}
                           </div>
                         )}
                         {email.attachment_count > 0 && (

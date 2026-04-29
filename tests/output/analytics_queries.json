@@ -1,0 +1,23 @@
+[
+  {
+    "query": "What is the top 5 viewed videos on instagram",
+    "result": {
+      "response_text": "Processing the analytics request to find the top 5 viewed videos on Instagram using the existing data_analysis workflow.",
+      "response_json": "{\"workflow_id\":\"data_analysis\",\"request\":{\"platform\":\"instagram\",\"metric\":\"video_views\",\"operation\":\"sum\",\"query_category\":\"metrics\",\"params\":{\"max_rows\":5}}}"
+    }
+  },
+  {
+    "query": "Which day is the best to publish on tiktok",
+    "result": {
+      "response_text": "Processing analytics query for \"Which day is the best to publish on TikTok\" using the data_analysis workflow.",
+      "response_json": "{\"action\":\"execute\",\"workflow_id\":\"data_analysis\",\"parameters\":{\"query\":\"SELECT published_date, AVG(engagements) AS metric_value FROM documents WHERE LOWER(platform) = LOWER('tiktok') GROUP BY published_date ORDER BY metric_value DESC LIMIT :max_rows\",\"params\":{\"max_rows\":20},\"metric\":\"engagements\",\"operation\":\"average\",\"query_category\":\"metrics\"}}"
+    }
+  },
+  {
+    "query": "What are the top video featuring \"Donald Trump\"",
+    "result": {
+      "response_text": "Processing analytics request for top video featuring \"Donald Trump\" using the `data_analysis` workflow.",
+      "response_json": "{\"task_id\":\"retrieve_top_video\",\"description\":\"Retrieve the top video details featuring 'Donald Trump' from the documents, including metrics like views and engagement metrics.\",\"dependencies\":[],\"user_query\":\"What are the top video featuring \\\"Donald Trump\\\"\"}"
+    }
+  }
+]

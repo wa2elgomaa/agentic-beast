@@ -27,9 +27,9 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
-    command: redis-server --requirepass ${REDIS_PASSWORD}
+    command: redis-server --requirepass ${REDIS_PASSWORD:-beastredis}
     healthcheck:
-      test: [ "CMD", "redis-cli", "--auth", "${REDIS_PASSWORD}", "ping" ]
+      test: ["CMD", "redis-cli", "--auth", "${REDIS_PASSWORD:-beastredis}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -132,8 +132,6 @@ services:
     image: ollama/ollama:latest
     container_name: beast-ollama
     environment:
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-deepseek-coder:6.7b}
-      OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
       OLLAMA_NUM_CTX: "4096"
       OLLAMA_MAX_LOADED_MODELS: "2"
       OLLAMA_NUM_PARALLEL: "2"
@@ -150,46 +148,60 @@ services:
       - beast-network
     restart: unless-stopped
 
+  model-downloader:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: beast-model-downloader
+    environment:
+      HF_TOKEN: ${HF_TOKEN}
+      HUGGING_FACE_HUB_TOKEN: ${HF_TOKEN}
+    volumes:
+      - models_data:/models
+    command: >-
+      huggingface-cli download
+      litert-community/gemma-4-E2B-it-litert-lm
+      gemma-4-E2B-it.litertlm
+      --local-dir /models
+      --token ${HF_TOKEN}
+    networks:
+      - beast-network
+    restart: "no"
+
   app:
     build:
       context: ./backend
       dockerfile: Dockerfile
     container_name: beast-app
+    env_file:
+      - ./backend/.env
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
-      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/1
-      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/2
+      REDIS_URL: redis://:${REDIS_PASSWORD:-beastredis}@redis:6379/0
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-beastredis}@redis:6379/1
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-beastredis}@redis:6379/2
       MONGODB_URI: mongodb://${MONGO_INITDB_ROOT_USERNAME}:${MONGO_INITDB_ROOT_PASSWORD}@mongodb:27017/articles_db
       ENVIRONMENT: ${ENVIRONMENT}
-      AI_PROVIDER: ${AI_PROVIDER:-openai}
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-mistral}
-      OLLAMA_INTENT_MODEL: ${OLLAMA_INTENT_MODEL:-}
-      OLLAMA_SQL_MODEL: ${OLLAMA_SQL_MODEL:-}
-      OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
-      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
-      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o}
-      OPENAI_SQL_MODEL: ${OPENAI_SQL_MODEL:-}
-      OPENAI_INTENT_MODEL: ${OPENAI_INTENT_MODEL:-}
-      OPENAI_PARSE_MODEL: ${OPENAI_PARSE_MODEL:-}
-      OPENAI_TAG_MODEL: ${OPENAI_TAG_MODEL:-}
-      OPENAI_RECOMMENDATION_MODEL: ${OPENAI_RECOMMENDATION_MODEL:-}
-      OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
-      OPENAI_AGENT_ID: ${OPENAI_AGENT_ID:-}
-      OPENAI_WORKFLOW_ID: ${OPENAI_WORKFLOW_ID:-}
+      DOCKER_MODEL_RUNNER_ENABLED: ${DOCKER_MODEL_RUNNER_ENABLED:-false}
+      DOCKER_MODEL_RUNNER_BASE_URL: ${DOCKER_MODEL_RUNNER_BASE_URL:-http://model-runner.docker.internal/engines/v1}
       AGENT_SESSION_ENCRYPTION_KEY: ${AGENT_SESSION_ENCRYPTION_KEY:-}
     ports:
       - "${API_PORT:-8000}:${API_PORT:-8000}"
     volumes:
       - ./backend:/app
       - ./backend/watched_documents:/app/watched_documents
+      - models_data:/models
     depends_on:
-      - postgres
-      - redis
-      - mongodb
-      - ollama
+      postgres:
+        condition: service_started
+      redis:
+        condition: service_started
+      mongodb:
+        condition: service_started
+      ollama:
+        condition: service_started
+      model-downloader:
+        condition: service_completed_successfully
     networks:
       - beast-network
     command: uvicorn src.app.main:app --host ${API_HOST:-0.0.0.0} --port ${API_PORT:-8000} --reload
@@ -199,39 +211,33 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: beast-celery-worker
+    env_file:
+      - ./backend/.env
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
-      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/1
-      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/2
+      REDIS_URL: redis://:${REDIS_PASSWORD:-beastredis}@redis:6379/0
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-beastredis}@redis:6379/1
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-beastredis}@redis:6379/2
       MONGODB_URI: mongodb://${MONGO_INITDB_ROOT_USERNAME}:${MONGO_INITDB_ROOT_PASSWORD}@mongodb:27017/articles_db
       ENVIRONMENT: ${ENVIRONMENT}
-      AI_PROVIDER: ${AI_PROVIDER:-openai}
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-mistral}
-      OLLAMA_INTENT_MODEL: ${OLLAMA_INTENT_MODEL:-}
-      OLLAMA_SQL_MODEL: ${OLLAMA_SQL_MODEL:-}
-      OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
-      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
-      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o}
-      OPENAI_SQL_MODEL: ${OPENAI_SQL_MODEL:-}
-      OPENAI_INTENT_MODEL: ${OPENAI_INTENT_MODEL:-}
-      OPENAI_PARSE_MODEL: ${OPENAI_PARSE_MODEL:-}
-      OPENAI_TAG_MODEL: ${OPENAI_TAG_MODEL:-}
-      OPENAI_RECOMMENDATION_MODEL: ${OPENAI_RECOMMENDATION_MODEL:-}
-      OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
-      OPENAI_AGENT_ID: ${OPENAI_AGENT_ID:-}
-      OPENAI_WORKFLOW_ID: ${OPENAI_WORKFLOW_ID:-}
+      DOCKER_MODEL_RUNNER_ENABLED: ${DOCKER_MODEL_RUNNER_ENABLED:-false}
+      DOCKER_MODEL_RUNNER_BASE_URL: ${DOCKER_MODEL_RUNNER_BASE_URL:-http://model-runner.docker.internal/engines/v1}
       AGENT_SESSION_ENCRYPTION_KEY: ${AGENT_SESSION_ENCRYPTION_KEY:-}
     volumes:
       - ./backend:/app
       - ./backend/watched_documents:/app/watched_documents
+      - models_data:/models
     depends_on:
-      - postgres
-      - redis
-      - mongodb
-      - ollama
+      postgres:
+        condition: service_started
+      redis:
+        condition: service_started
+      mongodb:
+        condition: service_started
+      ollama:
+        condition: service_started
+      model-downloader:
+        condition: service_completed_successfully
     networks:
       - beast-network
     healthcheck:
@@ -244,39 +250,33 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: beast-celery-beat
+    env_file:
+      - ./backend/.env
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
-      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/1
-      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/2
+      REDIS_URL: redis://:${REDIS_PASSWORD:-beastredis}@redis:6379/0
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-beastredis}@redis:6379/1
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-beastredis}@redis:6379/2
       MONGODB_URI: mongodb://${MONGO_INITDB_ROOT_USERNAME}:${MONGO_INITDB_ROOT_PASSWORD}@mongodb:27017/articles_db
       ENVIRONMENT: ${ENVIRONMENT}
-      AI_PROVIDER: ${AI_PROVIDER:-openai}
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-mistral}
-      OLLAMA_INTENT_MODEL: ${OLLAMA_INTENT_MODEL:-}
-      OLLAMA_SQL_MODEL: ${OLLAMA_SQL_MODEL:-}
-      OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
-      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
-      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o}
-      OPENAI_SQL_MODEL: ${OPENAI_SQL_MODEL:-}
-      OPENAI_INTENT_MODEL: ${OPENAI_INTENT_MODEL:-}
-      OPENAI_PARSE_MODEL: ${OPENAI_PARSE_MODEL:-}
-      OPENAI_TAG_MODEL: ${OPENAI_TAG_MODEL:-}
-      OPENAI_RECOMMENDATION_MODEL: ${OPENAI_RECOMMENDATION_MODEL:-}
-      OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
-      OPENAI_AGENT_ID: ${OPENAI_AGENT_ID:-}
-      OPENAI_WORKFLOW_ID: ${OPENAI_WORKFLOW_ID:-}
+      DOCKER_MODEL_RUNNER_ENABLED: ${DOCKER_MODEL_RUNNER_ENABLED:-false}
+      DOCKER_MODEL_RUNNER_BASE_URL: ${DOCKER_MODEL_RUNNER_BASE_URL:-http://model-runner.docker.internal/engines/v1}
       AGENT_SESSION_ENCRYPTION_KEY: ${AGENT_SESSION_ENCRYPTION_KEY:-}
     volumes:
       - ./backend:/app
       - ./backend/watched_documents:/app/watched_documents
+      - models_data:/models
     depends_on:
-      - postgres
-      - redis
-      - mongodb
-      - ollama
+      postgres:
+        condition: service_started
+      redis:
+        condition: service_started
+      mongodb:
+        condition: service_started
+      ollama:
+        condition: service_started
+      model-downloader:
+        condition: service_completed_successfully
     networks:
       - beast-network
     healthcheck:
@@ -361,6 +361,7 @@ volumes:
   redis_data:
   mongodb_data:
   ollama_data:
+  models_data:
   # Commented out volumes (only used by uncommented services)
   # mysql_data:
   # elasticsearch_data:

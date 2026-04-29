@@ -22,14 +22,14 @@ from app.config import settings
 from app.db.session import AsyncSessionLocal
 from app.logging import get_logger
 from app.services.embedding_service import EmbeddingService
-from app.models.document import Document
+from app.schemas.document import Document
 
 logger = get_logger(__name__)
 
 # Column mappings: Excel → Database
 DIRECT_COLUMN_MAPPINGS = {
     # Profile & Post Information
-    "Reported at": "reported_at",
+    "Reported at": "received_at",
     "Profile name": "profile_name",
     "Profile URL": "profile_url",
     "Profile ID": "profile_id",
@@ -242,7 +242,7 @@ def process_row(
         "text": None,
         "doc_metadata": None,
         "embedding": None,
-        "reported_at": None,
+        "received_at": None,
         "profile_name": None,
         "profile_url": None,
         "profile_id": None,
@@ -291,7 +291,7 @@ def process_row(
         value = row[excel_col]
         
         # Special handling for different types
-        if db_col == "reported_at":
+        if db_col == "received_at":
             # Convert to date only
             if pd.notna(value):
                 doc[db_col] = (
@@ -383,7 +383,7 @@ async def ingest_excel_file(
                 insert_sql = text("""
                 INSERT INTO documents (
                     sheet_name, row_number, text, doc_metadata, embedding,
-                    reported_at, profile_name, profile_url, profile_id, post_detail_url,
+                    received_at, profile_name, profile_url, profile_id, post_detail_url,
                     content_id, platform, content_type, media_type, origin_of_the_content,
                     title, description, author_url, author_id, author_name,
                     content, link_url, view_on_platform,
@@ -396,7 +396,7 @@ async def ingest_excel_file(
                     labels, label_groups
                 ) VALUES (
                     :sheet_name, :row_number, :text, :doc_metadata, :embedding,
-                    :reported_at, :profile_name, :profile_url, :profile_id, :post_detail_url,
+                    :received_at, :profile_name, :profile_url, :profile_id, :post_detail_url,
                     :content_id, :platform, :content_type, :media_type, :origin_of_the_content,
                     :title, :description, :author_url, :author_id, :author_name,
                     :content, :link_url, :view_on_platform,

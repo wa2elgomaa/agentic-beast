@@ -20,7 +20,7 @@ from app.adapters.gmail_adapter import (
 from app.config import settings
 from app.db.session import AsyncSessionLocal
 from app.logging import get_logger
-from app.models import (
+from app.schemas import (
     Document,
     IngestionTask,
     IngestionTaskRun,
@@ -100,7 +100,7 @@ class IngestionService:
     @staticmethod
     def _coerce_document_value(field_name: str, value):
         """Normalize raw values before persisting to Document columns."""
-        if isinstance(value, datetime) and field_name in {"published_date", "reported_at"}:
+        if isinstance(value, datetime) and field_name in {"published_date", "received_at"}:
             return value.date()
         return value
 
@@ -245,14 +245,14 @@ class IngestionService:
             ]
             text_value = " ".join(part for part in text_parts if part).strip() or f"Row {source_row.get('row_number', 0)}"
 
-        # Populate reported_time: try source field first, fallback to reported_at, then to ingestion time
+        # Populate reported_time: try source field first, fallback to received_at, then to ingestion time
         reported_time_value = None
         if mapped_data.get("reported_time"):
             # Already mapped from source
             reported_time_value = self._coerce_reported_time(mapped_data["reported_time"])
-        elif source_row.get("reported_at"):
-            # Try to extract time from reported_at
-            reported_time_value = self._coerce_reported_time(source_row["reported_at"])
+        elif source_row.get("received_at"):
+            # Try to extract time from source received_at field (raw spreadsheet column name)
+            reported_time_value = self._coerce_reported_time(source_row["received_at"])
         if not reported_time_value:
             # Fallback to current ingestion time
             reported_time_value = datetime.now().time()
@@ -327,8 +327,13 @@ class IngestionService:
         return run.status == RunStatus.CANCELED or bool(run_metadata.get("cancel_requested"))
 
     async def _is_email_processed(self, message_id: str) -> bool:
-        """Return True if this Gmail message_id has already been ingested."""
-        stmt = select(ProcessedEmail).where(ProcessedEmail.message_id == message_id)
+        """Return True only if this Gmail message_id was successfully ingested.
+
+        Failed emails (is_success=False) are allowed to be re-ingested on the next run.
+        """
+        stmt = select(ProcessedEmail).where(
+            and_(ProcessedEmail.message_id == message_id, ProcessedEmail.is_success.is_(True))
+        )
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none() is not None
 
@@ -362,23 +367,33 @@ class IngestionService:
         """
         from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-        stmt = (
-            pg_insert(ProcessedEmail)
-            .values(
-                message_id=message_id,
-                task_id=task_id,
-                subject=subject,
-                sender=sender,
-                sent_at=sent_at,
-                rows_inserted=rows_inserted,
-                rows_updated=rows_updated,
-                rows_skipped=rows_skipped,
-                rows_failed=rows_failed,
-                is_success=is_success,
-                is_retryable=is_retryable,
-                processed_at=func.now(),
-            )
-            .on_conflict_do_nothing(index_elements=["message_id"])
+        insert_stmt = pg_insert(ProcessedEmail).values(
+            message_id=message_id,
+            task_id=task_id,
+            subject=subject,
+            sender=sender,
+            sent_at=sent_at,
+            rows_inserted=rows_inserted,
+            rows_updated=rows_updated,
+            rows_skipped=rows_skipped,
+            rows_failed=rows_failed,
+            is_success=is_success,
+            is_retryable=is_retryable,
+            processed_at=func.now(),
+        )
+        stmt = insert_stmt.on_conflict_do_update(
+            index_elements=["message_id"],
+            set_={
+                # Always update the outcome stats and success flag so a retry
+                # overwrites the previous failed record with the new result.
+                "rows_inserted": insert_stmt.excluded.rows_inserted,
+                "rows_updated": insert_stmt.excluded.rows_updated,
+                "rows_skipped": insert_stmt.excluded.rows_skipped,
+                "rows_failed": insert_stmt.excluded.rows_failed,
+                "is_success": insert_stmt.excluded.is_success,
+                "is_retryable": insert_stmt.excluded.is_retryable,
+                "processed_at": func.now(),
+            },
         )
         await self.db.execute(stmt)
 
@@ -434,8 +449,11 @@ class IngestionService:
             await gmail_adapter.connect()
 
             try:
-                # Exclude already-processed emails for this task from preview list
-                processed_stmt = select(ProcessedEmail.message_id).where(ProcessedEmail.task_id == task_id)
+                # Exclude successfully-processed emails for this task from preview list
+                # (failed emails are shown again so they can be re-ingested)
+                processed_stmt = select(ProcessedEmail.message_id).where(
+                    and_(ProcessedEmail.task_id == task_id, ProcessedEmail.is_success.is_(True))
+                )
                 processed_result = await self.db.execute(processed_stmt)
                 exclude_ids = {row[0] for row in processed_result.all() if row and row[0]}
                 # Fetch emails
@@ -462,25 +480,28 @@ class IngestionService:
                     elif "download_links" in email:
                         attachment_count = len(email.get("download_links", []))
 
-                        # Normalize date to ISO if possible for reliable frontend parsing
-                        date_val = email.get("date")
-                        date_iso = ""
-                        if date_val:
+                    # Normalize date to ISO if possible for reliable frontend parsing
+                    date_val = email.get("date")
+                    date_iso = ""
+                    if date_val:
+                        try:
+                            dt = datetime.fromisoformat(date_val)
+                            date_iso = dt.isoformat()
+                        except ValueError:
                             try:
                                 from email.utils import parsedate_to_datetime
-
                                 dt = parsedate_to_datetime(date_val)
                                 date_iso = dt.isoformat()
                             except Exception:
                                 date_iso = str(date_val)
 
-                        preview_emails.append({
-                            "message_id": email.get("message_id", ""),
-                            "subject": email.get("subject", ""),
-                            "from": email.get("from", ""),
-                            "date": date_iso,
-                            "attachment_count": attachment_count,
-                        })
+                    preview_emails.append({
+                        "message_id": email.get("message_id", ""),
+                        "subject": email.get("subject", ""),
+                        "from": email.get("from", ""),
+                        "date": date_iso,
+                        "attachment_count": attachment_count,
+                    })
                 logger.info(
                     "Fetched emails for preview",
                     task_id=task_id,
@@ -587,6 +608,15 @@ class IngestionService:
 
                         except Exception as e:
                             logger.error("Error upserting document", error=str(e))
+                            # Roll back the poisoned transaction so subsequent rows can proceed.
+                            try:
+                                await self.db.rollback()
+                            except Exception as rb_err:
+                                logger.warning("Rollback failed after row error; closing session", error=str(rb_err))
+                                try:
+                                    await self.db.close()
+                                except Exception:
+                                    pass
                             errors.append(
                                 RowError(
                                     row_number=row_data.get("row_number", 0),
@@ -599,15 +629,18 @@ class IngestionService:
                 # Record email as processed in DB and remove UNREAD label
                 if email_message_id:
                     # Parse sent date header if present and persist it
+                    # Gmail adapter emits ISO format (from internalDate); fall back to RFC 2822
                     sent_date_str = email.get("date")
                     sent_dt = None
                     if sent_date_str:
                         try:
-                            from email.utils import parsedate_to_datetime
-
-                            sent_dt = parsedate_to_datetime(sent_date_str)
-                        except Exception:
-                            sent_dt = None
+                            sent_dt = datetime.fromisoformat(sent_date_str)
+                        except ValueError:
+                            try:
+                                from email.utils import parsedate_to_datetime
+                                sent_dt = parsedate_to_datetime(sent_date_str)
+                            except Exception:
+                                sent_dt = None
 
                     await self._record_processed_email(
                         message_id=email_message_id,
@@ -619,11 +652,13 @@ class IngestionService:
                         rows_skipped=email_skipped,
                         rows_failed=email_failed,
                     )
-                try:
-                    # Use adapter helper to mark message as read (runs sync API in executor)
-                    await gmail_adapter.mark_email_as_read(email_message_id)
-                except Exception as e:
-                    logger.warning("Could not mark email as processed", error=str(e))
+                # Only mark read on success so failed emails remain retrievable.
+                if email_failed == 0:
+                    try:
+                        # Use adapter helper to mark message as read (runs sync API in executor)
+                        await gmail_adapter.mark_email_as_read(email_message_id)
+                    except Exception as e:
+                        logger.warning("Could not mark email as processed", error=str(e))
 
             await gmail_adapter.disconnect()
 
@@ -689,6 +724,15 @@ class IngestionService:
 
                 except Exception as e:
                     logger.error("Error upserting document", error=str(e))
+                    # Roll back the poisoned transaction so subsequent rows can proceed.
+                    try:
+                        await self.db.rollback()
+                    except Exception as rb_err:
+                        logger.warning("Rollback failed after row error; closing session", error=str(rb_err))
+                        try:
+                            await self.db.close()
+                        except Exception:
+                            pass
                     errors.append(
                         RowError(
                             row_number=row_data.get("row_number", 0),
@@ -796,6 +840,9 @@ class IngestionService:
                                 existing_id=existing.id,
                             )
                     except Exception as e:
+                        from sqlalchemy.exc import DBAPIError
+                        if isinstance(e, DBAPIError):
+                            raise  # DB errors must propagate out of begin_nested() cleanly
                         logger.warning(
                             "Error during identifier normalization; falling back to legacy matching",
                             error=str(e),
@@ -831,6 +878,9 @@ class IngestionService:
                                 existing_id=existing.id,
                             )
                     except Exception as e:
+                        from sqlalchemy.exc import DBAPIError
+                        if isinstance(e, DBAPIError):
+                            raise  # DB errors must propagate out of begin_nested() cleanly
                         logger.warning(
                             "Error during connection strategy normalization",
                             error=str(e),
@@ -1547,6 +1597,14 @@ class IngestionService:
 
                         document_row = self._build_document_payload(row_data, field_mappings)
 
+                        # Set received_at from the email's received date (overrides any spreadsheet value)
+                        email_date_str = email.get("date")
+                        if email_date_str:
+                            try:
+                                document_row["received_at"] = datetime.fromisoformat(email_date_str).date()
+                            except (ValueError, AttributeError):
+                                pass
+
                         # Upsert with dedup tracking if available
                         if dedup_service:
                             upsert_result = await self._upsert_document_with_dedup_tracking(
@@ -1573,6 +1631,15 @@ class IngestionService:
                             error=str(e),
                             traceback=traceback.format_exc(),
                         )
+                        # Roll back the poisoned transaction so subsequent rows can proceed.
+                        try:
+                            await self.db.rollback()
+                        except Exception as rb_err:
+                            logger.warning("Rollback failed after row error; closing session", error=str(rb_err))
+                            try:
+                                await self.db.close()
+                            except Exception:
+                                pass
                         result.errors.append(
                             {
                                 "row_number": row_data.get("row_number", 0),
@@ -1780,7 +1847,9 @@ class IngestionService:
                 target_total = int(task_config.get("max_results", 25))
                 emails = []
                 page_token = None
-                processed_stmt = select(ProcessedEmail.message_id).where(ProcessedEmail.task_id == task_id)
+                processed_stmt = select(ProcessedEmail.message_id).where(
+                    and_(ProcessedEmail.task_id == task_id, ProcessedEmail.is_success.is_(True))
+                )
                 processed_result = await self.db.execute(processed_stmt)
                 exclude_ids = {row[0] for row in processed_result.all() if row and row[0]}
                 while len(emails) < target_total:
@@ -1857,15 +1926,18 @@ class IngestionService:
                             is_email_retryable = email_result.is_retryable
 
                             # Parse sent date header if present and persist it
+                            # Gmail adapter emits ISO format (from internalDate); fall back to RFC 2822
                             sent_date_str = email.get("date")
                             sent_dt = None
                             if sent_date_str:
                                 try:
-                                    from email.utils import parsedate_to_datetime
-
-                                    sent_dt = parsedate_to_datetime(sent_date_str)
-                                except Exception:
-                                    sent_dt = None
+                                    sent_dt = datetime.fromisoformat(sent_date_str)
+                                except ValueError:
+                                    try:
+                                        from email.utils import parsedate_to_datetime
+                                        sent_dt = parsedate_to_datetime(sent_date_str)
+                                    except Exception:
+                                        sent_dt = None
 
                             await self._record_processed_email(
                                 message_id=email_message_id,
@@ -1882,7 +1954,10 @@ class IngestionService:
                             )
 
                             # Mark email as read using Gmail UNREAD label removal
-                            await gmail_adapter.mark_email_as_read(email_message_id)
+                            # Only mark read on success so failed emails remain
+                            # retrievable if the Gmail query uses is:unread.
+                            if is_email_success:
+                                await gmail_adapter.mark_email_as_read(email_message_id)
 
                 except Exception as e:
                     # Email processing failed (extraction error, etc.)

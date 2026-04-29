@@ -7,7 +7,7 @@ from sqlalchemy import and_, desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.logging import get_logger
-from app.models import GmailCredentialStatus, GmailCredentialAuditLog
+from app.schemas import GmailCredentialStatus, GmailCredentialAuditLog
 from app.utils import utc_now
 
 logger = get_logger(__name__)

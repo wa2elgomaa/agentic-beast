@@ -7,8 +7,8 @@ from typing import Optional
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.failed_email_queue import FailedEmailQueue
-from app.models.ingestion_task import IngestionTaskRun
+from app.schemas.failed_email_queue import FailedEmailQueue
+from app.schemas.ingestion_task import IngestionTaskRun
 from app.utils import utc_now
 
 
