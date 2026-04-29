@@ -17,7 +17,7 @@ from sqlalchemy import and_, func, select
 from app.config import settings
 from app.db.session import AsyncSessionLocal
 import logging
-from app.models.document import Document
+from app.schemas.document import Document
 
 _logger = logging.getLogger(__name__)
 
@@ -73,6 +73,7 @@ METRIC_COLUMNS: dict[str, Any] = {
 
 GROUP_BY_COLUMNS: dict[str, Any] = {
     "platform": Document.platform,
+    "beast_uuid": Document.beast_uuid,
     "published_date": Document.published_date,
     "profile_id": Document.profile_id,
     "content_type": Document.content_type,
@@ -317,17 +318,18 @@ async def get_top_content_db_impl(
     value_col = func.sum(metric_col).label("metric_value")
     title_col = func.max(func.coalesce(Document.title, "")).label("title")
     content_col = func.max(Document.content).label("content")
+    content_id_col = func.max(Document.content_id).label("content_id")
     stmt = select(
-        Document.platform,
-        Document.content_id,
+        Document.beast_uuid,
         title_col,
         content_col,
+        content_id_col,
         value_col,
     )
     if filters:
         stmt = stmt.where(and_(*filters))
     stmt = (
-        stmt.group_by(Document.platform, Document.content_id)
+        stmt.group_by(Document.beast_uuid)
         .order_by(value_col.desc())
         .limit(bounded_limit)
     )
@@ -338,10 +340,10 @@ async def get_top_content_db_impl(
 
     rows = [
         {
-            "platform": row[0],
-            "content_id": row[1],
-            "title": row[2],
-            "content": row[3],
+            "beast_uuid": str(row[0]) if row[0] is not None else None,
+            "title": row[1],
+            "content": row[2],
+            "content_id": row[3],
             "value": _safe_float(row[4]),
         }
         for row in raw_rows

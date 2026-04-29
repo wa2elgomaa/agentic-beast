@@ -1,0 +1,405 @@
+.portalStack {
+    --c-text: #e5e7eb;
+    --c-text-dim: #94a3b8;
+    --c-surface: rgba(15, 23, 42, 0.72);
+    --c-surface-hover: rgba(30, 41, 59, 0.9);
+    --c-listen: #4a4fde;
+    --c-listen-dim: rgba(76, 74, 222, 0.12);
+    --c-process: #f59e0b;
+    --c-process-dim: rgba(245, 158, 11, 0.12);
+    --glow: #5b4ade;
+    --glow-dim: rgba(74, 76, 222, 0.35);
+
+    flex: 1;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 20px 8px 16px;
+    gap: 0;
+    z-index: 2;
+    min-height: 0;
+}
+
+.modelLabel {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--c-text-dim);
+    letter-spacing: 0.03em;
+}
+
+.onDevicePill {
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--c-text-dim);
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.onDevicePill svg {
+    width: 10px;
+    height: 10px;
+}
+
+.statusPill {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 5px 12px;
+    border-radius: 100px;
+    background: var(--c-surface);
+    color: var(--c-text-dim);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    transition: color 0.3s, background 0.3s;
+}
+
+.statusPill::before {
+    content: '';
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--c-text-dim);
+    transition: background 0.3s;
+}
+
+.connected {
+    color: var(--c-listen);
+    background: var(--c-listen-dim);
+}
+
+.connected::before {
+    background: var(--c-listen);
+}
+
+.disconnected {
+    color: #f87171;
+    background: rgba(248, 113, 113, 0.1);
+}
+
+.disconnected::before {
+    background: #f87171;
+}
+
+.processing {
+    color: var(--c-process);
+    background: var(--c-process-dim);
+}
+
+.processing::before {
+    background: var(--c-process);
+}
+
+.viewportWrap {
+    position: fixed;
+    top: 20px;
+    right: 19px;
+    width: 100%;
+    max-width: 210px;
+    aspect-ratio: 16/9;
+    border-radius: 18px;
+    flex-shrink: 0;
+}
+
+.viewportWrap::before,
+.viewportWrap::after,
+.viewportGlow {
+    content: '';
+    position: absolute;
+    inset: -3px;
+    border-radius: 20px;
+    pointer-events: none;
+    transition: box-shadow 0.4s ease, opacity 0.4s ease;
+}
+
+.viewportWrap::before {
+    box-shadow: inset 0 0 30px var(--glow-dim), 0 0 15px var(--glow-dim);
+    z-index: 3;
+    animation: glow-breathe-1 3s ease-in-out infinite;
+}
+
+.viewportWrap::after {
+    box-shadow: 0 0 40px 8px var(--glow-dim);
+    z-index: 2;
+    animation: glow-breathe-2 4s ease-in-out infinite;
+}
+
+.viewportGlow {
+    inset: -6px;
+    border-radius: 22px;
+    box-shadow: 0 0 80px 20px var(--glow-dim);
+    z-index: 1;
+    animation: glow-breathe-3 5s ease-in-out infinite;
+}
+
+@keyframes glow-breathe-1 {
+
+    0%,
+    100% {
+        opacity: 0.6;
+    }
+
+    50% {
+        opacity: 1;
+    }
+}
+
+@keyframes glow-breathe-2 {
+
+    0%,
+    100% {
+        opacity: 0.4;
+    }
+
+    50% {
+        opacity: 0.8;
+    }
+}
+
+@keyframes glow-breathe-3 {
+
+    0%,
+    100% {
+        opacity: 0.2;
+    }
+
+    50% {
+        opacity: 0.5;
+    }
+}
+
+.viewportWrap.processing::before {
+    animation-duration: 0.8s;
+}
+
+.viewportWrap.processing::after {
+    animation-duration: 1.1s;
+}
+
+.viewportWrap.processing .viewportGlow {
+    animation-duration: 1.4s;
+    opacity: 0.3;
+}
+
+.viewportWrap.speaking::before,
+.viewportWrap.speaking::after,
+.viewportWrap.speaking .viewportGlow {
+    animation: none;
+}
+
+.viewportWrap.loading::before {
+    animation-duration: 5s;
+    opacity: 0.3;
+}
+
+.viewportWrap.loading::after {
+    animation-duration: 6s;
+    opacity: 0.2;
+}
+
+.viewportWrap.loading .viewportGlow {
+    animation-duration: 7s;
+    opacity: 0.1;
+}
+
+.viewportWrap video {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 18px;
+    background: #0a0a10;
+    transform: scaleX(-1);
+    position: relative;
+    z-index: 2;
+}
+
+
+.transcript {
+    width: 100%;
+    max-width: 640px;
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    margin-top: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 0 4px 4px;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.08) transparent;
+    mask-image: linear-gradient(to bottom, transparent 0%, black 12px, black 100%);
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 12px, black 100%);
+}
+
+.transcript::-webkit-scrollbar {
+    width: 4px;
+}
+
+.transcript::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.transcript::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 2px;
+}
+
+.msg {
+    padding: 10px 14px;
+    border-radius: 12px;
+    font-size: 13.5px;
+    line-height: 1.55;
+    max-width: 85%;
+    animation: msg-in 0.25s ease-out;
+}
+
+@keyframes msg-in {
+    from {
+        opacity: 0;
+        transform: translateY(6px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.msg.user {
+    align-self: flex-end;
+    background: rgba(74, 222, 128, 0.08);
+    color: #b0d8c0;
+    border-bottom-right-radius: 4px;
+}
+
+.msg.assistant {
+    align-self: flex-start;
+    background: var(--c-surface);
+    color: var(--c-text);
+    border-bottom-left-radius: 4px;
+}
+
+.msg .meta {
+    font-size: 10.5px;
+    color: var(--c-text-dim);
+    margin-top: 5px;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.02em;
+}
+
+.loadingDots {
+    display: inline-flex;
+    gap: 4px;
+    align-items: center;
+    height: 1.55em;
+}
+
+.loadingDots span {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: rgba(74, 222, 128, 0.5);
+    animation: dot-bounce 1.2s ease-in-out infinite;
+}
+
+.loadingDots span:nth-child(2) {
+    animation-delay: 0.15s;
+}
+
+.loadingDots span:nth-child(3) {
+    animation-delay: 0.3s;
+}
+
+@keyframes dot-bounce {
+
+    0%,
+    60%,
+    100% {
+        opacity: 0.3;
+        transform: translateY(0);
+    }
+
+    30% {
+        opacity: 1;
+        transform: translateY(-4px);
+    }
+}
+
+.ctrlBtn {
+    font-size: 12px;
+    font-weight: 600;
+    padding: 8px 16px;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 10px;
+    background: var(--c-surface);
+    color: var(--c-text-dim);
+    cursor: pointer;
+    transition: all 0.2s;
+    letter-spacing: 0.02em;
+}
+
+.ctrlBtn:hover {
+    background: var(--c-surface-hover);
+    color: var(--c-text);
+}
+
+.ctrlBtn.active {
+    background: var(--c-listen-dim);
+    color: var(--c-listen);
+    border-color: rgba(74, 222, 128, 0.15);
+}
+
+.stateIndicator {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--c-text-dim);
+    transition: color 0.3s;
+}
+
+.dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--glow);
+    transition: background 0.3s;
+    box-shadow: 0 0 8px var(--glow-dim);
+}
+
+.dot.listening {
+    animation: dot-pulse 2s ease-in-out infinite;
+}
+
+.dot.processing {
+    animation: dot-pulse 0.6s ease-in-out infinite;
+}
+
+.dot.speaking {
+    animation: dot-pulse 1s ease-in-out infinite;
+}
+
+.dot.loading {
+    animation: dot-pulse 2.5s ease-in-out infinite;
+}
+
+@keyframes dot-pulse {
+
+    0%,
+    100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+
+    50% {
+        opacity: 0.4;
+        transform: scale(0.8);
+    }
+}

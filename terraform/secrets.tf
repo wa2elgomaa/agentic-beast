@@ -110,7 +110,7 @@ resource "aws_secretsmanager_secret" "openai" {
 resource "aws_secretsmanager_secret_version" "openai" {
   secret_id = aws_secretsmanager_secret.openai.id
   secret_string = jsonencode({
-    api_key = try(var.api_secrets["openai_api_key"], "sk-changeme")
+    api_key = try(var.api_secrets["main_api_key"], "sk-changeme")
     model   = "gpt-4"
   })
 }

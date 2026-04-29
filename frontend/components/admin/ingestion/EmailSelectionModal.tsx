@@ -1,16 +1,23 @@
 'use client'
 
-import React, { useState, useMemo } from 'react'
+import React, { useState, useMemo, useEffect } from 'react'
 import { PreviewEmail } from '@/types'
 import { AlertCircle, Mail, Loader2, X } from 'lucide-react'
+import { formatInTimeZone } from 'date-fns-tz'
+import { APP_TIMEZONE } from '@/lib/dateUtils'
 
 interface EmailSelectionModalProps {
   isOpen: boolean
   isLoading: boolean
   emails: PreviewEmail[]
+  currentPage: number
+  hasPrevPage: boolean
+  hasNextPage: boolean
   error?: string
   onClose: () => void
   onSelect: (selectedIds: string[]) => Promise<void>
+  onPrevPage: () => Promise<void>
+  onNextPage: () => Promise<void>
   taskAdaptorType?: string
 }
 
@@ -18,9 +25,14 @@ export function EmailSelectionModal({
   isOpen,
   isLoading,
   emails,
+  currentPage,
+  hasPrevPage,
+  hasNextPage,
   error,
   onClose,
   onSelect,
+  onPrevPage,
+  onNextPage,
   taskAdaptorType,
 }: EmailSelectionModalProps) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
@@ -38,6 +50,21 @@ export function EmailSelectionModal({
     )
   }, [emails, searchQuery])
 
+  useEffect(() => {
+    setSelectedIds(new Set())
+  }, [emails])
+
+  const formatSentDate = (dateStr?: string) => {
+    if (!dateStr) return ''
+    try {
+      const d = new Date(dateStr)
+      if (Number.isNaN(d.getTime())) return dateStr
+      return formatInTimeZone(d, APP_TIMEZONE, 'yyyy-MM-dd HH:mm')
+    } catch (e) {
+      return dateStr
+    }
+  }
+
   const handleToggleEmail = (messageId: string) => {
     const updated = new Set(selectedIds)
     if (updated.has(messageId)) {
@@ -48,13 +75,19 @@ export function EmailSelectionModal({
     setSelectedIds(updated)
   }
 
-  const handleSelectAll = () => {
-    if (selectedIds.size === filteredEmails.length && filteredEmails.length > 0) {
-      // If all visible are selected, deselect all
-      setSelectedIds(new Set())
+  const handleSelectAll = (visibleEmails: PreviewEmail[]) => {
+    const visibleIds = visibleEmails.map((e) => e.message_id)
+    const allSelected = visibleIds.every((id) => selectedIds.has(id)) && visibleIds.length > 0
+    if (allSelected) {
+      // Deselect all visible
+      const updated = new Set(selectedIds)
+      visibleIds.forEach((id) => updated.delete(id))
+      setSelectedIds(updated)
     } else {
-      // Select all visible
-      setSelectedIds(new Set(filteredEmails.map((e) => e.message_id)))
+      // Add all visible
+      const updated = new Set(selectedIds)
+      visibleIds.forEach((id) => updated.add(id))
+      setSelectedIds(updated)
     }
   }
 
@@ -72,8 +105,7 @@ export function EmailSelectionModal({
     }
   }
 
-  const allVisibleSelected =
-    selectedIds.size === filteredEmails.length && filteredEmails.length > 0
+  const allVisibleSelected = filteredEmails.length > 0 && filteredEmails.every((e) => selectedIds.has(e.message_id))
 
   if (!isOpen) return null
 
@@ -132,7 +164,7 @@ export function EmailSelectionModal({
                     {selectedIds.size} of {emails.length} selected
                   </div>
                   <button
-                    onClick={handleSelectAll}
+                    onClick={() => handleSelectAll(filteredEmails)}
                     className="px-3 py-1.5 text-sm font-medium border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors"
                   >
                     {allVisibleSelected ? 'Deselect All' : 'Select All'}
@@ -157,7 +189,7 @@ export function EmailSelectionModal({
                         type="checkbox"
                         id={email.message_id}
                         checked={selectedIds.has(email.message_id)}
-                        onChange={() => {}} // Controlled by parent div click
+                        onChange={() => { }} // Controlled by parent div click
                         className="mt-1 w-4 h-4 cursor-pointer accent-blue-600"
                       />
                       <label
@@ -170,6 +202,11 @@ export function EmailSelectionModal({
                         <div className="text-xs text-gray-600 dark:text-gray-400 truncate">
                           From: {email.from}
                         </div>
+                        {email.date && (
+                          <div className="text-xs text-gray-600 dark:text-gray-400 truncate">
+                            Received At: {formatSentDate(email.date)}
+                          </div>
+                        )}
                         {email.attachment_count > 0 && (
                           <div className="text-xs text-gray-600 dark:text-gray-400">
                             {email.attachment_count} attachment{email.attachment_count > 1 ? 's' : ''}
@@ -179,6 +216,28 @@ export function EmailSelectionModal({
                     </div>
                   ))
                 )}
+              </div>
+              {/* Pagination controls */}
+              <div className="mt-4 flex items-center justify-between">
+                <div className="text-sm text-gray-600 dark:text-gray-400">
+                  Page {currentPage}
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => void onPrevPage()}
+                    disabled={!hasPrevPage || isLoading}
+                    className="px-2 py-1 rounded border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 disabled:opacity-50"
+                  >
+                    ← Prev
+                  </button>
+                  <button
+                    onClick={() => void onNextPage()}
+                    disabled={!hasNextPage || isLoading}
+                    className="px-2 py-1 rounded border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 disabled:opacity-50"
+                  >
+                    Next →
+                  </button>
+                </div>
               </div>
             </>
           )}

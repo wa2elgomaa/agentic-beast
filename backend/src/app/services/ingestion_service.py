@@ -3,7 +3,7 @@
 import hashlib
 import json
 import uuid
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timezone
 from uuid import UUID
 
 import httpx
@@ -20,7 +20,7 @@ from app.adapters.gmail_adapter import (
 from app.config import settings
 from app.db.session import AsyncSessionLocal
 from app.logging import get_logger
-from app.models import (
+from app.schemas import (
     Document,
     IngestionTask,
     IngestionTaskRun,
@@ -38,6 +38,7 @@ from app.services.gmail_credential_service import (
 )
 from app.services.schema_mapping_service import SchemaMappingService
 from app.services.summary_service import get_summary_service
+from app.utils import utc_now
 
 logger = get_logger(__name__)
 
@@ -99,7 +100,7 @@ class IngestionService:
     @staticmethod
     def _coerce_document_value(field_name: str, value):
         """Normalize raw values before persisting to Document columns."""
-        if isinstance(value, datetime) and field_name in {"published_date", "reported_at"}:
+        if isinstance(value, datetime) and field_name in {"published_date", "received_at"}:
             return value.date()
         return value
 
@@ -149,7 +150,42 @@ class IngestionService:
         return None
 
     @staticmethod
-    def _metric_fingerprint(row_data: dict) -> str:
+    def _configured_metric_columns(dedup_config: dict | None) -> list[str]:
+        """Return metric columns configured by schema mapping (is_metric=true)."""
+        is_metric = (dedup_config or {}).get("is_metric", {})
+        if not isinstance(is_metric, dict):
+            return []
+        return [field for field, enabled in is_metric.items() if enabled]
+
+    @staticmethod
+    def _document_numeric_column_names() -> set[str]:
+        """Set of numeric Document column names that can be defaulted to zero."""
+        numeric_type_names = {
+            "INTEGER",
+            "SMALLINT",
+            "BIGINT",
+            "NUMERIC",
+            "DECIMAL",
+            "FLOAT",
+            "REAL",
+            "DOUBLE PRECISION",
+        }
+        return {
+            column.name
+            for column in Document.__table__.columns
+            if str(column.type).upper() in numeric_type_names
+            and column.name not in {"id", "created_at", "updated_at"}
+        }
+
+    def _normalize_numeric_nulls(self, data: dict, target_columns: list[str] | set[str] | None = None) -> None:
+        """Convert null numeric values to zero for target columns present in data."""
+        columns = set(target_columns) if target_columns is not None else self._document_numeric_column_names()
+        for field in columns:
+            if field in data and data[field] is None:
+                data[field] = 0
+
+    @staticmethod
+    def _metric_fingerprint(row_data: dict, metric_columns: list[str] | set[str] | None = None) -> str:
         """Compute hash of key metrics to detect changes.
 
         Only includes metrics that are meaningful for change detection,
@@ -161,25 +197,8 @@ class IngestionService:
         Returns:
             SHA256 hex digest of key metrics
         """
-        # Key metrics that indicate a real change in data
-        key_metrics = [
-            "video_views",
-            "total_video_view_time_sec",
-            "avg_video_view_time_sec",
-            "completion_rate",
-            "total_interactions",
-            "total_reach",
-            "organic_reach",
-            "paid_reach",
-            "total_impressions",
-            "organic_impressions",
-            "paid_impressions",
-            "total_reactions",
-            "total_comments",
-            "total_shares",
-        ]
-
-        metrics_dict = {k: row_data.get(k) for k in key_metrics}
+        columns = metric_columns if metric_columns is not None else IngestionService._document_numeric_column_names()
+        metrics_dict = {k: row_data.get(k) for k in columns}
         metrics_json = json.dumps(metrics_dict, sort_keys=True, default=str)
         return hashlib.sha256(metrics_json.encode()).hexdigest()
 
@@ -226,14 +245,14 @@ class IngestionService:
             ]
             text_value = " ".join(part for part in text_parts if part).strip() or f"Row {source_row.get('row_number', 0)}"
 
-        # Populate reported_time: try source field first, fallback to reported_at, then to ingestion time
+        # Populate reported_time: try source field first, fallback to received_at, then to ingestion time
         reported_time_value = None
         if mapped_data.get("reported_time"):
             # Already mapped from source
             reported_time_value = self._coerce_reported_time(mapped_data["reported_time"])
-        elif source_row.get("reported_at"):
-            # Try to extract time from reported_at
-            reported_time_value = self._coerce_reported_time(source_row["reported_at"])
+        elif source_row.get("received_at"):
+            # Try to extract time from source received_at field (raw spreadsheet column name)
+            reported_time_value = self._coerce_reported_time(source_row["received_at"])
         if not reported_time_value:
             # Fallback to current ingestion time
             reported_time_value = datetime.now().time()
@@ -256,22 +275,8 @@ class IngestionService:
         if not payload.get("text") or payload["text"] == "None":
             payload["text"] = f"Row {row_number}"
 
-        # Sanitize nulls: numeric fields default to 0, booleans to False
-        numeric_defaults = [
-            "video_views",
-            "total_video_view_time_sec",
-            "avg_video_view_time_sec",
-            "total_interactions",
-            "total_reach",
-            "total_impressions",
-            "total_reactions",
-            "total_comments",
-            "total_shares",
-            "engagements",
-        ]
-        for fld in numeric_defaults:
-            if fld in payload and payload[fld] is None:
-                payload[fld] = 0
+        # Sanitize null numeric fields to avoid downstream arithmetic on None.
+        self._normalize_numeric_nulls(payload)
 
         # Ensure is_current default if not set
         if "is_current" not in payload:
@@ -322,8 +327,13 @@ class IngestionService:
         return run.status == RunStatus.CANCELED or bool(run_metadata.get("cancel_requested"))
 
     async def _is_email_processed(self, message_id: str) -> bool:
-        """Return True if this Gmail message_id has already been ingested."""
-        stmt = select(ProcessedEmail).where(ProcessedEmail.message_id == message_id)
+        """Return True only if this Gmail message_id was successfully ingested.
+
+        Failed emails (is_success=False) are allowed to be re-ingested on the next run.
+        """
+        stmt = select(ProcessedEmail).where(
+            and_(ProcessedEmail.message_id == message_id, ProcessedEmail.is_success.is_(True))
+        )
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none() is not None
 
@@ -332,8 +342,10 @@ class IngestionService:
         message_id: str,
         subject: str | None = None,
         sender: str | None = None,
+        sent_at: datetime | None = None,
         task_id: UUID | None = None,
         rows_inserted: int = 0,
+        rows_updated: int = 0,
         rows_skipped: int = 0,
         rows_failed: int = 0,
         is_success: bool = True,
@@ -347,6 +359,7 @@ class IngestionService:
             sender: Email sender for audit
             task_id: Task ID if processed from a task
             rows_inserted: Rows inserted from this email
+            rows_updated: Rows appended/updated from this email
             rows_skipped: Rows skipped from this email
             rows_failed: Rows that failed from this email
             is_success: Whether email was successfully processed (True = all rows succeeded or 0 rows with no errors)
@@ -354,21 +367,33 @@ class IngestionService:
         """
         from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-        stmt = (
-            pg_insert(ProcessedEmail)
-            .values(
-                message_id=message_id,
-                task_id=task_id,
-                subject=subject,
-                sender=sender,
-                rows_inserted=rows_inserted,
-                rows_skipped=rows_skipped,
-                rows_failed=rows_failed,
-                is_success=is_success,
-                is_retryable=is_retryable,
-                processed_at=func.now(),
-            )
-            .on_conflict_do_nothing(index_elements=["message_id"])
+        insert_stmt = pg_insert(ProcessedEmail).values(
+            message_id=message_id,
+            task_id=task_id,
+            subject=subject,
+            sender=sender,
+            sent_at=sent_at,
+            rows_inserted=rows_inserted,
+            rows_updated=rows_updated,
+            rows_skipped=rows_skipped,
+            rows_failed=rows_failed,
+            is_success=is_success,
+            is_retryable=is_retryable,
+            processed_at=func.now(),
+        )
+        stmt = insert_stmt.on_conflict_do_update(
+            index_elements=["message_id"],
+            set_={
+                # Always update the outcome stats and success flag so a retry
+                # overwrites the previous failed record with the new result.
+                "rows_inserted": insert_stmt.excluded.rows_inserted,
+                "rows_updated": insert_stmt.excluded.rows_updated,
+                "rows_skipped": insert_stmt.excluded.rows_skipped,
+                "rows_failed": insert_stmt.excluded.rows_failed,
+                "is_success": insert_stmt.excluded.is_success,
+                "is_retryable": insert_stmt.excluded.is_retryable,
+                "processed_at": func.now(),
+            },
         )
         await self.db.execute(stmt)
 
@@ -424,15 +449,26 @@ class IngestionService:
             await gmail_adapter.connect()
 
             try:
+                # Exclude successfully-processed emails for this task from preview list
+                # (failed emails are shown again so they can be re-ingested)
+                processed_stmt = select(ProcessedEmail.message_id).where(
+                    and_(ProcessedEmail.task_id == task_id, ProcessedEmail.is_success.is_(True))
+                )
+                processed_result = await self.db.execute(processed_stmt)
+                exclude_ids = {row[0] for row in processed_result.all() if row and row[0]}
                 # Fetch emails
+                # Use paginated fetch for preview (default 10 per page)
+                preview_limit = int(task_config.get("preview_page_size", 10))
                 emails = await gmail_adapter.fetch_data(
                     query=task_config.get("gmail_query", ""),
                     sender_filter=task_config.get("sender_filter"),
                     subject_pattern=task_config.get("subject_pattern"),
-                    max_results=task_config.get("max_results", 25),
+                    page_token=None,
+                    limit=preview_limit,
                     source_type=task_config.get("gmail_source_type", "attachment"),
                     link_regex=task_config.get("download_link_regex") or r"https?://\S+",
                     allowed_extensions=task_config.get("allowed_extensions"),
+                    exclude_message_ids=exclude_ids,
                 )
 
                 # Transform to preview format: message_id, subject, from, attachment_count
@@ -444,13 +480,28 @@ class IngestionService:
                     elif "download_links" in email:
                         attachment_count = len(email.get("download_links", []))
 
+                    # Normalize date to ISO if possible for reliable frontend parsing
+                    date_val = email.get("date")
+                    date_iso = ""
+                    if date_val:
+                        try:
+                            dt = datetime.fromisoformat(date_val)
+                            date_iso = dt.isoformat()
+                        except ValueError:
+                            try:
+                                from email.utils import parsedate_to_datetime
+                                dt = parsedate_to_datetime(date_val)
+                                date_iso = dt.isoformat()
+                            except Exception:
+                                date_iso = str(date_val)
+
                     preview_emails.append({
                         "message_id": email.get("message_id", ""),
                         "subject": email.get("subject", ""),
                         "from": email.get("from", ""),
+                        "date": date_iso,
                         "attachment_count": attachment_count,
                     })
-
                 logger.info(
                     "Fetched emails for preview",
                     task_id=task_id,
@@ -490,8 +541,21 @@ class IngestionService:
             gmail_adapter = GmailAdapter()
             await gmail_adapter.connect()
 
-            # Fetch emails
-            emails = await gmail_adapter.fetch_data()
+            # Fetch emails (cursor-based pagination)
+            emails = []
+            page_size = 500
+            page_token = None
+            while True:
+                meta = await gmail_adapter.fetch_data(return_meta=True, page_token=page_token, limit=page_size)
+                if not isinstance(meta, dict):
+                    break
+                batch = meta.get("emails", [])
+                if not batch:
+                    break
+                emails.extend(batch)
+                page_token = meta.get("next_page_token")
+                if not page_token:
+                    break
 
             # Process each email
             for email in emails:
@@ -510,6 +574,7 @@ class IngestionService:
 
                 logger.info("Processing email", subject=email_subject)
                 email_inserted = 0
+                email_updated = 0
                 email_skipped = 0
                 email_failed = 0
 
@@ -539,10 +604,19 @@ class IngestionService:
                                 email_skipped += 1
                             else:
                                 rows_updated += 1
-                                email_inserted += 1
+                                email_updated += 1
 
                         except Exception as e:
                             logger.error("Error upserting document", error=str(e))
+                            # Roll back the poisoned transaction so subsequent rows can proceed.
+                            try:
+                                await self.db.rollback()
+                            except Exception as rb_err:
+                                logger.warning("Rollback failed after row error; closing session", error=str(rb_err))
+                                try:
+                                    await self.db.close()
+                                except Exception:
+                                    pass
                             errors.append(
                                 RowError(
                                     row_number=row_data.get("row_number", 0),
@@ -554,24 +628,37 @@ class IngestionService:
 
                 # Record email as processed in DB and remove UNREAD label
                 if email_message_id:
+                    # Parse sent date header if present and persist it
+                    # Gmail adapter emits ISO format (from internalDate); fall back to RFC 2822
+                    sent_date_str = email.get("date")
+                    sent_dt = None
+                    if sent_date_str:
+                        try:
+                            sent_dt = datetime.fromisoformat(sent_date_str)
+                        except ValueError:
+                            try:
+                                from email.utils import parsedate_to_datetime
+                                sent_dt = parsedate_to_datetime(sent_date_str)
+                            except Exception:
+                                sent_dt = None
+
                     await self._record_processed_email(
                         message_id=email_message_id,
                         subject=email_subject,
                         sender=email_sender,
+                        sent_at=sent_dt,
                         rows_inserted=email_inserted,
+                        rows_updated=email_updated,
                         rows_skipped=email_skipped,
                         rows_failed=email_failed,
                     )
-                try:
-                    gmail_service = gmail_adapter.service
-                    if gmail_service is not None:
-                        await gmail_service.users().messages().modify(
-                            userId="me",
-                            id=email_message_id,
-                            body={"removeLabelIds": ["UNREAD"]},
-                        ).execute()
-                except Exception as e:
-                    logger.warning("Could not mark email as processed", error=str(e))
+                # Only mark read on success so failed emails remain retrievable.
+                if email_failed == 0:
+                    try:
+                        # Use adapter helper to mark message as read (runs sync API in executor)
+                        await gmail_adapter.mark_email_as_read(email_message_id)
+                    except Exception as e:
+                        logger.warning("Could not mark email as processed", error=str(e))
 
             await gmail_adapter.disconnect()
 
@@ -637,6 +724,15 @@ class IngestionService:
 
                 except Exception as e:
                     logger.error("Error upserting document", error=str(e))
+                    # Roll back the poisoned transaction so subsequent rows can proceed.
+                    try:
+                        await self.db.rollback()
+                    except Exception as rb_err:
+                        logger.warning("Rollback failed after row error; closing session", error=str(rb_err))
+                        try:
+                            await self.db.close()
+                        except Exception:
+                            pass
                     errors.append(
                         RowError(
                             row_number=row_data.get("row_number", 0),
@@ -709,17 +805,10 @@ class IngestionService:
                 )
                 row_data["text"] = fallback_text or f"Row {row_data.get('row_number', 0)}"
 
-            # Convert NULL numeric values to 0 for accurate metric calculations
-            numeric_fields = [
-                "organic_interactions", "total_interactions", "total_reactions", "total_comments",
-                "total_shares", "engagements", "total_reach", "paid_reach", "organic_reach",
-                "total_impressions", "paid_impressions", "organic_impressions", "reach_engagement_rate",
-                "total_likes", "video_length_sec", "video_views", "total_video_view_time_sec",
-                "avg_video_view_time_sec", "completion_rate"
-            ]
-            for field in numeric_fields:
-                if field in row_data and row_data[field] is None:
-                    row_data[field] = 0
+            # Convert NULL numeric values to 0 for accurate metric calculations.
+            self._normalize_numeric_nulls(row_data)
+
+            metric_columns = self._configured_metric_columns(dedup_config)
 
             # Attempt cross-platform matching if identifier_column is configured
             existing = None
@@ -751,6 +840,9 @@ class IngestionService:
                                 existing_id=existing.id,
                             )
                     except Exception as e:
+                        from sqlalchemy.exc import DBAPIError
+                        if isinstance(e, DBAPIError):
+                            raise  # DB errors must propagate out of begin_nested() cleanly
                         logger.warning(
                             "Error during identifier normalization; falling back to legacy matching",
                             error=str(e),
@@ -786,6 +878,9 @@ class IngestionService:
                                 existing_id=existing.id,
                             )
                     except Exception as e:
+                        from sqlalchemy.exc import DBAPIError
+                        if isinstance(e, DBAPIError):
+                            raise  # DB errors must propagate out of begin_nested() cleanly
                         logger.warning(
                             "Error during connection strategy normalization",
                             error=str(e),
@@ -817,8 +912,8 @@ class IngestionService:
                 except Exception as e:
                     logger.warning("Could not generate embedding", error=str(e))
 
-            # Compute metric fingerprint
-            new_fingerprint = self._metric_fingerprint(row_data)
+            # Compute metric fingerprint from schema-configured metrics only.
+            new_fingerprint = self._metric_fingerprint(row_data, metric_columns=metric_columns)
 
             if existing:
                 # Extract metrics from existing record to compute its fingerprint
@@ -826,82 +921,86 @@ class IngestionService:
                     column.name: getattr(existing, column.name)
                     for column in Document.__table__.columns
                 }
-                old_fingerprint = self._metric_fingerprint(existing_data)
+                old_fingerprint = self._metric_fingerprint(existing_data, metric_columns=metric_columns)
 
-                # Check if metrics have changed
-                if new_fingerprint == old_fingerprint:
-                    # No change detected; skip insert to avoid spurious duplicates
-                    logger.debug(
-                        "Document metrics unchanged, skipping new version",
-                        row_number=row_data.get("row_number"),
-                        fingerprint=new_fingerprint,
-                    )
-                    return "skipped"
+                # # Check if metrics have changed
+                # if new_fingerprint == old_fingerprint:
+                #     # No change detected; skip insert to avoid spurious duplicates
+                #     logger.debug(
+                #         "Document metrics unchanged, skipping new version",
+                #         row_number=row_data.get("row_number"),
+                #         fingerprint=new_fingerprint,
+                #     )
+                #     return "skipped"
 
                 # EXACT MATCH (Pass 1): Calculate metric deltas and mark old as stale
                 if not connection_match_found:
-                    # Determine baseline for delta calculation based on dedup strategy
-                    # For "subtract" strategy: reconstruct baseline from all prior records (deltas sum)
-                    # For "add"/"keep"/other: use existing record value as baseline
-
+                    metric_deltas = None
                     default_strategy = dedup_config.get("default_strategy", "subtract") if dedup_config else "subtract"
-                    baseline_data = existing_data.copy() if existing_data else {}
 
-                    # Only reconstruct baseline from prior records if using subtract strategy
-                    if default_strategy == "subtract":
-                        # For subtract strategy, we store delta values, so we need to reconstruct
-                        # the actual accumulated baseline from all prior records
-                        baseline_data = {metric: 0 for metric in [
-                            "video_views", "total_reach", "engagements", "shares", "comments",
-                            "likes", "total_impressions", "profile_views", "followers_gained",
-                            "followers_lost", "total_followers", "message_count", "message_reach",
-                            "message_engagement", "clicks", "utm_source", "utm_medium", "utm_campaign"
-                        ]}
+                    if metric_columns:
+                        # Determine baseline for delta calculation based on dedup strategy.
+                        # For "subtract" strategy: reconstruct baseline from all prior records (deltas sum).
+                        # For "add"/"keep"/other: use existing record value as baseline.
+                        baseline_data = existing_data.copy() if existing_data else {}
 
-                        identifier_hash = row_data.get("identifier_hash")
-                        if identifier_hash and existing:
-                            try:
-                                # Sum the current record
-                                for metric in baseline_data:
-                                    metric_val = getattr(existing, metric, None)
-                                    if metric_val and isinstance(metric_val, (int, float)):
-                                        baseline_data[metric] += metric_val
+                        # Only reconstruct baseline from prior records if using subtract strategy.
+                        if default_strategy == "subtract":
+                            # For subtract strategy, we store delta values, so we need to reconstruct
+                            # the actual accumulated baseline from all prior records.
+                            baseline_data = {metric: 0.0 for metric in metric_columns}
 
-                                # Sum all stale (is_current=False) records with same identifier_hash
-                                stmt = select(Document).where(
-                                    and_(
-                                        Document.identifier_hash == identifier_hash,
-                                        Document.is_current == False,
-                                    )
-                                )
-                                result = await self.db.execute(stmt)
-                                stale_records = result.scalars().all()
-
-                                for prior in stale_records:
+                            identifier_hash = row_data.get("identifier_hash")
+                            if identifier_hash and existing:
+                                try:
+                                    # Sum the current record.
                                     for metric in baseline_data:
-                                        metric_val = getattr(prior, metric, None)
+                                        metric_val = getattr(existing, metric, None)
                                         if metric_val and isinstance(metric_val, (int, float)):
-                                            baseline_data[metric] += metric_val
+                                            baseline_data[metric] += float(metric_val)
 
-                                if stale_records:
-                                    logger.debug(
-                                        "Reconstructed baseline from current + stale records (subtract strategy)",
-                                        identifier_hash=identifier_hash,
-                                        num_stale_records=len(stale_records),
-                                        baseline=baseline_data,
+                                    # Sum all stale (is_current=False) records with same identifier_hash.
+                                    stmt = select(Document).where(
+                                        and_(
+                                            Document.identifier_hash == identifier_hash,
+                                            Document.is_current == False,
+                                        )
                                     )
-                            except Exception as e:
-                                logger.warning(
-                                    "Error reconstructing baseline from prior records; using current record only",
-                                    error=str(e),
-                                )
-                                # Fallback: use existing data only
-                                baseline_data = existing_data
+                                    result = await self.db.execute(stmt)
+                                    stale_records = result.scalars().all()
 
-                    # Calculate metric deltas from baseline
-                    metric_deltas = self._calculate_metric_deltas(baseline_data, row_data)
-                    if metric_deltas:
-                        row_data["metric_deltas"] = metric_deltas
+                                    for prior in stale_records:
+                                        for metric in baseline_data:
+                                            metric_val = getattr(prior, metric, None)
+                                            if metric_val and isinstance(metric_val, (int, float)):
+                                                baseline_data[metric] += float(metric_val)
+
+                                    if stale_records:
+                                        logger.debug(
+                                            "Reconstructed baseline from current + stale records (subtract strategy)",
+                                            identifier_hash=identifier_hash,
+                                            num_stale_records=len(stale_records),
+                                            baseline=baseline_data,
+                                        )
+                                except Exception as e:
+                                    logger.warning(
+                                        "Error reconstructing baseline from prior records; using current record only",
+                                        error=str(e),
+                                    )
+                                    # Fallback: use existing data only.
+                                    baseline_data = existing_data
+
+                        # Calculate metric deltas from baseline.
+                        metric_deltas = self._calculate_metric_deltas(
+                            baseline_data,
+                            row_data,
+                            metric_columns=metric_columns,
+                        )
+                        if metric_deltas:
+                            row_data["metric_deltas"] = metric_deltas
+                    else:
+                        # No metric columns configured in schema mapping: bypass dedup strategies/deltas.
+                        row_data["metric_deltas"] = None
 
                     # Reuse existing beast_uuid if available, otherwise generate new
                     if existing.beast_uuid:
@@ -909,7 +1008,7 @@ class IngestionService:
                     else:
                         row_data["beast_uuid"] = uuid.uuid4()
 
-                    # Metrics changed: mark old record as stale and insert new version
+                    # Mark old record stale only when strategy-based metric processing is enabled.
                     logger.debug(
                         "Exact match found, appending new version with metric deltas",
                         row_number=row_data.get("row_number"),
@@ -919,12 +1018,13 @@ class IngestionService:
                         metric_deltas=metric_deltas,
                         dedup_strategy=default_strategy,
                     )
-                    stmt = (
-                        update(Document)
-                        .where(Document.id == existing.id)
-                        .values(is_current=False)
-                    )
-                    await self._safe_execute(stmt)
+                    if metric_columns:
+                        stmt = (
+                            update(Document)
+                            .where(Document.id == existing.id)
+                            .values(is_current=False)
+                        )
+                        await self._safe_execute(stmt)
 
                 # CONNECTION MATCH (Pass 2): Reuse beast_uuid but insert separately (no marking old as stale)
                 else:
@@ -1000,19 +1100,20 @@ class IngestionService:
                     await self._safe_execute(upd_stmt)
                     return "updated"
 
-    def _calculate_metric_deltas(self, existing_data: dict, new_data: dict) -> dict | None:
+    def _calculate_metric_deltas(
+        self,
+        existing_data: dict,
+        new_data: dict,
+        metric_columns: list[str] | set[str] | None = None,
+    ) -> dict | None:
         """Calculate metric deltas (differences) between old and new values.
 
         Returns:
             Dict of {metric_name: delta} for metrics that changed, or None if no deltas.
         """
-        # Metric columns to track (from Document model)
-        metric_columns = {
-            "video_views", "total_reach", "engagements", "shares", "comments",
-            "likes", "total_impressions", "profile_views", "followers_gained",
-            "followers_lost", "total_followers", "message_count", "message_reach",
-            "message_engagement", "clicks", "utm_source", "utm_medium", "utm_campaign"
-        }
+        # No configured metric columns means no delta calculation.
+        if not metric_columns:
+            return None
 
         deltas = {}
         for metric in metric_columns:
@@ -1054,27 +1155,19 @@ class IngestionService:
             Modified row_data with strategies applied to metric fields.
         """
         if not dedup_config:
-            # No config: default to subtract for all metrics (backward compatible)
+            # No dedup config: do not apply any metric strategy.
             return row_data
 
-        # Metric columns to track
-        metric_columns = {
-            "video_views", "total_reach", "engagements", "shares", "comments",
-            "likes", "total_impressions", "profile_views", "followers_gained",
-            "followers_lost", "total_followers", "message_count", "message_reach",
-            "message_engagement", "clicks", "utm_source", "utm_medium", "utm_campaign"
-        }
+        metric_columns = self._configured_metric_columns(dedup_config)
+        if not metric_columns:
+            # No configured metric columns means native insert/update behavior.
+            return row_data
 
-        is_metric = dedup_config.get("is_metric", {})
         default_strategy = dedup_config.get("default_strategy", "subtract")
         field_strategies = dedup_config.get("field_strategies", {})
 
         applied_strategies = {}
         for metric in metric_columns:
-            # Only process if this field is marked as metric
-            if not is_metric.get(metric, False):
-                continue
-
             if metric not in row_data or metric not in existing_data:
                 continue
 
@@ -1159,7 +1252,7 @@ class IngestionService:
                 # Duplicate found, metrics changed (delta calculated)
                 calculation_summary = {
                     "metric_deltas": row_data.get("metric_deltas"),
-                    "timestamp": datetime.utcnow().isoformat(),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                 }
                 await dedup_service.record_dedup_action(
                     run_id=run_id,
@@ -1187,6 +1280,7 @@ class IngestionService:
         task_id: UUID,
         parent_run_id: UUID,
         selected_message_ids: list[str],
+        email_metadata: dict[str, dict] | None = None,
     ) -> list[tuple[UUID, str]]:
         """Create child IngestionTaskRun records for each selected email.
 
@@ -1194,6 +1288,8 @@ class IngestionService:
             task_id: UUID of the parent ingestion task.
             parent_run_id: UUID of the parent task run.
             selected_message_ids: List of Gmail message IDs to process as sub-tasks.
+            email_metadata: Optional mapping of message_id -> metadata dict
+                (e.g. {"email_subject": "...", "email_sent_at": "..."}).
 
         Returns:
             List of tuples: (child_run_id, message_id) for Celery task queueing.
@@ -1201,12 +1297,15 @@ class IngestionService:
         child_runs = []
 
         for message_id in selected_message_ids:
+            meta = {"selected_message_id": message_id}
+            if email_metadata and message_id in email_metadata:
+                meta.update(email_metadata[message_id])
             # Create child run
             child_run = IngestionTaskRun(
                 task_id=task_id,
                 parent_run_id=parent_run_id,
                 status=RunStatus.PENDING,
-                run_metadata={"selected_message_id": message_id},
+                run_metadata=meta,
             )
             self.db.add(child_run)
             await self.db.flush()  # Flush to get the ID
@@ -1498,6 +1597,14 @@ class IngestionService:
 
                         document_row = self._build_document_payload(row_data, field_mappings)
 
+                        # Set received_at from the email's received date (overrides any spreadsheet value)
+                        email_date_str = email.get("date")
+                        if email_date_str:
+                            try:
+                                document_row["received_at"] = datetime.fromisoformat(email_date_str).date()
+                            except (ValueError, AttributeError):
+                                pass
+
                         # Upsert with dedup tracking if available
                         if dedup_service:
                             upsert_result = await self._upsert_document_with_dedup_tracking(
@@ -1524,6 +1631,15 @@ class IngestionService:
                             error=str(e),
                             traceback=traceback.format_exc(),
                         )
+                        # Roll back the poisoned transaction so subsequent rows can proceed.
+                        try:
+                            await self.db.rollback()
+                        except Exception as rb_err:
+                            logger.warning("Rollback failed after row error; closing session", error=str(rb_err))
+                            try:
+                                await self.db.close()
+                            except Exception:
+                                pass
                         result.errors.append(
                             {
                                 "row_number": row_data.get("row_number", 0),
@@ -1650,7 +1766,7 @@ class IngestionService:
                         error_type="auth_error",
                         error_code="invalid_grant",
                         status=RunStatus.FAILED,
-                        completed_at=datetime.utcnow(),
+                        completed_at=utc_now(),
                         error_message=str(e),
                     )
                 )
@@ -1675,7 +1791,7 @@ class IngestionService:
                         error_type="auth_error",
                         error_code="temporary_auth_failure",
                         status=RunStatus.FAILED,
-                        completed_at=datetime.utcnow(),
+                        completed_at=utc_now(),
                         error_message=str(e),
                     )
                 )
@@ -1690,8 +1806,35 @@ class IngestionService:
             # The adapted config will be updated on next task run via task_config initialization
             refreshed_oauth = gmail_adapter.get_oauth_config()
             if refreshed_oauth or oauth_changed:
-                logger.debug("Gmail OAuth config updated but not persisted in async context",
-                           oauth_changed=oauth_changed)
+                logger.info("Gmail OAuth config refreshed; persisting to task adaptor_config if available",
+                            oauth_changed=oauth_changed)
+                try:
+                    # Merge refreshed oauth into task.adaptor_config.gmail_oauth and persist
+                    current_adaptor = dict(task.adaptor_config or {})
+                    gmail_oauth = dict(current_adaptor.get("gmail_oauth", {}))
+                    # Only merge non-empty keys to avoid wiping existing client secrets unintentionally
+                    for k, v in (refreshed_oauth or {}).items():
+                        if v is not None:
+                            gmail_oauth[k] = v
+                    current_adaptor["gmail_oauth"] = gmail_oauth
+                    task.adaptor_config = current_adaptor
+                    self.db.add(task)
+                    await self.db.flush()
+                    await self.db.commit()
+
+                    # Record audit event for token refresh
+                    try:
+                        await credential_service.record_auth_event(
+                            task_id=task.id,
+                            event_type="token_refreshed",
+                            account_email=gmail_oauth.get("account_email") or None,
+                            error_code=None,
+                            error_message=None,
+                        )
+                    except Exception as e:
+                        logger.debug("Failed to write gmail credential audit event", error=str(e), task_id=task.id)
+                except Exception as e:
+                    logger.warning("Failed to persist refreshed Gmail OAuth into task.adaptor_config", error=str(e), task_id=task.id)
 
             # Fetch emails - child runs process only their assigned email, parent runs process all
             if selected_message_id:
@@ -1700,17 +1843,40 @@ class IngestionService:
                 emails = [email] if email else []
                 logger.info("Child run fetching single email", run_id=run_id, message_id=selected_message_id)
             else:
-                # This is a parent run - fetch all emails matching the query
-                emails = await gmail_adapter.fetch_data(
-                    query=gmail_query,
-                    sender_filter=sender_filter,
-                    subject_pattern=subject_pattern,
-                    max_results=task_config.get("max_results", 25),
-                    source_type=gmail_source_type,
-                    link_regex=download_link_regex,
-                    allowed_extensions=task_config.get("allowed_extensions"),  # e.g., ['xlsx', 'csv']
+                # This is a parent run - fetch up to configured max_results via cursor paging
+                target_total = int(task_config.get("max_results", 25))
+                emails = []
+                page_token = None
+                processed_stmt = select(ProcessedEmail.message_id).where(
+                    and_(ProcessedEmail.task_id == task_id, ProcessedEmail.is_success.is_(True))
                 )
-                logger.info("Parent run fetching all emails matching query", run_id=run_id, query=gmail_query)
+                processed_result = await self.db.execute(processed_stmt)
+                exclude_ids = {row[0] for row in processed_result.all() if row and row[0]}
+                while len(emails) < target_total:
+                    to_fetch = min(500, target_total - len(emails))
+                    meta = await gmail_adapter.fetch_data(
+                        query=gmail_query,
+                        sender_filter=sender_filter,
+                        subject_pattern=subject_pattern,
+                        page_token=page_token,
+                        limit=to_fetch,
+                        source_type=gmail_source_type,
+                        link_regex=download_link_regex,
+                        allowed_extensions=task_config.get("allowed_extensions"),
+                        exclude_message_ids=exclude_ids,
+                        return_meta=True,
+                    )
+                    if not isinstance(meta, dict):
+                        break
+                    batch = meta.get("emails", [])
+                    if not batch:
+                        break
+                    emails.extend(batch)
+                    page_token = meta.get("next_page_token")
+                    if not page_token:
+                        break
+
+                logger.info("Parent run fetched emails (paged)", run_id=run_id, query=gmail_query, fetched=len(emails))
 
             # Process each email
             for email in emails:
@@ -1759,12 +1925,28 @@ class IngestionService:
                             is_email_success = email_result.is_success
                             is_email_retryable = email_result.is_retryable
 
+                            # Parse sent date header if present and persist it
+                            # Gmail adapter emits ISO format (from internalDate); fall back to RFC 2822
+                            sent_date_str = email.get("date")
+                            sent_dt = None
+                            if sent_date_str:
+                                try:
+                                    sent_dt = datetime.fromisoformat(sent_date_str)
+                                except ValueError:
+                                    try:
+                                        from email.utils import parsedate_to_datetime
+                                        sent_dt = parsedate_to_datetime(sent_date_str)
+                                    except Exception:
+                                        sent_dt = None
+
                             await self._record_processed_email(
                                 message_id=email_message_id,
                                 subject=email_subject,
                                 sender=email_sender,
+                                sent_at=sent_dt,
                                 task_id=task_id,
                                 rows_inserted=email_result.rows_inserted,
+                                rows_updated=email_result.rows_updated,
                                 rows_skipped=email_result.rows_skipped,
                                 rows_failed=email_result.rows_failed,
                                 is_success=is_email_success,
@@ -1772,7 +1954,10 @@ class IngestionService:
                             )
 
                             # Mark email as read using Gmail UNREAD label removal
-                            await gmail_adapter.mark_email_as_read(email_message_id)
+                            # Only mark read on success so failed emails remain
+                            # retrievable if the Gmail query uses is:unread.
+                            if is_email_success:
+                                await gmail_adapter.mark_email_as_read(email_message_id)
 
                 except Exception as e:
                     # Email processing failed (extraction error, etc.)

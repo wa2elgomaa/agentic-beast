@@ -2,7 +2,6 @@
 
 import { formatNumber } from '@/lib/api'
 import { TrendingUp, Eye, MessageCircle, Heart, Share2, Calendar, User, ExternalLink, Video, FileText, Clock, Copy } from 'lucide-react'
-import { useState } from 'react'
 
 interface SingleResultCardProps {
     result: any
@@ -10,8 +9,6 @@ interface SingleResultCardProps {
 }
 
 export default function SingleResultCard({ result, metadata }: SingleResultCardProps) {
-    const [copied, setCopied] = useState(false)
-
 
     const formatLabel = (key: string): string => {
         return key
@@ -30,19 +27,24 @@ export default function SingleResultCard({ result, metadata }: SingleResultCardP
         }
     }
 
-    const copyToClipboard = (text: string) => {
-        navigator.clipboard.writeText(text)
-        setCopied(true)
-        setTimeout(() => setCopied(false), 2000)
-    }
+    const outboundUrl = String(
+        result.view_url || result.view_on_platform || result.link_url || ''
+    ).trim()
 
-    const metrics = [
-        { label: 'Video Views', value: result.video_views, icon: Eye, color: 'text-blue-600', bgColor: 'bg-blue-50', borderColor: 'border-blue-200' },
-        { label: 'Impressions', value: result.total_impressions, icon: TrendingUp, color: 'text-purple-600', bgColor: 'bg-purple-50', borderColor: 'border-purple-200' },
-        { label: 'Reactions', value: result.total_reactions, icon: Heart, color: 'text-red-600', bgColor: 'bg-red-50', borderColor: 'border-red-200' },
-        { label: 'Comments', value: result.total_comments, icon: MessageCircle, color: 'text-green-600', bgColor: 'bg-green-50', borderColor: 'border-green-200' },
-        { label: 'Shares', value: result.total_shares, icon: Share2, color: 'text-orange-600', bgColor: 'bg-orange-50', borderColor: 'border-orange-200' },
-    ].filter(m => m.value != null && m.value > 0)
+    const normalizedTitle = String(result.title || '').trim()
+    const normalizedDescription = String(result.description || '').trim()
+    const normalizedContent = String(result.content || '').trim()
+
+    const primaryBodyText = [normalizedDescription, normalizedContent]
+        .find(text => text && text !== normalizedTitle) || ''
+
+    const detailRows = [
+        { key: 'label', label: 'Label', value: String(result.label || '').trim() },
+        { key: 'view_url', label: 'View', value: String(result.view_url || '').trim() },
+        { key: 'value', label: 'Value', value: String(result.value || '').trim() },
+        { key: 'published_at', label: 'Published', value: formatDate(result.published_at || result.date) },
+    ].filter(row => row.value && row.value !== normalizedTitle && row.value !== primaryBodyText)
+
 
     const contentType = result.content_type || result.media_type || 'post'
     const isVideo = contentType.toLowerCase().includes('video') || result.video_views != null
@@ -74,21 +76,28 @@ export default function SingleResultCard({ result, metadata }: SingleResultCardP
                                 </span>
                             )}
                         </div>
-                        {result.title && result.title.trim() && (
-                            <h3 className="text-white font-bold text-xl mb-1 leading-tight">
-                                {result.title}
-                            </h3>
-                        )}
-                        {result.description && result.description.trim() && (
-                            <p className="text-white/90 text-sm line-clamp-2">
-                                {result.description}
-                            </p>
+                        {(result.title || result.content || "").trim() && (
+                            outboundUrl ? (
+                                <a
+                                    href={outboundUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-white font-bold text-xl mb-1 leading-tight underline decoration-white/40 hover:decoration-white"
+                                    title="Open post"
+                                >
+                                    {result.title || result.content}
+                                </a>
+                            ) : (
+                                <h3 className="text-white font-bold text-xl mb-1 leading-tight">
+                                    {result.title || result.content}
+                                </h3>
+                            )
                         )}
                     </div>
                     <div className="flex items-center gap-2">
-                        {result.view_on_platform && (
+                        {outboundUrl && (
                             <a
-                                href={result.view_on_platform}
+                                href={outboundUrl}
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 className="p-2 hover:bg-white/20 rounded-lg transition-colors"
@@ -97,33 +106,30 @@ export default function SingleResultCard({ result, metadata }: SingleResultCardP
                                 <ExternalLink size={18} className="text-white" />
                             </a>
                         )}
-                        <button
-                            onClick={() => copyToClipboard(JSON.stringify(result, null, 2))}
-                            className="p-2 hover:bg-white/20 rounded-lg transition-colors"
-                            title="Copy data"
-                        >
-                            <Copy size={18} className="text-white" />
-                        </button>
                     </div>
                 </div>
             </div>
 
             {/* Content */}
             <div className="px-6 py-5">
-                {
-                    Object.entries(result).map(([key, value], idx) => (
-                        (typeof value === 'string' && value.trim() && key !== 'title') ? (
-                            <div key={idx} className={`rounded-xl p-4 border hover:shadow-md transition-shadow mb-4`}>
-                                <div className="flex items-center gap-2 mb-2">
-                                    <span className="text-xs text-gray-600 font-medium">{formatLabel(key)}</span>
-                                </div>
-                                <div className={`text-2xl font-bold`}>
-                                    {isNaN(Number(value)) ? value : formatNumber(value) }
-                                </div>
+                {primaryBodyText && (
+                    <div className="mb-4 p-4 bg-white rounded-lg border border-gray-200 shadow-sm">
+                        <p className="text-gray-700 text-sm leading-relaxed">{primaryBodyText}</p>
+                    </div>
+                )}
+
+                {detailRows.length > 0 && (
+                    <div className="rounded-xl border border-gray-200 bg-white overflow-hidden mb-4">
+                        {detailRows.map((row) => row.value ? (
+                            <div key={row.key} className="grid grid-cols-[110px,1fr] gap-3 px-4 py-3 border-b border-gray-100 last:border-b-0">
+                                <span className="text-xs text-gray-600 font-semibold uppercase tracking-wide">{row.label}</span>
+                                <span className="text-sm text-gray-800 font-medium break-words">
+                                    {isNaN(Number(row.value)) ? row.value : formatNumber(row.value)}
+                                </span>
                             </div>
-                        ) : null
-                    ))
-                }
+                        ) : null)}
+                    </div>
+                )}
                 {/* {result.content && result.content.trim() && (
                     <div className="mb-5 p-4 bg-white rounded-lg border border-gray-200 shadow-sm">
                         <p className="text-gray-700 text-sm leading-relaxed">
@@ -225,26 +231,14 @@ export default function SingleResultCard({ result, metadata }: SingleResultCardP
                 )} */}
 
                 {/* Meta Information */}
-                <div className="flex flex-wrap gap-4 pt-4 border-t border-gray-200">
+                {result.date ? <div className="flex flex-wrap gap-4 pt-4 border-t border-gray-200">
                     {result.date && (
                         <div className="flex items-center gap-2 text-sm text-gray-700">
                             <Calendar size={16} className="text-gray-400" />
                             <span className="font-medium">{formatDate(result.date)}</span>
                         </div>
                     )}
-                    {result.profile_name && (
-                        <div className="flex items-center gap-2 text-sm text-gray-700">
-                            <User size={16} className="text-gray-400" />
-                            <span className="font-medium">{result.profile_name}</span>
-                        </div>
-                    )}
-                    {result.author_name && result.author_name !== result.profile_name && (
-                        <div className="flex items-center gap-2 text-sm text-gray-700">
-                            <User size={16} className="text-gray-400" />
-                            <span>by <span className="font-medium">{result.author_name}</span></span>
-                        </div>
-                    )}
-                </div>
+                </div> : null}
 
                 {/* Labels */}
                 {result.labels && result.labels.trim() && (
@@ -259,16 +253,22 @@ export default function SingleResultCard({ result, metadata }: SingleResultCardP
                         </div>
                     </div>
                 )}
-            </div>
 
-            {/* Copy Success Message */}
-            {copied && (
-                <div className="px-6 py-3 bg-green-50 border-t border-green-200">
-                    <p className="text-xs text-green-700 font-medium">
-                        ✓ Result data copied to clipboard!
-                    </p>
-                </div>
-            )}
+                {outboundUrl ? (
+                    <div className="mt-4 pt-4 border-t border-gray-200">
+                        <a
+                            href={outboundUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white text-sm font-semibold transition-all"
+                            title="View on platform"
+                        >
+                            <ExternalLink size={14} />
+                            View on Platform
+                        </a>
+                    </div>
+                ) : null}
+            </div>
         </div>
     )
 }

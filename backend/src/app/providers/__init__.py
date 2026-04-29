@@ -1,13 +1,11 @@
 """Provider compatibility shim: expose factory helper and legacy symbols."""
 
-from app.logging import get_logger
 from app.providers.base import AIProvider
 from app.providers.factory import clear_provider_cache, get_ai_provider
-from app.providers.openai_provider import OpenAIProvider
-from app.providers.ollama_provider import OllamaProvider
-from app.providers.strands_provider import StrandsProvider
+from app.providers.v1.openai_provider import get_model as get_openai_model
+from app.providers.v1.ollama_provider import get_model as get_ollama_model
+from app.providers.v1.litert_provider import get_model as get_litellm_model
 
-logger = get_logger(__name__)
 
 # Keep a simple compatibility surface for callers that import from
 # `app.providers`. Prefer `get_ai_provider(name, model, options)` from
@@ -17,7 +15,7 @@ __all__ = [
     "get_ai_provider",
     "clear_provider_cache",
     "AIProvider",
-    "OpenAIProvider",
-    "OllamaProvider",
-    "StrandsProvider",
+    "get_openai_model",
+    "get_ollama_model",
+    "get_litellm_model",
 ]

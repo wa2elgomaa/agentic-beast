@@ -327,7 +327,7 @@ def _get_top_content_impl(
     Returns:
         JSON string with a list of posts, each containing: rank, platform,
         content_type, published_at, metric_value, content_snippet, and
-        post_detail_url.
+        view_on_platform.
     """
     df = _load_all_data()
     if df.empty:
@@ -391,7 +391,7 @@ def _get_top_content_impl(
             # Keep content compact so the agent can always return valid schema JSON.
             "content": _safe_truncate(row.get("content", ""), 480),
             "content_snippet": _safe_truncate(snippet, 150),
-            "post_detail_url": _safe_truncate(row.get("post_detail_url", ""), 500),
+            "view_on_platform": _safe_truncate(row.get("view_on_platform", ""), 500),
         })
 
     return json.dumps({

@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.logging import get_logger
-from app.models import Document, SchemaMappingTemplate, TaskSchemaMapping, IngestionTask
+from app.schemas import Document, SchemaMappingTemplate, TaskSchemaMapping, IngestionTask
 from app.schemas.ingestion import SchemaDetectResponse
 
 logger = get_logger(__name__)
@@ -24,6 +24,7 @@ ALIAS_TABLE = {
     "profile_url": "profile_url",
     "content_id": "content_id",
     "post_detail_url": "post_detail_url",
+    "view_on_platform" : "view_on_platform",
     "reach": "total_reach",
     "organic_reach": "organic_reach",
     "paid_reach": "paid_reach",
@@ -39,7 +40,7 @@ ALIAS_TABLE = {
     "organic_interactions": "organic_interactions",
     "reactions": "total_reactions",
     "published_date": "published_date",
-    "reported_at": "reported_at",
+    "received_at": "received_at",
     "reported_time": "reported_time",
     "title": "title",
     "description": "description",

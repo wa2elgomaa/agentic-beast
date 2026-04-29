@@ -1,0 +1,12 @@
+# Minimal analytics workflow template
+tasks:
+  - id: discover_schema
+    type: discover_schema
+  - id: generate_sql
+    type: generate_sql
+    # optional: provide a task-specific prompt
+    prompt: "Generate an SQL query that answers the user's question"
+  - id: execute_sql
+    type: execute_sql
+  - id: postprocess
+    type: postprocess

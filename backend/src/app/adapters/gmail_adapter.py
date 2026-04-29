@@ -77,6 +77,28 @@ class GmailAdapter(DataAdapter):
                 )
 
                 refresh_token = self.oauth_config.get("refresh_token")
+                loaded_from_file = False
+                # If task adaptor_config doesn't contain a refresh_token, try loading
+                # stored credentials from the configured credentials file (legacy/local)
+                if not refresh_token:
+                    cred_path = getattr(settings, "gmail_credentials_path", None)
+                    if cred_path:
+                        try:
+                            import json
+                            from pathlib import Path
+
+                            path = Path(cred_path)
+                            if path.exists():
+                                data = json.loads(path.read_text())
+                                # merge any keys we care about
+                                for k in ("refresh_token", "access_token", "client_id", "client_secret", "token_uri", "scopes"):
+                                    if data.get(k) and not self.oauth_config.get(k):
+                                        self.oauth_config[k] = data.get(k)
+                                refresh_token = self.oauth_config.get("refresh_token")
+                                loaded_from_file = True
+                        except Exception as e:
+                            logger.warning("Failed to load gmail credentials file", path=cred_path, error=str(e))
+
                 if not refresh_token:
                     raise ValueError("Missing Gmail OAuth refresh_token in task adaptor_config.gmail_oauth")
 
@@ -183,7 +205,29 @@ class GmailAdapter(DataAdapter):
                         account_email=email_address,
                     )
                     await self.credential_service.reset_failure_count(self.task_id)
+                # If we loaded credentials from a local credentials file, persist any
+                # refreshed tokens back to that file so future runs have the up-to-date
+                # refresh/access tokens. This keeps local development flows working.
+                if loaded_from_file:
+                    try:
+                        import json
+                        from pathlib import Path
 
+                        cred_path = getattr(settings, "gmail_credentials_path", None)
+                        if cred_path:
+                            path = Path(cred_path)
+                            oauth_update = self.get_oauth_config() or {}
+                            # Read existing to avoid clobbering unrelated fields
+                            existing = {}
+                            if path.exists():
+                                try:
+                                    existing = json.loads(path.read_text())
+                                except Exception:
+                                    existing = {}
+                            merged = {**existing, **oauth_update}
+                            path.write_text(json.dumps(merged, indent=2))
+                    except Exception as e:
+                        logger.warning("Failed to persist refreshed gmail credentials to file", error=str(e))
                 self.health_status = AdapterHealthStatus(status=AdapterStatus.CONNECTED)
                 return
 
@@ -192,6 +236,27 @@ class GmailAdapter(DataAdapter):
                 raise
             except Exception as e:
                 error_msg = str(e)
+                # Catch invalid_grant that surfaces through lazy token refresh inside execute()
+                if "invalid_grant" in error_msg.lower():
+                    logger.error(
+                        "Gmail token invalid/revoked (detected in outer handler)",
+                        error=error_msg,
+                        task_id=self.task_id,
+                    )
+                    if self.credential_service and self.task_id:
+                        from app.services.gmail_credential_service import (
+                            GmailCredentialHealthStatus,
+                            ErrorCode,
+                        )
+                        await self.credential_service.update_credential_status(
+                            task_id=self.task_id,
+                            status=GmailCredentialHealthStatus.INVALID,
+                            error_code=ErrorCode.INVALID_GRANT,
+                            error_message="Refresh token is invalid or revoked",
+                        )
+                    raise CredentialExpiredError(
+                        "Gmail refresh token invalid/expired. User must re-authenticate."
+                    ) from e
                 logger.error(
                     "Gmail connection failed",
                     error=error_msg,
@@ -227,6 +292,8 @@ class GmailAdapter(DataAdapter):
             logger.warning("Gmail adapter not connected, cannot mark email as read", message_id=message_id)
             return False
 
+        service = self.service
+
         try:
             import asyncio
 
@@ -234,7 +301,7 @@ class GmailAdapter(DataAdapter):
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(
                 None,
-                lambda: self.service.users().messages().modify(
+                lambda: service.users().messages().modify(
                     userId="me",
                     id=message_id,
                     body={"removeLabelIds": ["UNREAD"]},
@@ -268,51 +335,108 @@ class GmailAdapter(DataAdapter):
             "scopes": list(self.credentials.scopes or []),
         }
 
-    async def fetch_data(self, **kwargs) -> List[Dict[str, Any]]:
-        """Fetch emails with Excel attachments.
+    async def fetch_data(self, return_meta: bool = False, **kwargs) -> Any:
+        """Fetch emails with cursor-based pagination.
+
+        Args:
+            return_meta: If True, return metadata including next_page_token.
+            kwargs: query options including page_token, limit, sender_filter,
+                subject_pattern, source_type, link_regex, allowed_extensions.
 
         Returns:
-            List of email records with attachment data.
+            If return_meta=False: list of email records.
+            If return_meta=True: dict with emails, total_estimate,
+                next_page_token, current_page_token, and optional raw_messages.
         """
         if not self.service:
             raise RuntimeError("Gmail adapter not connected")
 
-        logger.info("Fetching emails with attachments")
-
         try:
             self.health_status = AdapterHealthStatus(status=AdapterStatus.FETCHING)
 
-            base_query = kwargs.get("query") or settings.gmail_inbox_query or "in:inbox"  # Default to inbox emails if no query specified
+            base_query = kwargs.get("query") or settings.gmail_inbox_query or "in:inbox"
             sender_filter = kwargs.get("sender_filter")
             subject_pattern = kwargs.get("subject_pattern")
-            max_results = int(kwargs.get("max_results") or 10)
             source_type = kwargs.get("source_type", "attachment")
             link_regex = kwargs.get("link_regex") or r"https?://\S+"
-            allowed_extensions = kwargs.get("allowed_extensions")  # List of file extensions to allow (e.g., ['xlsx', 'csv'])
+            allowed_extensions = kwargs.get("allowed_extensions")
+
+            # Cursor-based pagination
+            current_token = kwargs.get("page_token")
+            limit = int(kwargs.get("limit") or 10)
+            exclude_message_ids = set(kwargs.get("exclude_message_ids") or [])
 
             query_parts = [base_query]
             if sender_filter:
                 query_parts.append(f'from:"{sender_filter}"')
             query = " ".join(part for part in query_parts if part).strip()
-            
-            logger.info("Gmail API query", query=query, max_results=max_results, sender_filter=sender_filter)
 
-            results = self.service.users().messages().list(userId="me", q=query, maxResults=max_results).execute()
-            
-            logger.info("Gmail API response", total_results=results.get("resultSizeEstimate", 0), message_count=len(results.get("messages", [])))
+            total_estimate = 0
+            next_token = current_token
+            messages = []
+            first_response = True
 
-            messages = results.get("messages", [])
+            # If current page is mostly/fully excluded, keep advancing until we collect
+            # up to `limit` non-processed messages or exhaust pagination.
+            while True:
+                response = self.service.users().messages().list(
+                    userId="me",
+                    q=query,
+                    maxResults=limit,
+                    pageToken=next_token,
+                ).execute()
+
+                if first_response:
+                    try:
+                        total_estimate = int(response.get("resultSizeEstimate", 0))
+                    except Exception:
+                        total_estimate = 0
+                    first_response = False
+
+                page_messages = response.get("messages", []) or []
+                if exclude_message_ids:
+                    page_messages = [m for m in page_messages if m.get("id") not in exclude_message_ids]
+
+                messages.extend(page_messages)
+                next_token = response.get("nextPageToken")
+
+                if len(messages) >= limit:
+                    messages = messages[:limit]
+                    break
+                if not next_token:
+                    break
+
+            logger.info(
+                "Gmail API fetched messages",
+                total_estimate=total_estimate,
+                messages_returned=len(messages),
+                has_next_token=bool(next_token),
+            )
+
             email_records = []
+            raw_messages = []
 
             for message in messages:
                 msg_id = message["id"]
                 msg_data = self.service.users().messages().get(userId="me", id=msg_id, format="full").execute()
+                raw_messages.append(msg_data)
 
-                # Extract email metadata
-                headers = msg_data["payload"].get("headers", [])
-                subject = next((h["value"] for h in headers if h["name"] == "Subject"), "")
-                from_addr = next((h["value"] for h in headers if h["name"] == "From"), "")
-                date = next((h["value"] for h in headers if h["name"] == "Date"), "")
+                headers = msg_data.get("payload", {}).get("headers", [])
+                subject = next((h.get("value", "") for h in headers if h.get("name") == "Subject"), "")
+                from_addr = next((h.get("value", "") for h in headers if h.get("name") == "From"), "")
+
+                date = ""
+                internal_ms = msg_data.get("internalDate")
+                if internal_ms:
+                    try:
+                        from datetime import datetime, timezone
+
+                        ms = int(internal_ms)
+                        date = datetime.fromtimestamp(ms / 1000.0, tz=timezone.utc).isoformat()
+                    except Exception:
+                        date = ""
+                if not date:
+                    date = next((h.get("value", "") for h in headers if h.get("name") == "Date"), "")
 
                 if subject_pattern and not self._subject_matches(subject, subject_pattern):
                     continue
@@ -330,11 +454,10 @@ class GmailAdapter(DataAdapter):
                                 "download_links": download_links,
                             }
                         )
-                        self.health_status.records_processed += 1
                     else:
                         logger.warning("No download links found in email", subject=subject)
+                    self.health_status.records_processed += 1
                 else:
-                    # Default: attachment mode
                     attachments = await self._extract_attachments(msg_id, msg_data.get("payload", {}), allowed_extensions)
                     if attachments:
                         email_records.append(
@@ -351,6 +474,15 @@ class GmailAdapter(DataAdapter):
             self.health_status = AdapterHealthStatus(status=AdapterStatus.CONNECTED)
             logger.info("Emails fetched successfully", count=len(email_records))
 
+            if return_meta:
+                return {
+                    "emails": email_records,
+                    "total_estimate": total_estimate,
+                    "next_page_token": next_token,
+                    "current_page_token": current_token,
+                    "raw_messages": raw_messages,
+                }
+
             return email_records
 
         except Exception as e:
@@ -360,7 +492,6 @@ class GmailAdapter(DataAdapter):
                 error_message=str(e),
             )
             raise
-
     def _get_raw_body(self, payload: Dict) -> tuple:
         """Extract (html_body, text_body) from an email payload, recursing through parts."""
         html_body = ""
@@ -444,7 +575,7 @@ class GmailAdapter(DataAdapter):
         except re.error:
             return pattern.lower() in (subject or "").lower()
 
-    async def _extract_attachments(self, message_id: str, payload: Dict, allowed_extensions: List[str] = None) -> List[Dict[str, Any]]:
+    async def _extract_attachments(self, message_id: str, payload: Dict, allowed_extensions: Optional[List[str]] = None) -> List[Dict[str, Any]]:
         """Extract attachments from a message payload, optionally filtered by extension.
 
         Args:

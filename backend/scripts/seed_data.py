@@ -18,7 +18,7 @@ from sqlalchemy import select, func, text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 
 from app.config import settings
-from app.models import Document, Summary
+from app.schemas import Document, Summary
 from app.services.embedding_service import EmbeddingService
 from app.logging import configure_logging, get_logger
 
@@ -173,8 +173,8 @@ async def main():
         async with session_factory() as session:
             # Import models here to avoid circular imports
             global Tag, User
-            from app.models.tag import Tag
-            from app.models.user import User
+            from app.schemas.tag import Tag
+            from app.schemas.user import User
             
             # Create sample data
             await create_sample_tags(session, embedding_service)

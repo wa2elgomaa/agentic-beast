@@ -12,6 +12,7 @@ import {
     triggerIngestionTaskRun,
     previewEmailsForTask,
     runTaskWithSelections,
+    GmailCredentialExpiredError,
 } from '@/lib/api'
 import SchemaMapper from '@/components/admin/SchemaMapper'
 import TaskRunHistory from '@/components/admin/TaskRunHistory'
@@ -40,6 +41,11 @@ export default function TaskDetailPage() {
     const [emailsForSelection, setEmailsForSelection] = useState<PreviewEmail[]>([])
     const [isLoadingEmails, setIsLoadingEmails] = useState(false)
     const [emailLoadError, setEmailLoadError] = useState<string | null>(null)
+    const [previewPage, setPreviewPage] = useState(1)
+    const [previewLimit, setPreviewLimit] = useState(10)
+    const [previewCurrentToken, setPreviewCurrentToken] = useState<string | null>(null)
+    const [previewNextToken, setPreviewNextToken] = useState<string | null>(null)
+    const [previewTokenStack, setPreviewTokenStack] = useState<Array<string | null>>([])
 
     useEffect(() => {
         loadData()
@@ -76,10 +82,20 @@ export default function TaskDetailPage() {
                 setIsLoadingEmails(true)
                 setEmailLoadError(null)
                 try {
-                    const result = await previewEmailsForTask(taskId)
+                    const previewSize = (task?.adaptor_config as any)?.preview_page_size || 10
+                    const result = await previewEmailsForTask(taskId, previewSize, null)
+                    setPreviewLimit(previewSize)
+                    setPreviewPage(1)
+                    setPreviewCurrentToken(result.current_page_token ?? null)
+                    setPreviewNextToken(result.next_page_token ?? null)
+                    setPreviewTokenStack([])
                     setEmailsForSelection(result.emails)
                     setShowEmailSelection(true)
                 } catch (err) {
+                    if (err instanceof GmailCredentialExpiredError) {
+                        window.location.href = err.reauth_url
+                        return
+                    }
                     setEmailLoadError(err instanceof Error ? err.message : 'Failed to load emails')
                 }
                 setIsLoadingEmails(false)
@@ -96,6 +112,43 @@ export default function TaskDetailPage() {
         }
     }
 
+    const handlePreviewNextPage = async () => {
+        if (!previewNextToken) return
+        try {
+            setIsLoadingEmails(true)
+            setEmailLoadError(null)
+            const result = await previewEmailsForTask(taskId, previewLimit, previewNextToken)
+            setPreviewTokenStack((prev) => [previewCurrentToken, ...prev])
+            setPreviewCurrentToken(result.current_page_token ?? null)
+            setPreviewNextToken(result.next_page_token ?? null)
+            setPreviewPage((p) => p + 1)
+            setEmailsForSelection(result.emails)
+        } catch (err) {
+            setEmailLoadError(err instanceof Error ? err.message : 'Failed to load next page')
+        } finally {
+            setIsLoadingEmails(false)
+        }
+    }
+
+    const handlePreviewPrevPage = async () => {
+        if (previewTokenStack.length === 0) return
+        const prevToken = previewTokenStack[0]
+        try {
+            setIsLoadingEmails(true)
+            setEmailLoadError(null)
+            const result = await previewEmailsForTask(taskId, previewLimit, prevToken)
+            setPreviewTokenStack((prev) => prev.slice(1))
+            setPreviewCurrentToken(result.current_page_token ?? null)
+            setPreviewNextToken(result.next_page_token ?? null)
+            setPreviewPage((p) => Math.max(1, p - 1))
+            setEmailsForSelection(result.emails)
+        } catch (err) {
+            setEmailLoadError(err instanceof Error ? err.message : 'Failed to load previous page')
+        } finally {
+            setIsLoadingEmails(false)
+        }
+    }
+
     const handleEmailSelectionConfirm = async (selectedIds: string[]) => {
         try {
             setIsRunning(true)
@@ -107,6 +160,10 @@ export default function TaskDetailPage() {
                 setActiveTab('runs')
             }, 1000)
         } catch (err) {
+            if (err instanceof GmailCredentialExpiredError) {
+                window.location.href = err.reauth_url
+                return
+            }
             setError(err instanceof Error ? err.message : 'Failed to start task with selected emails')
         } finally {
             setIsRunning(false)
@@ -258,13 +315,22 @@ export default function TaskDetailPage() {
                 isOpen={showEmailSelection}
                 isLoading={isLoadingEmails}
                 emails={emailsForSelection}
+                currentPage={previewPage}
+                hasPrevPage={previewTokenStack.length > 0}
+                hasNextPage={Boolean(previewNextToken)}
                 error={emailLoadError || undefined}
                 onClose={() => {
                     setShowEmailSelection(false)
                     setEmailsForSelection([])
                     setEmailLoadError(null)
+                    setPreviewPage(1)
+                    setPreviewCurrentToken(null)
+                    setPreviewNextToken(null)
+                    setPreviewTokenStack([])
                 }}
                 onSelect={handleEmailSelectionConfirm}
+                onPrevPage={handlePreviewPrevPage}
+                onNextPage={handlePreviewNextPage}
                 taskAdaptorType={task?.adaptor_type}
             />
 

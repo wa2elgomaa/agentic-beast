@@ -9,10 +9,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db_session
 from app.logging import get_logger
-from app.models.conversation import Conversation, Message
-from app.models.user import User
+from app.schemas.conversation import Conversation, Message
+from app.schemas.user import User
 from app.schemas.chat import (
-    ChatMessageRequest, 
+    ChatRequest,
+    ChatMediaRequest,
     ChatResponse, 
     ConversationListResponse, 
     ConversationDetailResponse,
@@ -22,12 +23,33 @@ from app.schemas.chat import (
     ConversationTitleUpdateRequest,
 )
 from app.api.users import get_current_user
+from app.api.auth_apikey import get_authenticated_user
 from app.config import settings
 from app.services.chat_service import ChatService
+from fastapi.responses import StreamingResponse
+import json
+from uuid import UUID as UUIDType
 
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/chat", tags=["chat"])
+
+
+async def _ensure_conversation_access(
+    chat_service: ChatService,
+    conversation_id: UUID | None,
+    user_id: UUID,
+) -> None:
+    """Validate that an existing conversation belongs to the current user."""
+    if conversation_id is None:
+        return
+
+    conversation = await chat_service.get_conversation(conversation_id, user_id=user_id)
+    if conversation is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found.",
+        )
 
 
 async def get_chat_service(
@@ -46,9 +68,10 @@ async def get_chat_service(
 
 @router.post("", response_model=ChatResponse, status_code=status.HTTP_200_OK)
 async def chat(
-    request: ChatMessageRequest,
+    request: ChatRequest,
     chat_service: Annotated[ChatService, Depends(get_chat_service)],
-    current_user: Annotated[User, Depends(get_current_user)],
+    # Support either API Key auth (x-api-key) or JWT. We prefer API key if provided.
+    current_user: Annotated[User, Depends(get_authenticated_user)],
 ):
     """Send a message to the AI assistant.
 
@@ -59,36 +82,43 @@ async def chat(
     Returns:
         Assistant response with conversation ID and message.
     """
-    logger.info("Chat request received", message_preview=request.message[:100])
+    preview = (request.message or "[media]")
+    logger.info("Chat request received", message_preview=preview[:100])
 
     try:
-        if request.conversation_id is not None:
-            conversation = await chat_service.get_conversation(
-                request.conversation_id,
+        await _ensure_conversation_access(chat_service, request.conversation_id, current_user.id)
+
+        # Dispatch based on presence of media vs text
+        if request.audio or (getattr(request, "image_frames", None) and len(request.image_frames) > 0):
+            conversation, user_message, assistant_message = await chat_service.handle_media_message(
+                audio=request.audio,
+                audio_format=request.audio_format,
+                image_frames=request.image_frames,
+                capture_mode=request.capture_mode,
+                media_duration_ms=request.media_duration_ms,
+                conversation_id=request.conversation_id,
                 user_id=current_user.id,
             )
-            if conversation is None:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Conversation not found.",
-                )
-
-        # Process message through chat service
-        conversation, user_message, assistant_message = await chat_service.handle_user_message(
-            message_content=request.message,
-            conversation_id=request.conversation_id,
-            user_id=current_user.id,
-        )
+        else:
+            conversation, user_message, assistant_message = await chat_service.handle_user_message(
+                message_content=(request.message or ""),
+                conversation_id=request.conversation_id,
+                user_id=current_user.id,
+            )
 
         # Format response
+        user_message_response = await chat_service.format_message_response(user_message)
         message_response = await chat_service.format_message_response(assistant_message)
 
         return ChatResponse(
             conversation_id=conversation.id,
+            user_message=user_message_response,
             message=message_response,
             status="success"
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Error processing chat request", error=str(e))
         raise HTTPException(
@@ -96,6 +126,125 @@ async def chat(
             detail="An error occurred while processing your message."
         )
 
+
+@router.post("/media", response_model=ChatResponse, status_code=status.HTTP_200_OK)
+async def chat_media(
+    request: ChatMediaRequest,
+    chat_service: Annotated[ChatService, Depends(get_chat_service)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    """Handle audio/camera-assisted chat requests.
+
+    This endpoint normalizes media, routes through the same orchestrator,
+    and returns the assistant response.
+    """
+    logger.info("Chat media request received", user_id=str(current_user.id))
+    try:
+        await _ensure_conversation_access(chat_service, request.conversation_id, current_user.id)
+
+        conversation, user_message, assistant_message = await chat_service.handle_media_message(
+            audio=request.audio,
+            audio_format=request.audio_format,
+            image_frames=request.image_frames,
+            capture_mode=request.capture_mode,
+            media_duration_ms=request.media_duration_ms,
+            conversation_id=request.conversation_id,
+            user_id=current_user.id,
+        )
+
+        user_message_response = await chat_service.format_message_response(user_message)
+        message_response = await chat_service.format_message_response(assistant_message)
+
+        return ChatResponse(
+            conversation_id=conversation.id,
+            user_message=user_message_response,
+            message=message_response,
+            status="success",
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Error processing chat media request", error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An error occurred while processing your media message."
+        )
+
+
+@router.get("/conversations/{conversation_id}/messages/{message_id}/tts/stream")
+async def stream_message_tts(
+    conversation_id: str,
+    message_id: str,
+    chat_service: Annotated[ChatService, Depends(get_chat_service)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    """Stream TTS audio for a specific assistant message as Server-Sent Events (SSE).
+
+    If the message already has synthesized TTS stored in `operation_data['tts']`,
+    those chunks are streamed. Otherwise the server will synthesize on-demand
+    using the configured multimodal provider and stream chunks as they are
+    produced. Chunks are base64-encoded Int16 PCM bytes.
+    """
+    # Validate conversation access
+    try:
+        await _ensure_conversation_access(chat_service, UUIDType(conversation_id), current_user.id)
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
+
+    try:
+        msg_uuid = UUIDType(message_id)
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid message id")
+
+    message = await chat_service.get_message_by_id(msg_uuid)
+    if message is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
+
+    if message.role != "assistant":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="TTS is available only for assistant messages")
+
+    async def event_generator():
+        # Stream stored chunks if available
+        op = message.operation_data or {}
+        tts = op.get("tts") or {}
+        chunks = tts.get("chunks")
+        sample_rate = tts.get("sample_rate")
+
+        if chunks:
+            # send audio_start
+            payload = {"type": "audio_start", "data": {"sample_rate": sample_rate}}
+            yield f"data: {json.dumps(payload)}\n\n"
+            for idx, c in enumerate(chunks):
+                payload = {"type": "audio_chunk", "data": {"audio": c, "index": idx}}
+                yield f"data: {json.dumps(payload)}\n\n"
+            payload = {"type": "audio_end", "data": {}}
+            yield f"data: {json.dumps(payload)}\n\n"
+            return
+
+        # Otherwise synthesize on-demand and stream directly
+        provider = None
+        try:
+            from app.providers.factory import get_ai_provider
+
+            provider = get_ai_provider()
+            if not hasattr(provider, "stream_tts"):
+                payload = {"type": "error", "message": "TTS is not supported by the configured AI provider"}
+                yield f"data: {json.dumps(payload)}\n\n"
+                return
+            # Ensure message.content is the assistant text
+            async for ev in provider.stream_tts(message.content):
+                yield f"data: {json.dumps(ev)}\n\n"
+
+            # Optionally persist synthesized chunks back to message.operation_data
+            # (Collecting while streaming is possible but omitted for brevity)
+        except Exception as exc:
+            logger.exception("TTS streaming failed", error=str(exc))
+            payload = {"type": "error", "message": "TTS streaming failed"}
+            yield f"data: {json.dumps(payload)}\n\n"
+ 
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 @router.get("/conversations", response_model=ConversationListResponse)
 async def list_conversations(

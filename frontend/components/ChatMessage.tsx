@@ -2,11 +2,11 @@
 
 import { Message as MessageType, QuerySuggestion } from '@/types'
 import { motion } from 'framer-motion'
-import { Bot, Download, User } from 'lucide-react'
-import ResultCard from './ResultCard'
-import DashboardStats from './DashboardStats'
+import { Bot, User } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import rehypeRaw from 'rehype-raw'
 import LoadingSkeleton from './LoadingSkeleton'
-import AggregationDashboard from './AggregationDashboard'
 import OperationRenderer from './OperationRenderer'
 import QuerySuggestions from './QuerySuggestions'
 import { exportToCSV } from '@/lib/api'
@@ -46,6 +46,7 @@ export default function ChatMessage({ message, onSelectSuggestion }: ChatMessage
             <span className="text-xs text-gray-500 ml-2">
               {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
             </span>
+
           </div>
 
           {message.isLoading ? (
@@ -54,31 +55,9 @@ export default function ChatMessage({ message, onSelectSuggestion }: ChatMessage
             <>
               {(message.content && typeof message.content === 'string') && (
                 <div className="text-gray-800 mb-4 prose prose-sm max-w-none">
-                  {message.content.split('\n').map((line, idx) => {
-                    // Handle bold markdown
-                    const boldRegex = /\*\*(.*?)\*\*/g
-                    const parts = []
-                    let lastIndex = 0
-                    let match
-
-                    while ((match = boldRegex.exec(line)) !== null) {
-                      if (match.index > lastIndex) {
-                        parts.push(line.substring(lastIndex, match.index))
-                      }
-                      parts.push(<strong key={`bold-${idx}-${match.index}`} className="font-semibold text-gray-900">{match[1]}</strong>)
-                      lastIndex = match.index + match[0].length
-                    }
-
-                    if (lastIndex < line.length) {
-                      parts.push(line.substring(lastIndex))
-                    }
-
-                    return (
-                      <div key={idx} className={line.startsWith('•') ? 'ml-4' : ''}>
-                        {parts.length > 0 ? parts : line || <br />}
-                      </div>
-                    )
-                  })}
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>
+                    {message.content}
+                  </ReactMarkdown>
                 </div>
               )}
 

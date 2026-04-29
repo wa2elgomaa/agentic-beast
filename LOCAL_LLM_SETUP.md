@@ -131,8 +131,8 @@ class OllamaProvider(AIProvider):
 
     def __init__(self):
         """Initialize Ollama provider."""
-        super().__init__(settings.ollama_model)
-        self.base_url = settings.ollama_base_url.rstrip("/")
+        super().__init__(settings.main_model)
+        self.base_url = settings.main_model_base_url.rstrip("/")
         self.client = httpx.AsyncClient(timeout=120.0)
         logger.info("Ollama provider initialized",
                     model=self.model,
@@ -219,7 +219,7 @@ class OllamaProvider(AIProvider):
             response = await self.client.post(
                 f"{self.base_url}/api/embeddings",
                 json={
-                    "model": settings.ollama_embedding_model,
+                    "model": settings.main_model,
                     "prompt": text
                 },
                 timeout=60.0
@@ -245,9 +245,9 @@ Add these lines after the OpenAI configuration:
 ```python
 # Local LLM Configuration (Ollama, LM Studio, etc.)
 ai_provider: Literal["openai", "bedrock", "ollama", "lm_studio"] = Field(default="openai")
-ollama_base_url: str = Field(default="http://localhost:11434")
-ollama_model: str = Field(default="mistral")
-ollama_embedding_model: str = Field(default="nomic-embed-text")
+main_model_base_url: str = Field(default="http://localhost:11434")
+main_model: str = Field(default="mistral")
+main_model: str = Field(default="nomic-embed-text")
 lm_studio_base_url: str = Field(default="http://localhost:1234/v1")
 ```
 
@@ -272,17 +272,17 @@ def get_ai_provider() -> AIProvider:
     Returns:
         An AI provider instance based on configuration.
     """
-    if settings.ai_provider == "openai":
+    if settings.main_llm_provider == "openai":
         logger.info("Using OpenAI provider")
         return OpenAIProvider()
-    elif settings.ai_provider == "bedrock":
+    elif settings.main_llm_provider == "bedrock":
         logger.info("Using AWS Bedrock provider")
         return BedrockProvider()
-    elif settings.ai_provider == "ollama":
+    elif settings.main_llm_provider == "ollama":
         logger.info("Using Ollama local LLM provider")
         return OllamaProvider()
     else:
-        raise ValueError(f"Unknown AI provider: {settings.ai_provider}")
+        raise ValueError(f"Unknown AI provider: {settings.main_llm_provider}")
 
 
 __all__ = ["get_ai_provider", "AIProvider", "OpenAIProvider", "BedrockProvider", "OllamaProvider"]
@@ -532,7 +532,7 @@ class HybridProvider(AIProvider):
 
 Register in `__init__.py`:
 ```python
-elif settings.ai_provider == "hybrid":
+elif settings.main_llm_provider == "hybrid":
     return HybridProvider()
 ```
 

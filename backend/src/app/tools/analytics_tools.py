@@ -7,7 +7,7 @@ from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.logging import get_logger
-from app.models import Document
+from app.schemas import Document
 from app.schemas.analytics import (
     Aggregation,
     AnalyticsQuery,
@@ -95,7 +95,7 @@ class AnalyticsTools:
                 elif gb == GroupBy.PROFILE:
                     group_cols.append(Document.profile_id)
                 elif gb == GroupBy.POST:
-                    group_cols.append(Document.content_id)
+                    group_cols.append(Document.beast_uuid)
 
         stmt = (
             select(*group_cols)
@@ -121,7 +121,7 @@ class AnalyticsTools:
                     elif gb == GroupBy.PROFILE:
                         row.profile_id = row_data[i + 1]
                     elif gb == GroupBy.POST:
-                        row.post_id = row_data[i + 1]
+                        row.post_id = str(row_data[i + 1]) if row_data[i + 1] is not None else None
             rows.append(row)
 
         # Get total count

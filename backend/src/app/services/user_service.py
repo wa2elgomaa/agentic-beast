@@ -2,18 +2,19 @@
 
 import secrets
 import uuid
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Optional
 
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models.password_reset import PasswordResetToken
-from app.models.user import User
+from app.schemas.password_reset import PasswordResetToken
+from app.schemas.user import User
 from app.schemas.users import UserCreate, UserListResponse, UserResponse, UserUpdate
 from app.services.auth_service import get_auth_service
 from app.services.email_service import get_email_service
+from app.utils import utc_now
 
 
 class UserService:
@@ -61,7 +62,7 @@ class UserService:
         if not self.auth_service.verify_password(password, user.hashed_password):
             return None
 
-        user.last_login = datetime.utcnow()
+        user.last_login = utc_now()
         self.db_session.add(user)
         return await self._flush_and_refresh_user(user)
 
@@ -82,11 +83,11 @@ class UserService:
                 is_active=True,
                 auth_provider="active_directory",
                 ad_username=username,
-                last_login=datetime.utcnow(),
+                last_login=utc_now(),
             )
             self.db_session.add(user)
         else:
-            user.last_login = datetime.utcnow()
+            user.last_login = utc_now()
             user.auth_provider = "active_directory"
             self.db_session.add(user)
 
@@ -189,7 +190,7 @@ class UserService:
             return True
 
         token = secrets.token_urlsafe(48)
-        expires_at = datetime.utcnow() + timedelta(minutes=settings.password_reset_token_ttl_minutes)
+        expires_at = utc_now() + timedelta(minutes=settings.password_reset_token_ttl_minutes)
 
         self.db_session.add(
             PasswordResetToken(
@@ -210,7 +211,7 @@ class UserService:
         """Check whether a reset token exists and has not expired."""
         query = select(PasswordResetToken).where(
             PasswordResetToken.token == token,
-            PasswordResetToken.expires_at > datetime.utcnow(),
+            PasswordResetToken.expires_at > utc_now(),
         )
         result = await self.db_session.execute(query)
         return result.scalar_one_or_none() is not None
@@ -219,7 +220,7 @@ class UserService:
         """Consume reset token and update password in one transaction."""
         query = select(PasswordResetToken).where(
             PasswordResetToken.token == token,
-            PasswordResetToken.expires_at > datetime.utcnow(),
+            PasswordResetToken.expires_at > utc_now(),
         )
         result = await self.db_session.execute(query)
         reset_token = result.scalar_one_or_none()

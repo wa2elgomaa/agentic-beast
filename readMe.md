@@ -6,12 +6,17 @@ docker-compose up -d  # PostgreSQL, Redis, MongoDB, Prometheus, Grafana
 alembic upgrade head
 docker compose exec app alembic current
 
+# enable docker model runners
+docker desktop enable model-runner
+docker desktop enable model-runner --tcp=12434
+
 # Start app
 python3 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip setuptools wheel
 pip install -e .
 uvicorn src.app.main:app --reload
+
 
 # Start Celery worker & beat
 celery -A app.tasks.celery_app:celery_app worker -l info

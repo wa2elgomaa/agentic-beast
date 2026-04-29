@@ -28,7 +28,7 @@ MANIFEST
 venv/
 ENV/
 env/
-.env
+.env*
 .env.local
 .env.*.local
 
@@ -71,4 +71,5 @@ celerybeat-schedule
 Thumbs.db
 *.tmp
 
-oldbackend
+polar
+local_models/

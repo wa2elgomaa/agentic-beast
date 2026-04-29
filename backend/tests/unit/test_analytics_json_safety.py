@@ -30,7 +30,7 @@ def test_get_top_content_impl_serializes_quote_heavy_rows(monkeypatch) -> None:
                 "video_view_count": 9876,
                 "title": 'CEO says "AI is now a weapon" and we must adapt',
                 "content": 'First line\nSecond line with "quotes" and URL https://example.com/test',
-                "post_detail_url": "https://linkedin.example/post/1",
+                "view_on_platform": "https://linkedin.example/post/1",
             }
         ]
     )
@@ -59,7 +59,7 @@ def test_get_top_content_impl_caps_content_length(monkeypatch) -> None:
                 "video_view_count": 42,
                 "title": "A" * 400,
                 "content": long_text,
-                "post_detail_url": "https://example.com/post/2",
+                "view_on_platform": "https://example.com/post/2",
             }
         ]
     )

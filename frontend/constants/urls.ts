@@ -13,6 +13,10 @@ export const ANALYTICS_URL = `${APIPrefix}/analytics`
 export const INGESTION_URL = `${APIPrefix}/ingest/manual`
 export const CONVERSATION_URL = `${APIPrefix}/chat/conversations`
 export const CHAT_URL = `${APIPrefix}/chat`
+export const MEDIA_CHAT_URL = `${APIPrefix}/chat/media`
+export const REALTIME_CHAT_URL = `${APIPrefix}/chat/realtime/ws`
+export const CHAT_STREAM_URL = `${APIPrefix}/chat/ws`
+export const VOICE_CHAT_URL = `${APIPrefix}/chat/voice`
 
 export const VALIDATE_RESET_TOKEN_URL = (token: string) => `${APIPrefix}/auth/validate-reset-token/${token}`
 
@@ -20,3 +24,8 @@ export const ADMIN_INGESTION_URL = `${APIPrefix}/admin/ingestion`
 export const ADMIN_INGESTION_TASKS_URL = `${ADMIN_INGESTION_URL}/tasks`
 
 export const buildApiUrl = (path: string) => `${APIBaseURL}${path.startsWith('/') ? path : `/${path}`}`
+
+export const buildWebSocketUrl = (path: string) => {
+	const base = APIBaseURL.replace(/^http:/, 'ws:').replace(/^https:/, 'wss:')
+	return `${base}${path.startsWith('/') ? path : `/${path}`}`
+}
