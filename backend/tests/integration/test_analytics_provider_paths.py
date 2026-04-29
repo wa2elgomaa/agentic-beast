@@ -57,6 +57,16 @@ if "app.agents.ingestion_agent" not in sys.modules:
 if "app.agents.tagging_agent" not in sys.modules:
     tagging_agent_module = types.ModuleType("app.agents.tagging_agent")
     tagging_agent_module.get_strands_tagging_agent = lambda: None
+    tagging_agent_module.get_agent = lambda: None
+
+    class _DummyTaggingAgent:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def execute(self, *args, **kwargs):
+            return "tagging stub"
+
+    tagging_agent_module.TaggingAgent = _DummyTaggingAgent
     sys.modules["app.agents.tagging_agent"] = tagging_agent_module
 
 orchestrator_module = importlib.import_module("app.agents.orchestrator")

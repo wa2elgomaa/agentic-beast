@@ -131,7 +131,7 @@ export default function DatasetsPage() {
       })
       if (!res.ok) throw new Error(`Failed to load datasets (${res.status})`)
       const data = await res.json()
-      setDatasets(data.datasets ?? data)
+      setDatasets(Array.isArray(data) ? data : (data.items ?? data.datasets ?? []))
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Unknown error')
     } finally {
@@ -382,7 +382,7 @@ export default function DatasetsPage() {
 
   if (view === 'list') {
     return (
-      <div className="p-6 max-w-5xl mx-auto">
+      <div className="">
         <div className="flex items-center justify-between mb-6">
           <h1 className="text-2xl font-bold text-gray-900">Datasets</h1>
           <button
@@ -505,7 +505,7 @@ export default function DatasetsPage() {
   if (view === 'create' || view === 'edit') {
     const isEdit = view === 'edit'
     return (
-      <div className="p-6 max-w-2xl mx-auto">
+      <div className="">
         <button
           onClick={() => setView(isEdit ? 'detail' : 'list')}
           className="mb-5 flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-800"
@@ -619,7 +619,7 @@ export default function DatasetsPage() {
     const pendingCount = files.filter(f => f.embed_status === 'pending' || f.embed_status === 'failed').length
 
     return (
-      <div className="p-6 max-w-5xl mx-auto">
+      <div className="">
         {/* Header */}
         <div className="flex items-start justify-between mb-6">
           <div>

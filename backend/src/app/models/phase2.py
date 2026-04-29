@@ -2,6 +2,7 @@
 
 from sqlalchemy import Column, String, Text, Boolean, DateTime, JSON, UUID, ForeignKey, Index, Integer, ARRAY
 from sqlalchemy.orm import relationship
+from pgvector.sqlalchemy import Vector
 from datetime import datetime, timezone
 import uuid
 
@@ -16,7 +17,7 @@ class ArticleVectorModel(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     article_id = Column(String(255), unique=True, nullable=False)
     content = Column(Text, nullable=False)
-    embedding = Column(JSON, nullable=False)  # 384-dimensional vector as list
+    embedding = Column(Vector(384), nullable=False)
     published_at = Column(DateTime(timezone=True), nullable=True)
     article_metadata = Column("metadata", JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
@@ -27,6 +28,13 @@ class ArticleVectorModel(Base):
         Index("idx_article_vectors_article_id", "article_id"),
         Index("idx_article_vectors_deleted_at", "deleted_at"),
         Index("idx_article_vectors_created_at", "created_at"),
+        Index(
+            "idx_article_vectors_hnsw",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_with={"m": 16, "ef_construction": 64},
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+        ),
     )
 
 

@@ -227,15 +227,38 @@ async def update_dataset(slug: str, body: DatasetUpdateRequest, admin=Depends(ve
 
 @router.delete("/admin/datasets/{slug}", status_code=status.HTTP_204_NO_CONTENT, tags=["admin-datasets"])
 async def delete_dataset(slug: str, admin=Depends(verify_admin)) -> None:
-    """Delete a dataset and all its files (DB records only; S3 objects are left)."""
+    """Delete a dataset, its DB records, and all associated S3 objects."""
+    from app.services.s3_service import S3Service
+
     async with AsyncSessionLocal() as session:
-        result = await session.execute(select(DatasetModel).where(DatasetModel.slug == slug))
+        result = await session.execute(
+            select(DatasetModel).where(DatasetModel.slug == slug)
+        )
         dataset = result.scalar_one_or_none()
         if not dataset:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset not found")
+
+        # Collect S3 keys before cascade-deleting the records
+        await session.refresh(dataset, ["files"])
+        s3_keys = [f.s3_key for f in dataset.files if f.s3_key]
+
         await session.delete(dataset)
         await session.commit()
-    logger.info("Dataset deleted", slug=slug)
+
+    # Best-effort S3 cleanup after DB records are gone (avoids orphaned objects)
+    if s3_keys:
+        s3 = S3Service(
+            bucket=settings.aws_s3_bucket,
+            region=settings.aws_region,
+            endpoint_url=settings.aws_endpoint_url or None,
+        )
+        for key in s3_keys:
+            try:
+                await s3.delete_file(key)
+            except Exception:
+                logger.warning("Failed to delete S3 object during dataset cleanup", s3_key=key, slug=slug)
+
+    logger.info("Dataset deleted", slug=slug, s3_objects_removed=len(s3_keys))
 
 
 @router.post("/admin/datasets/{slug}/upload", response_model=DatasetUploadResponse, tags=["admin-datasets"])
