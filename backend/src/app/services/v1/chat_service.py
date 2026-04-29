@@ -59,6 +59,7 @@ class ChatService:
         normalized_text: str,
         conversation_id: Optional[uuid.UUID],
         user_id: Optional[uuid.UUID],
+        tool_hint: Optional[str] = None,
         user_operation_metadata: Optional[Dict[str, Any]] = None,
     ) -> tuple[Conversation, Message, Message]:
         """Persist a normalized user turn and route it through the orchestrator."""
@@ -87,6 +88,8 @@ class ChatService:
             "db_session": self.db_session,
             "conversation_history": history,
             "input_metadata": user_operation_metadata or {},
+            "tool_hint": tool_hint,
+            "source": "rest",  # Phase 2: marking this as REST (not voice/WebSocket)
         }
         # Pre-classification is handled inside the orchestrator now; do not
         # call classifier here to avoid duplicate work and inconsistent flow.
@@ -424,6 +427,7 @@ class ChatService:
         message_content: str,
         conversation_id: Optional[uuid.UUID] = None,
         user_id: Optional[uuid.UUID] = None,
+        tool_hint: Optional[str] = None,
     ) -> tuple[Conversation, Message, Message]:
         """Handle a user message and generate agent response.
 
@@ -431,6 +435,7 @@ class ChatService:
             message_content: User message text.
             conversation_id: Existing conversation ID (creates new if not provided).
             user_id: Optional user ID.
+            tool_hint: Optional tool hint for explicit agent selection (Phase 2).
 
         Returns:
             Tuple of (conversation, user_message, assistant_message).
@@ -440,6 +445,7 @@ class ChatService:
             normalized_text=message_content,
             conversation_id=conversation_id,
             user_id=user_id,
+            tool_hint=tool_hint,
             user_operation_metadata={
                 "input_type": "text",
                 "modality_pipeline": "text_direct",

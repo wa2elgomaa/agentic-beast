@@ -8,11 +8,20 @@ from pydantic import BaseModel, Field
 
 
 class DocumentUploadResponse(BaseModel):
-    """Response returned when a document is submitted for processing."""
+    """Response returned when a document is submitted for processing.
+    
+    Phase 2: Includes S3 location and presigned URL for uploaded documents.
+    """
 
     task_id: str = Field(description="Celery task ID for tracking processing status")
     filename: str = Field(description="Original filename of the uploaded document")
-    file_size_bytes: int = Field(description="Size of the uploaded file in bytes")
+    file_size_bytes: Optional[int] = Field(
+        default=None, description="Size of the uploaded file in bytes"
+    )
+    s3_key: str = Field(description="S3 object key (path) where file was stored")
+    s3_url: Optional[str] = Field(
+        default=None, description="Presigned S3 URL for document access (30-day expiry)"
+    )
     message: str = Field(
         default="Document queued for processing",
         description="Human-readable status message",

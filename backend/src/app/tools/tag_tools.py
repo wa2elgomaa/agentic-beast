@@ -36,15 +36,25 @@ def _keyword_overlap_score(content: str, tag_name: str, variations: list[str]) -
 # ---------------------------------------------------------------------------
 
 @tool
-async def find_similar_tags(article_content: str, top_n: int = 10) -> str:
-    """Find the most semantically similar tags for the given article content.
+async def find_similar_tags(
+    article_content: str | None = None,
+    article_embedding: list[float] | None = None,
+    top_n: int = 10,
+    exclude_ids: list[str] | None = None,
+) -> str:
+    """Find semantically similar tags for article content or embedding (Phase 2).
 
-    Generates an embedding for the article content and performs a vector
-    similarity search against the tags table using pgvector cosine distance.
+    Supports two input modes:
+    1. article_content (str) — generates embedding on-the-fly
+    2. article_embedding (list[float]) — uses pre-computed embedding
+
+    Can exclude specific tag slugs from results (support for "show more" flow).
 
     Args:
-        article_content: The article title and/or body text to match tags against.
+        article_content: Article title/body text; if provided, generates embedding.
+        article_embedding: Pre-computed 384-dim embedding; if provided, uses directly.
         top_n: Maximum number of tags to return (default 10, max 50).
+        exclude_ids: List of tag slugs to exclude from results (optional).
 
     Returns:
         JSON string with list of matching tags including slug, name, description,
@@ -53,46 +63,63 @@ async def find_similar_tags(article_content: str, top_n: int = 10) -> str:
     import json
 
     top_n = min(top_n, 50)
+    exclude_ids = exclude_ids or []
 
-    if not article_content or not article_content.strip():
-        return json.dumps({"error": "article_content is required", "tags": []})
+    # Validate that one of article_content or article_embedding is provided
+    if not article_content and not article_embedding:
+        return json.dumps({"error": "Either article_content or article_embedding is required", "tags": []})
 
-    # 1. Generate embedding for the article content
-    try:
-        from app.services.embedding_service import EmbeddingService
+    # 1. Get embedding (either pre-computed or generate from content)
+    if article_embedding:
+        embedding = article_embedding
+        content_for_keywords = article_content or ""
+    else:
+        if not article_content.strip():
+            return json.dumps({"error": "article_content is required when article_embedding not provided", "tags": []})
 
-        embedding_svc = EmbeddingService()
-        embedding = embedding_svc.embed_text(article_content[:2000])
-    except Exception as exc:
-        _logger.error("Embedding generation failed: %s", exc)
-        return json.dumps({"error": f"Embedding failed: {exc}", "tags": []})
+        try:
+            from app.services.embedding_service import EmbeddingService
+
+            embedding_svc = EmbeddingService()
+            embedding = embedding_svc.embed_text(article_content[:2000])
+            content_for_keywords = article_content
+        except Exception as exc:
+            _logger.error("Embedding generation failed: %s", exc)
+            return json.dumps({"error": f"Embedding failed: {exc}", "tags": []})
 
     # 2. Vector similarity search via pgvector cosine distance
     try:
         from app.db.session import AsyncSessionLocal
-        from app.schemas.tag import Tag
 
         # Build embedding as a literal array string for pgvector
         embedding_str = "[" + ",".join(str(v) for v in embedding) + "]"
 
         async with AsyncSessionLocal() as session:
             # Cosine similarity = 1 - cosine_distance
+            query_sql = """
+                SELECT
+                    slug,
+                    name,
+                    description,
+                    variations,
+                    is_primary,
+                    1 - (embedding <=> :emb::vector) AS similarity_score
+                FROM tags
+                WHERE embedding IS NOT NULL
+            """
+            
+            # Add exclude list filter
+            if exclude_ids:
+                placeholders = ", ".join([f"'{slug}'" for slug in exclude_ids])
+                query_sql += f" AND slug NOT IN ({placeholders})"
+            
+            query_sql += """
+                ORDER BY embedding <=> :emb::vector
+                LIMIT :limit
+            """
+
             result = await session.execute(
-                text(
-                    """
-                    SELECT
-                        slug,
-                        name,
-                        description,
-                        variations,
-                        is_primary,
-                        1 - (embedding <=> :emb::vector) AS similarity_score
-                    FROM tags
-                    WHERE embedding IS NOT NULL
-                    ORDER BY embedding <=> :emb::vector
-                    LIMIT :limit
-                    """
-                ),
+                text(query_sql),
                 {"emb": embedding_str, "limit": top_n},
             )
             rows = result.fetchall()
@@ -100,7 +127,7 @@ async def find_similar_tags(article_content: str, top_n: int = 10) -> str:
         tags = []
         for row in rows:
             variations = row.variations if isinstance(row.variations, list) else []
-            kw_score = _keyword_overlap_score(article_content, row.name, variations)
+            kw_score = _keyword_overlap_score(content_for_keywords, row.name, variations)
             tags.append({
                 "slug": row.slug,
                 "name": row.name,
@@ -109,6 +136,7 @@ async def find_similar_tags(article_content: str, top_n: int = 10) -> str:
                 "is_primary": bool(row.is_primary),
                 "similarity_score": round(float(row.similarity_score or 0.0), 4),
                 "keyword_score": round(kw_score, 4),
+                "tag_id": row.slug,  # For exclude_ids tracking
             })
 
         return json.dumps({"tags": tags, "count": len(tags)})

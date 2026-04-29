@@ -46,7 +46,12 @@ export default function ChatMessage({ message, onSelectSuggestion }: ChatMessage
             <span className="text-xs text-gray-500 ml-2">
               {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
             </span>
-
+            {/* Phase 2: Tool hint badge (displayed on assistant messages) */}
+            {!isUser && message.operationMetadata?.tool_used && (
+              <span className="ml-2 inline-block px-2 py-0.5 bg-blue-100 text-blue-700 text-xs rounded-full font-medium">
+                via {message.operationMetadata.tool_used}
+              </span>
+            )}
           </div>
 
           {message.isLoading ? (

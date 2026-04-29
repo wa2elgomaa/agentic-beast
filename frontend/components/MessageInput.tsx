@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, KeyboardEvent } from 'react'
 import { Loader2, Mic, Send, X } from 'lucide-react'
 import { motion } from 'framer-motion'
 import styles from './ChatArea.module.css'
+import ToolSelector, { ToolType } from './ToolSelector'
 
 export type AudioModeState = 'idle' | 'requesting_permission' | 'listening' | 'error'
 
@@ -18,7 +19,7 @@ type MicVADInstance = {
 }
 
 interface MessageInputProps {
-  onSendMessage: (message: string) => void
+  onSendMessage: (message: string, toolHint?: ToolType) => void
   isLoading: boolean
   onAudioModeChange?: (state: AudioModeState) => void
   onAnalyserChange?: (analyser: AnalyserNode | null) => void
@@ -84,6 +85,7 @@ export default function MessageInput({
   const [audioModeState, setAudioModeState] = useState<AudioModeState>('idle')
   const [audioError, setAudioError] = useState('')
   const [cameraEnabled, setCameraEnabled] = useState(false)
+  const [selectedTool, setSelectedTool] = useState<ToolType>(null)
 
   const mediaStreamRef = useRef<MediaStream | null>(null)
   const audioContextRef = useRef<AudioContext | null>(null)
@@ -351,8 +353,9 @@ export default function MessageInput({
 
   const handleSubmit = () => {
     if (message.trim() && !isLoading) {
-      onSendMessage(message)
+      onSendMessage(message, selectedTool)
       setMessage('')
+      setSelectedTool(null)
     }
   }
 
@@ -378,6 +381,9 @@ export default function MessageInput({
       <div className="max-w-4xl mx-auto px-4 py-2">
         {children}
         <div className="relative flex items-end gap-3">
+          <div className='absolute left-2 bottom-0 top-0 m-auto flex items-center gap-2 h-[36px]'>
+          <ToolSelector selectedTool={selectedTool} onSelectTool={setSelectedTool} />
+          </div>
           <textarea
             value={message}
             onChange={(e) => setMessage(e.target.value)}
@@ -385,7 +391,7 @@ export default function MessageInput({
             placeholder={isAudioActive ? '' : 'Ask about your content performance...'}
             disabled={isLoading}
             rows={1}
-            className="flex-1 resize-none bg-gray-50 text-gray-900 rounded-xl px-4 py-3 pr-36 focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-gray-400 disabled:opacity-50 max-h-[200px] border border-gray-200"
+            className="flex-1 resize-none bg-gray-50 text-gray-900 rounded-xl px-4 py-3 pl-16 pr-36 focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-gray-400 disabled:opacity-50 max-h-[200px] border border-gray-200"
             style={{
               minHeight: '52px',
               height: 'auto',

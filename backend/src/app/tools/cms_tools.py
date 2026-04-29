@@ -153,11 +153,89 @@ async def search_articles(query: str, limit: int = 10) -> str:
 
 
 @tool
-async def find_similar_articles(article_id: str, limit: int = 5) -> str:
-    """Find articles similar to a given article using vector similarity in MongoDB.
+async def search_article_vectors(
+    embedding: list[float],
+    top_k: int = 5,
+    exclude_ids: list[str] | None = None,
+) -> str:
+    """Search article vectors using pgvector cosine similarity (Phase 2).
 
+    Performs a vector similarity search against the article_vectors table in PostgreSQL,
+    returning articles ranked by cosine similarity to the provided embedding.
+
+    Args:
+        embedding: Query embedding vector (384-dim for all-MiniLM-L6-v2).
+        top_k: Maximum number of similar articles to return (default 5, max 20).
+        exclude_ids: List of article_id values to exclude from results (optional).
+
+    Returns:
+        JSON string with list of similar articles from pgvector, including similarity scores.
+    """
+    import json
+    from sqlalchemy import select, desc, text as sql_text
+    from sqlalchemy.orm import selectinload
+
+    from app.db.session import AsyncSessionLocal
+    from app.models.phase2 import ArticleVectorModel
+
+    top_k = min(top_k, 20)
+    exclude_ids = exclude_ids or []
+
+    try:
+        # Convert embedding to PostgreSQL vector format: "[0.1, 0.2, ...]"
+        embedding_str = "[" + ",".join(str(v) for v in embedding) + "]"
+
+        async with AsyncSessionLocal() as session:
+            # pgvector cosine similarity: <=> operator returns distance (smaller = more similar)
+            # Convert to similarity score: 1 - distance (assuming normalized embeddings)
+            stmt = select(
+                ArticleVectorModel.article_id,
+                sql_text(f"1 - (embedding <=> '{embedding_str}'::vector) AS similarity_score")
+            ).where(
+                ArticleVectorModel.deleted_at.is_(None)  # Exclude soft-deleted articles
+            )
+
+            # Exclude specified article IDs
+            if exclude_ids:
+                stmt = stmt.where(ArticleVectorModel.article_id.notin_(exclude_ids))
+
+            # Order by similarity (highest first) and limit
+            stmt = stmt.order_by(desc(sql_text("similarity_score"))).limit(top_k)
+
+            result = await session.execute(stmt)
+            rows = result.fetchall()
+
+            results = []
+            for row in rows:
+                article_id, score = row
+                results.append({
+                    "article_id": str(article_id),
+                    "similarity_score": round(float(score), 4),
+                })
+
+            _logger.info(f"pgvector search completed: {len(results)} results")
+            return json.dumps({
+                "articles": results,
+                "count": len(results),
+                "search_type": "pgvector_cosine",
+            })
+
+    except Exception as exc:
+        _logger.error("pgvector search error: %s", exc, exc_info=True)
+        return json.dumps({
+            "error": f"pgvector search failed: {str(exc)}",
+            "articles": [],
+            "count": 0,
+        })
+
+
+@tool
+async def find_similar_articles(article_id: str, limit: int = 5) -> str:
+    """Find articles similar to a given article using vector similarity (Phase 2: pgvector).
+
+    Updated to use PostgreSQL pgvector for similarity search instead of MongoDB.
     Fetches the target article from the CMS API, generates an embedding, then
-    performs a vector similarity search against the MongoDB articles collection.
+    performs vector similarity search.
 
     Args:
         article_id: The CMS article ID to find similar articles for.
@@ -190,7 +268,63 @@ async def find_similar_articles(article_id: str, limit: int = 5) -> str:
         _logger.error("Embedding generation failed: %s", exc)
         return json.dumps({"error": f"Embedding failed: {exc}", "articles": []})
 
-    # 3. Vector similarity search in MongoDB
+    # 3. Vector similarity search using pgvector (Phase 2)
+    try:
+        pgvector_json = await search_article_vectors(
+            embedding=embedding,
+            top_k=limit,
+            exclude_ids=[article_id],
+        )
+        pgvector_result = json.loads(pgvector_json)
+
+        if "error" in pgvector_result or not pgvector_result.get("articles"):
+            _logger.warning("pgvector search returned no results, falling back to MongoDB")
+            # Fallback to MongoDB if pgvector unavailable
+            return await _find_similar_articles_mongodb(article_id, limit, embedding)
+
+        # Fetch full article details from CMS for each result
+        results = []
+        for vec_result in pgvector_result.get("articles", []):
+            doc_id = vec_result.get("article_id", "")
+            score = vec_result.get("similarity_score", 0.0)
+
+            # Fetch article from CMS to get title, excerpt, published_at
+            detail_json = await fetch_article_by_id(doc_id)
+            detail_data = json.loads(detail_json)
+
+            if "error" not in detail_data:
+                results.append(format_article_recommendation(
+                    article_id=doc_id,
+                    title=detail_data.get("title", ""),
+                    excerpt=detail_data.get("excerpt", "")[:200],
+                    published_at=detail_data.get("published_at", ""),
+                    relevance_score=score,
+                ))
+
+        return json.dumps({
+            "articles": results,
+            "count": len(results),
+            "source_article_id": article_id,
+            "search_type": "pgvector",
+        })
+
+    except Exception as exc:
+        _logger.error("pgvector fallback search error: %s", exc)
+        # Fallback: try MongoDB
+        return await _find_similar_articles_mongodb(article_id, limit, embedding)
+
+
+async def _find_similar_articles_mongodb(
+    article_id: str,
+    limit: int,
+    embedding: list[float],
+) -> str:
+    """Fallback MongoDB vector search when pgvector is unavailable.
+    
+    This preserves backward compatibility if PostgreSQL pgvector is not deployed.
+    """
+    import json
+
     try:
         collection = _get_mongo_collection()
         pipeline = [
@@ -200,7 +334,7 @@ async def find_similar_articles(article_id: str, limit: int = 5) -> str:
                     "path": "embedding",
                     "queryVector": embedding,
                     "numCandidates": limit * 10,
-                    "limit": limit + 1,  # +1 to exclude the query article itself
+                    "limit": limit + 1,
                 }
             },
             {
@@ -220,7 +354,7 @@ async def find_similar_articles(article_id: str, limit: int = 5) -> str:
         async for doc in cursor:
             doc_id = str(doc.get("cms_id") or "")
             if doc_id == article_id:
-                continue  # skip the source article
+                continue
             results.append(format_article_recommendation(
                 article_id=doc_id,
                 title=str(doc.get("title") or ""),
@@ -231,14 +365,20 @@ async def find_similar_articles(article_id: str, limit: int = 5) -> str:
             if len(results) >= limit:
                 break
 
-        return json.dumps({"articles": results, "count": len(results), "source_article_id": article_id})
+        return json.dumps({
+            "articles": results,
+            "count": len(results),
+            "source_article_id": article_id,
+            "search_type": "mongodb_fallback",
+        })
 
     except Exception as exc:
-        _logger.error("MongoDB vector search error: %s", exc)
-        # Fallback: text search
-        return await search_articles(
-            article_data.get("title", article_id), limit=limit
-        )
+        _logger.error("MongoDB fallback search also failed: %s", exc)
+        return json.dumps({
+            "error": "All similarity searches failed",
+            "articles": [],
+            "count": 0,
+        })
 
 
 @tool

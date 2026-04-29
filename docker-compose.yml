@@ -29,7 +29,7 @@ services:
       - redis_data:/data
     command: redis-server --requirepass ${REDIS_PASSWORD:-beastredis}
     healthcheck:
-      test: ["CMD", "redis-cli", "--auth", "${REDIS_PASSWORD:-beastredis}", "ping"]
+      test: ["CMD", "redis-cli", "--no-auth-warning", "-a", "${REDIS_PASSWORD:-beastredis}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -47,7 +47,7 @@ services:
     volumes:
       - mongodb_data:/data/db
     healthcheck:
-      test: [ "CMD", "mongo", "--eval", "db.adminCommand('ping')" ]
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')", "--quiet"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -185,6 +185,7 @@ services:
       DOCKER_MODEL_RUNNER_ENABLED: ${DOCKER_MODEL_RUNNER_ENABLED:-false}
       DOCKER_MODEL_RUNNER_BASE_URL: ${DOCKER_MODEL_RUNNER_BASE_URL:-http://model-runner.docker.internal/engines/v1}
       AGENT_SESSION_ENCRYPTION_KEY: ${AGENT_SESSION_ENCRYPTION_KEY:-}
+      AWS_ENDPOINT_URL: http://localstack:4566
     ports:
       - "${API_PORT:-8000}:${API_PORT:-8000}"
     volumes:
@@ -223,6 +224,7 @@ services:
       DOCKER_MODEL_RUNNER_ENABLED: ${DOCKER_MODEL_RUNNER_ENABLED:-false}
       DOCKER_MODEL_RUNNER_BASE_URL: ${DOCKER_MODEL_RUNNER_BASE_URL:-http://model-runner.docker.internal/engines/v1}
       AGENT_SESSION_ENCRYPTION_KEY: ${AGENT_SESSION_ENCRYPTION_KEY:-}
+      AWS_ENDPOINT_URL: http://localstack:4566
     volumes:
       - ./backend:/app
       - ./backend/watched_documents:/app/watched_documents
@@ -262,6 +264,7 @@ services:
       DOCKER_MODEL_RUNNER_ENABLED: ${DOCKER_MODEL_RUNNER_ENABLED:-false}
       DOCKER_MODEL_RUNNER_BASE_URL: ${DOCKER_MODEL_RUNNER_BASE_URL:-http://model-runner.docker.internal/engines/v1}
       AGENT_SESSION_ENCRYPTION_KEY: ${AGENT_SESSION_ENCRYPTION_KEY:-}
+      AWS_ENDPOINT_URL: http://localstack:4566
     volumes:
       - ./backend:/app
       - ./backend/watched_documents:/app/watched_documents
@@ -356,12 +359,38 @@ services:
   #     - PYTHONPATH=/app
   #   restart: "unless-stopped"
 
+  # LocalStack: Local AWS S3 emulation (Phase 2)
+  # Provides S3-like interface on localhost:4566 for local development without real cloud
+  localstack:
+    image: localstack/localstack:3
+    container_name: beast-localstack
+    ports:
+      - "4566:4566"  # LocalStack API endpoint for S3, SQS, SNS, etc.
+    environment:
+      SERVICES: s3  # Enable S3 service only
+      DEBUG: "false"
+      LOCALSTACK_DATA_DIR: /var/lib/localstack
+      AWS_DEFAULT_REGION: ${AWS_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-test}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-test}
+    volumes:
+      - localstack_data:/var/lib/localstack
+    healthcheck:
+      test: ["CMD", "aws", "s3", "ls", "--endpoint-url=http://localhost:4566", "--region", "${AWS_REGION:-us-east-1}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - beast-network
+    restart: unless-stopped
+
 volumes:
   postgres_data:
   redis_data:
   mongodb_data:
   ollama_data:
   models_data:
+  localstack_data:
   # Commented out volumes (only used by uncommented services)
   # mysql_data:
   # elasticsearch_data:

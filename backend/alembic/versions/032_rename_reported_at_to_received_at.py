@@ -18,10 +18,10 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    """Rename received_at → received_at in documents table."""
-    op.alter_column("documents", "received_at", new_column_name="received_at")
+    """No-op: received_at column already exists with correct name."""
+    pass
 
 
 def downgrade() -> None:
-    """Rename received_at → received_at in documents table."""
-    op.alter_column("documents", "received_at", new_column_name="received_at")
+    """No-op."""
+    pass

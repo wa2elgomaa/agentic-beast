@@ -202,10 +202,10 @@
 **Purpose**: New DB schema, S3 client, settings service, and webhook security primitives that ALL Phase 2 user stories depend on
 
 - [ ] T068 Create Alembic migration `backend/alembic/versions/002_phase2_tables.py` adding: `article_vectors` table (id, article_id VARCHAR, content TEXT, embedding vector(384), published_at, metadata JSONB), `app_settings` table (key VARCHAR PK, value TEXT, is_secret BOOL, updated_at), `webhook_events` table (id UUID PK, source VARCHAR, event_type VARCHAR, payload JSONB, hmac_verified BOOL, processed_at, created_at)
-- [ ] T069 [P] Add S3 client configuration in `backend/src/app/config/config.py`: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_S3_BUCKET, AWS_S3_REGION, AWS_DEFAULT_REGION — add aioboto3 (async S3 client) to `backend/pyproject.toml`; do NOT add boto3 directly (it is a transitive dependency of aioboto3)
-- [ ] T070 [P] Implement app settings service in `backend/src/app/services/settings_service.py` with: `get_setting(key)`, `set_setting(key, value, is_secret)`, `get_all_settings()`, `get_effective_provider_config()` — reads from `app_settings` table, falls back to env vars, caches in Redis with 60s TTL. **Note**: This service is the authoritative config adapter layer — all agents and the orchestrator MUST call `settings_service.get_effective_provider_config()` for runtime provider config; they must NOT read `config.py` directly. This preserves constitution Principle III (provider switching via config only) while enabling DB-backed overrides.
-- [ ] T071 [P] Implement HMAC webhook security utility in `backend/src/app/utils/webhook_security.py` with `verify_hmac_signature(payload_bytes, signature_header, secret)` → bool using `hmac.compare_digest`; add WEBHOOK_SECRET to config
-- [ ] T072 [P] Add S3 upload service in `backend/src/app/services/s3_service.py` with async `upload_file(file_bytes, filename, content_type) → s3_url`, `delete_file(s3_key)`, `generate_presigned_url(s3_key, expiry_seconds)` using aioboto3
+- [x] T069 [P] Add S3 client configuration in `backend/src/app/config/config.py`: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_S3_BUCKET, AWS_REGION, AWS_DEFAULT_REGION — add aioboto3 (async S3 client) to `backend/pyproject.toml`; do NOT add boto3 directly (it is a transitive dependency of aioboto3)
+- [x] T070 [P] Implement app settings service in `backend/src/app/services/settings_service.py` with: `get_setting(key)`, `set_setting(key, value, is_secret)`, `get_all_settings()`, `get_effective_provider_config()` — reads from `app_settings` table, falls back to env vars, caches in Redis with 60s TTL. **Note**: This service is the authoritative config adapter layer — all agents and the orchestrator MUST call `settings_service.get_effective_provider_config()` for runtime provider config; they must NOT read `config.py` directly. This preserves constitution Principle III (provider switching via config only) while enabling DB-backed overrides.
+- [x] T071 [P] Implement HMAC webhook security utility in `backend/src/app/utils/webhook_security.py` with `verify_hmac_signature(payload_bytes, signature_header, secret)` → bool using `hmac.compare_digest`; add WEBHOOK_SECRET to config
+- [x] T072 [P] Add S3 upload service in `backend/src/app/services/s3_service.py` with async `upload_file(file_bytes, filename, content_type) → s3_url`, `delete_file(s3_key)`, `generate_presigned_url(s3_key, expiry_seconds)` using aioboto3
 
 **Checkpoint**: DB tables created, S3 client ready, settings service working, HMAC utility in place — Phase 2 user stories can begin
 
@@ -220,10 +220,10 @@
 ### Implementation for User Story 7
 
 - [ ] T073 [P] [US7] Add webhook ingestion schemas in `backend/src/app/schemas/ingestion.py`: `WebhookPayload` (source, event_type, data dict), `WebhookResult` (event_id, routed_to, status)
-- [ ] T074 [P] [US7] Implement Celery webhook article task in `backend/src/app/tasks/webhook_ingest.py`: `process_article_webhook_task(article_id)` — fetch article from CMS via `fetch_article_by_id()`, chunk content, embed (384-dim), upsert into `article_vectors` ON CONFLICT article_id DO UPDATE embedding + content + updated_at
-- [ ] T075 [P] [US7] Implement Celery webhook generic task in `backend/src/app/tasks/webhook_ingest.py`: `process_generic_webhook_task(source, event_type, data)` — upsert into `webhook_events` with processed_at timestamp
-- [ ] T076 [US7] Implement webhook receiver router in `backend/src/app/api/webhooks.py`: `POST /ingest/webhook` — verify HMAC using `verify_hmac_signature()`, log webhook event to `webhook_events` table, route to `process_article_webhook_task` for event_type in `{article.published, article.updated, article.deleted}`, else to `process_generic_webhook_task`, return 202 Accepted
-- [ ] T077 [US7] Register webhooks router in `backend/src/app/main.py`
+- [x] T074 [P] [US7] Implement Celery webhook article task in `backend/src/app/tasks/webhook_ingest.py`: `process_article_webhook_task(article_id)` — fetch article from CMS via `fetch_article_by_id()`, chunk content, embed (384-dim), upsert into `article_vectors` ON CONFLICT article_id DO UPDATE embedding + content + updated_at
+- [x] T075 [P] [US7] Implement Celery webhook generic task in `backend/src/app/tasks/webhook_ingest.py`: `process_generic_webhook_task(source, event_type, data)` — upsert into `webhook_events` with processed_at timestamp
+- [x] T076 [US7] Implement webhook receiver router in `backend/src/app/api/webhooks.py`: `POST /ingest/webhook` — verify HMAC using `verify_hmac_signature()`, log webhook event to `webhook_events` table, route to `process_article_webhook_task` for event_type in `{article.published, article.updated, article.deleted}`, else to `process_generic_webhook_task`, return 202 Accepted
+- [x] T077 [US7] Register webhooks router in `backend/src/app/main.py`
 
 **Checkpoint**: Webhook endpoint live — CMS can push article publish/update events and have them automatically re-vectorized
 
@@ -238,9 +238,9 @@
 ### Implementation for User Story 8
 
 - [ ] T078 [P] [US8] Extend document upload schemas in `backend/src/app/schemas/documents.py` with: `DatasetListResponse` (items: list of `DatasetItem(id: UUID, filename, s3_url, size_bytes, doc_type, status, created_at)`), `DatasetDeleteResponse`; `id` is the UUID primary key of the `documents` metadata row
-- [ ] T079 [P] [US8] Update Celery document ingest task in `backend/src/app/tasks/document_ingest.py` to: (1) upload raw file to S3 via `s3_service.upload_file()` and store `s3_url` in chunk metadata, (2) chunk + embed as before, (3) upsert into `documents` with `s3_url` in `doc_metadata`
-- [ ] T080 [US8] Update document upload API router in `backend/src/app/api/documents.py`: add `POST /admin/datasets` (same multipart upload but returns `DatasetListResponse` item), `GET /admin/datasets` (list all company_document rows with s3_url), `DELETE /admin/datasets/{doc_id: UUID}` (delete from S3 + delete all vector rows sharing that doc's `doc_metadata.s3_url`)
-- [ ] T081 [US8] Update folder watch task in `backend/src/app/tasks/folder_watch.py` to call the updated `document_ingest_task` so watched files also get S3-backed storage; after successful S3 upload + vectorization, move the local file to `watched_documents/processed/` (create dir if absent) to prevent re-processing on the next watcher run
+- [x] T079 [P] [US8] Update Celery document ingest task in `backend/src/app/tasks/document_ingest.py` to: (1) upload raw file to S3 via `s3_service.upload_file()` and store `s3_url` in chunk metadata, (2) chunk + embed as before, (3) upsert into `documents` with `s3_url` in `doc_metadata`
+- [x] T080 [US8] Update document upload API router in `backend/src/app/api/documents.py`: add `POST /admin/datasets` (same multipart upload but returns `DatasetListResponse` item), `GET /admin/datasets` (list all company_document rows with s3_url), `DELETE /admin/datasets/{doc_id: UUID}` (delete from S3 + delete all vector rows sharing that doc's `doc_metadata.s3_url`)
+- [x] T081 [US8] Update folder watch task in `backend/src/app/tasks/folder_watch.py` to call the updated `document_ingest_task` so watched files also get S3-backed storage; after successful S3 upload + vectorization, move the local file to `watched_documents/processed/` (create dir if absent) to prevent re-processing on the next watcher run
 
 **Checkpoint**: All document uploads (API + folder) are S3-backed; document Q&A has persistent file references
 
@@ -254,11 +254,11 @@
 
 ### Implementation for User Story 9
 
-- [ ] T082 [P] [US9] Add settings schemas in `backend/src/app/schemas/settings.py`: `SettingItem` (key, value, is_secret, updated_at), `SettingsUpdateRequest` (items: list of `{key, value}`), `SettingsResponse`
-- [ ] T083 [P] [US9] Implement settings API router in `backend/src/app/api/settings.py`: `GET /admin/settings` (return all settings, mask is_secret values, include `cache_ttl_seconds: 60` in response so callers know max staleness), `PUT /admin/settings` (batch upsert, invalidate Redis cache key immediately), protected by admin JWT role claim
-- [ ] T084 [US9] Update orchestrator agent in `backend/src/app/agents/v1/orchestrator_agent.py` to call `settings_service.get_effective_provider_config()` on each invocation so model provider + API key are read from DB/env at runtime (no restart required)
-- [ ] T085 [US9] Register settings router in `backend/src/app/main.py`; seed default settings rows in `backend/scripts/seed_data.py` for keys: `ORCHESTRATOR_MODEL`, `ANALYTICS_AGENT_MODEL`, `CHAT_AGENT_MODEL`, `TAGGING_AGENT_MODEL`, `RECOMMENDATION_AGENT_MODEL`, `DOCUMENT_AGENT_MODEL`, `SEARCH_AGENT_MODEL`, `OPENAI_API_KEY` (is_secret=true), `GMAIL_MONITOR_INTERVAL_SECONDS`
-- [ ] T086 [P] [US9] Implement Settings page in `frontend/app/admin/settings/page.tsx`: fetch `GET /admin/settings`, render key/value form with masked secret fields, submit via `PUT /admin/settings`, show save confirmation toast
+- [x] T082 [P] [US9] Add settings schemas in `backend/src/app/schemas/settings.py`: `SettingItem` (key, value, is_secret, updated_at), `SettingsUpdateRequest` (items: list of `{key, value}`), `SettingsResponse`
+- [x] T083 [P] [US9] Implement settings API router in `backend/src/app/api/settings.py`: `GET /admin/settings` (return all settings, mask is_secret values, include `cache_ttl_seconds: 60` in response so callers know max staleness), `PUT /admin/settings` (batch upsert, invalidate Redis cache key immediately), protected by admin JWT role claim
+- [x] T084 [US9] Update orchestrator agent in `backend/src/app/agents/v1/orchestrator_agent.py` to call `settings_service.get_effective_provider_config()` on each invocation so model provider + API key are read from DB/env at runtime (no restart required)
+- [x] T085 [US9] Register settings router in `backend/src/app/main.py`; seed default settings rows in `backend/scripts/seed_data.py` for keys: `ORCHESTRATOR_MODEL`, `ANALYTICS_AGENT_MODEL`, `CHAT_AGENT_MODEL`, `TAGGING_AGENT_MODEL`, `RECOMMENDATION_AGENT_MODEL`, `DOCUMENT_AGENT_MODEL`, `SEARCH_AGENT_MODEL`, `OPENAI_API_KEY` (is_secret=true), `GMAIL_MONITOR_INTERVAL_SECONDS`
+- [x] T086 [P] [US9] Implement Settings page in `frontend/app/admin/settings/page.tsx`: fetch `GET /admin/settings`, render key/value form with masked secret fields, submit via `PUT /admin/settings`, show save confirmation toast
 
 **Checkpoint**: Admins can switch model providers via UI; changes take effect immediately without restart
 
@@ -272,7 +272,7 @@
 
 ### Implementation for User Story 10
 
-- [ ] T087 [P] [US10] Implement Datasets page in `frontend/app/admin/datasets/page.tsx`: dropzone for multi-file upload (PDF, Excel, TXT), calls `POST /admin/datasets`, polls `GET /documents/status/{task_id}` for processing status, lists existing datasets from `GET /admin/datasets` with filename, size, doc_type, status columns, delete button calls `DELETE /admin/datasets/{id}`
+- [x] T087 [P] [US10] Implement Datasets page in `frontend/app/admin/datasets/page.tsx`: list/create/edit/delete datasets, drag-and-drop file upload per dataset, embed status polling, file table with embed status badges — implemented using `/admin/datasets` API (8 routes)
 
 **Checkpoint**: Datasets dashboard functional — non-technical admins can manage the RAG document corpus without CLI access
 
@@ -286,11 +286,11 @@
 
 ### Implementation for User Story 11
 
-- [ ] T088 [P] [US11] Add tags CRUD schemas in `backend/src/app/schemas/tags.py`: `TagCreateRequest` (name, slug, description, variations list, is_primary bool), `TagUpdateRequest` (same fields, all optional), `TagResponse` (id, name, slug, description, variations, is_primary, has_embedding bool), `TagBulkUploadResponse` (inserted, updated, failed, errors)
-- [ ] T089 [P] [US11] Implement tags API router in `backend/src/app/api/tags.py`: `GET /admin/tags` (paginated list, search by name), `POST /admin/tags` (create single tag + generate embedding via embedding_service), `PUT /admin/tags/{id}` (update + re-embed), `DELETE /admin/tags/{id}`, `POST /admin/tags/bulk-upload` (accept CSV file with columns name,slug,description,variations,is_primary — parse via csv.DictReader, validate, bulk insert, generate embeddings in batches of 50), `POST /admin/tags/reembed-all` (queue Celery task to regenerate all tag embeddings)
+- [x] T088 [P] [US11] Add tags CRUD schemas in `backend/src/app/schemas/tags.py`: `TagCreateRequest` (name, slug, description, variations list, is_primary bool), `TagUpdateRequest` (same fields, all optional), `TagResponse` (id, name, slug, description, variations, is_primary, has_embedding bool), `TagBulkUploadResponse` (inserted, updated, failed, errors)
+- [x] T089 [P] [US11] Implement tags API router in `backend/src/app/api/tags.py`: `GET /admin/tags` (paginated list, search by name), `POST /admin/tags` (create single tag + generate embedding via embedding_service), `PUT /admin/tags/{id}` (update + re-embed), `DELETE /admin/tags/{id}`, `POST /admin/tags/bulk-upload` (accept CSV file with columns name,slug,description,variations,is_primary — parse via csv.DictReader, validate, bulk insert, generate embeddings in batches of 50), `POST /admin/tags/reembed-all` (queue Celery task to regenerate all tag embeddings)
 - [ ] T090 [US11] Implement Celery tag re-embed task in `backend/src/app/tasks/tag_embed.py`: `reembed_all_tags_task()` — iterate all tags in batches of 100, call embedding_service, update tags.embedding column, idempotent (can re-run safely)
-- [ ] T091 [US11] Register tags router in `backend/src/app/main.py`
-- [ ] T092 [P] [US11] Implement Tags page in `frontend/app/admin/tags/page.tsx`: data table with pagination + search, Add Tag modal (name, slug, description, variations textarea, primary toggle), Edit/Delete row actions, CSV Upload button (file picker → `POST /admin/tags/bulk-upload`), Re-embed All button with confirmation dialog
+- [x] T091 [US11] Register tags router in `backend/src/app/main.py`
+- [x] T092 [P] [US11] Implement Tags page in `frontend/app/admin/tags/page.tsx`: data table with pagination + search, Add Tag modal (name, slug, description, variations textarea, primary toggle), Edit/Delete row actions, CSV/XLSX Upload button (file picker → `POST /admin/tags/bulk-upload`), Re-embed All button with per-row ⚡ embed for unembedded tags, progress polling
 
 **Checkpoint**: Tags dashboard fully functional — admins control the entire tag corpus; tagging agent has up-to-date embeddings
 
@@ -304,11 +304,11 @@
 
 ### Implementation for User Story 12
 
-- [ ] T093 [P] [US12] Add article scraper config to `backend/src/app/config/config.py`: `CMS_SCRAPE_BATCH_SIZE` (default 50), `CMS_SCRAPE_CONCURRENCY` (default 5), `CMS_ARTICLES_ENDPOINT` (e.g. `/articles?page={page}&per_page={per_page}`)
+- [x] T093 [P] [US12] Add article scraper config to `backend/src/app/config/config.py`: `CMS_SCRAPE_BATCH_SIZE` (default 50), `CMS_SCRAPE_CONCURRENCY` (default 5), `CMS_ARTICLES_ENDPOINT` (e.g. `/articles?page={page}&per_page={per_page}`)
 - [ ] T094 [P] [US12] Implement CMS article scraper service in `backend/src/app/services/article_scraper.py`: async `scrape_all_articles()` — paginated fetch from CMS REST API (httpx, respect rate limits with asyncio.Semaphore), extract id + title + body + published_at + metadata, yield batches of `CMS_SCRAPE_BATCH_SIZE`
 - [ ] T095 [US12] Implement Celery article scrape task in `backend/src/app/tasks/article_scrape.py`: `scrape_and_vectorize_articles_task()` — call `article_scraper.scrape_all_articles()`, for each batch: chunk content (RecursiveCharacterTextSplitter, chunk_size=512, overlap=64), embed batch via embedding_service, bulk upsert into `article_vectors` ON CONFLICT article_id DO UPDATE; apply exponential backoff on CMS 429/503 per batch (max 5 retries, base 2s, full jitter via `random.uniform(0, base * 2**attempt)`); failed batches accumulate in `errors` list — do NOT abort the full run; log progress every 500 articles; return `{total_scraped, total_vectorized, errors}`
-- [ ] T096 [P] [US12] Add scraper trigger endpoint in `backend/src/app/api/admin.py` (or new `backend/src/app/api/scraper.py`): `POST /admin/scraper/run` (queue `scrape_and_vectorize_articles_task`, return task_id), `GET /admin/scraper/status/{task_id}` (Celery result status)
-- [ ] T097 [US12] Register scraper router in `backend/src/app/main.py`
+- [x] T096 [P] [US12] Add scraper trigger endpoint in `backend/src/app/api/admin.py` (or new `backend/src/app/api/scraper.py`): `POST /admin/scraper/run` (queue `scrape_and_vectorize_articles_task`, return task_id), `GET /admin/scraper/status/{task_id}` (Celery result status)
+- [x] T097 [US12] Register scraper router in `backend/src/app/main.py`
 
 **Checkpoint**: All CMS articles are vectorized in `article_vectors` — recommendation agent can now run pgvector similarity instead of MongoDB
 
@@ -322,8 +322,8 @@
 
 ### Implementation for User Story 13
 
-- [ ] T098 [US13] Extend `process_article_webhook_task` in `backend/src/app/tasks/webhook_ingest.py` to handle `article.deleted` event: soft-delete by setting `deleted_at` on `article_vectors` row; create new migration `backend/alembic/versions/003_article_vectors_soft_delete.py` adding `deleted_at TIMESTAMPTZ NULL` to `article_vectors` (do NOT amend migration 002 after it has run — that would corrupt Alembic revision history)
-- [ ] T099 [P] [US13] Add article webhook documentation in `backend/docs/cms-webhook-integration.md`: expected payload format, HMAC header name (`X-TNN-Signature`), supported event types, retry behaviour, example curl commands
+- [x] T098 [US13] Extend `process_article_webhook_task` in `backend/src/app/tasks/webhook_ingest.py` to handle `article.deleted` event: soft-delete by setting `deleted_at` on `article_vectors` row; create new migration `backend/alembic/versions/003_article_vectors_soft_delete.py` adding `deleted_at TIMESTAMPTZ NULL` to `article_vectors` (do NOT amend migration 002 after it has run — that would corrupt Alembic revision history)
+- [x] T099 [P] [US13] Add article webhook documentation in `backend/docs/cms-webhook-integration.md`: expected payload format, HMAC header name (`X-TNN-Signature`), supported event types, retry behaviour, example curl commands
 
 **Checkpoint**: Webhook pipeline handles full article lifecycle: publish → vectorize, update → re-vectorize, delete → soft-delete
 
@@ -337,8 +337,8 @@
 
 ### Implementation for User Story 14
 
-- [ ] T100 [P] [US14] Add `search_article_vectors(embedding, top_k, exclude_ids)` function to `backend/src/app/tools/cms_tools.py` — pgvector cosine similarity query against `article_vectors` using `<=>` operator, returns list of `{article_id, title, similarity_score}`
-- [ ] T101 [US14] Update recommendation agent in `backend/src/app/agents/recommendation_agent.py` to use `search_article_vectors()` instead of MongoDB `find_similar_articles()`; preserve the user-facing conversation flow (ask for N, show results, offer "suggest more" follow-up)
+- [x] T100 [P] [US14] Add `search_article_vectors(embedding, top_k, exclude_ids)` function to `backend/src/app/tools/cms_tools.py` — pgvector cosine similarity query against `article_vectors` using `<=>` operator, returns list of `{article_id, title, similarity_score}`
+- [x] T101 [US14] Update recommendation agent in `backend/src/app/agents/recommendation_agent.py` to use `search_article_vectors()` instead of MongoDB `find_similar_articles()`; preserve the user-facing conversation flow (ask for N, show results, offer "suggest more" follow-up)
 
 **Checkpoint**: Recommendation agent uses pgvector — faster, more consistent similarity search; no cross-DB dependency
 
@@ -352,8 +352,8 @@
 
 ### Implementation for User Story 15
 
-- [ ] T102 [P] [US15] Update `find_similar_tags()` in `backend/src/app/tools/tag_tools.py`: accept `article_embedding: list[float]` (pre-computed) AND `article_content: str` (compute on the fly if no embedding given); query `tags` by cosine similarity (`<=>`) with `exclude_ids` param for "more tags" flow; return top-K with `{tag_id, name, slug, similarity_score}`
-- [ ] T103 [US15] Update tagging agent in `backend/src/app/agents/tagging_agent.py`: (1) parse article ID from user message, (2) call `fetch_article_by_id()`, (3) embed article body via `embedding_service.embed_text()`, (4) call updated `find_similar_tags(article_embedding=...)`, (5) track already-shown tag IDs in conversation context for "more tags" follow-up handling
+- [x] T102 [P] [US15] Update `find_similar_tags()` in `backend/src/app/tools/tag_tools.py`: accept `article_embedding: list[float]` (pre-computed) AND `article_content: str` (compute on the fly if no embedding given); query `tags` by cosine similarity (`<=>`) with `exclude_ids` param for "more tags" flow; return top-K with `{tag_id, name, slug, similarity_score}`
+- [x] T103 [US15] Update tagging agent in `backend/src/app/agents/tagging_agent.py`: (1) parse article ID from user message, (2) call `fetch_article_by_id()`, (3) embed article body via `embedding_service.embed_text()`, (4) call updated `find_similar_tags(article_embedding=...)`, (5) track already-shown tag IDs in conversation context for "more tags" follow-up handling
 
 **Checkpoint**: Tag suggestion uses full article embedding — higher quality suggestions; repeat "more tags" returns fresh suggestions
 
@@ -367,11 +367,11 @@
 
 ### Implementation for User Story 16
 
-- [ ] T104 [P] [US16] Add Google CSE config to `backend/src/app/config/config.py`: `GOOGLE_CSE_API_KEY`, `GOOGLE_CSE_ID` (Custom Search Engine ID), `GOOGLE_CSE_SITE` (default `thenationalnews.com`), `GOOGLE_CSE_MAX_RESULTS` (default 10)
-- [ ] T105 [P] [US16] Implement `search_tnn` tool in `backend/src/app/tools/search_tools.py`: async function using httpx to call `https://www.googleapis.com/customsearch/v1?key={key}&cx={cx}&siteSearch={site}&q={query}&num={n}` — parse items list into `{title, link, snippet}` list; raise structured error on API quota/auth failure
-- [ ] T106 [US16] Implement search agent in `backend/src/app/agents/search_agent.py` using Strands Agents SDK: register `search_tnn` tool, system prompt instructs agent to format results as numbered list with title + link + excerpt, handle "no results" gracefully, support follow-up queries ("search for more")
-- [ ] T107 [US16] Register search agent with orchestrator in `backend/src/app/agents/v1/orchestrator_agent.py` as `search_tool` — add to tools list with description `"Search thenationalnews.com for articles, topics, or authors using Google Custom Search"`
-- [ ] T108 [P] [US16] Add GOOGLE_CSE_API_KEY and GOOGLE_CSE_ID to settings seed in `backend/scripts/seed_data.py` (is_secret=true for API key)
+- [x] T104 [P] [US16] Add Google CSE config to `backend/src/app/config/config.py`: `GOOGLE_CSE_API_KEY`, `GOOGLE_CSE_ID` (Custom Search Engine ID), `GOOGLE_CSE_SITE` (default `thenationalnews.com`), `GOOGLE_CSE_MAX_RESULTS` (default 10)
+- [x] T105 [P] [US16] Implement `search_tnn` tool in `backend/src/app/tools/search_tools.py`: async function using httpx to call `https://www.googleapis.com/customsearch/v1?key={key}&cx={cx}&siteSearch={site}&q={query}&num={n}` — parse items list into `{title, link, snippet}` list; raise structured error on API quota/auth failure
+- [x] T106 [US16] Implement search agent in `backend/src/app/agents/search_agent.py` using Strands Agents SDK: register `search_tnn` tool, system prompt instructs agent to format results as numbered list with title + link + excerpt, handle "no results" gracefully, support follow-up queries ("search for more")
+- [x] T107 [US16] Register search agent with orchestrator in `backend/src/app/agents/v1/orchestrator_agent.py` as `search_tool` — add to tools list with description `"Search thenationalnews.com for articles, topics, or authors using Google Custom Search"`
+- [x] T108 [P] [US16] Add GOOGLE_CSE_API_KEY and GOOGLE_CSE_ID to settings seed in `backend/scripts/seed_data.py` (is_secret=true for API key)
 
 **Checkpoint**: Search agent live — users can search TNN content directly from the chat interface
 
@@ -385,11 +385,11 @@
 
 ### Implementation for User Story 17
 
-- [ ] T109 [P] [US17] Extend `POST /chat` request schema in `backend/src/app/schemas/chat.py`: add optional `tool_hint: Literal["search", "documents", "analytics", "tags", "recommendation"] | None = None`; **Note**: `tool_hint` is only honoured on the REST POST `/chat` endpoint — the WebSocket voice path (`/ws/voice`) MUST ignore it (no schema change needed on WS side; orchestrator checks transport and skips hint when `source == "voice"`)
-- [ ] T110 [US17] Update chat service in `backend/src/app/services/chat_service.py` to pass `tool_hint` through to orchestrator; update orchestrator agent in `backend/src/app/agents/v1/orchestrator_agent.py` to bypass LLM routing when `tool_hint` is present and `source != "voice"` — direct dispatch to the specified agent; if `source == "voice"`, log a debug warning and fall back to normal LLM routing
-- [ ] T111 [P] [US17] Create `ToolSelector` component in `frontend/components/ToolSelector.tsx`: renders a `+` icon button, on click shows a popover/dropdown with tool options (icon + label + description): Search (`MagnifyingGlassIcon`, "Search thenationalnews.com"), Documents (`DocumentTextIcon`, "Ask about uploaded documents"); selected tool shows as a badge pill on the input; `onSelect(tool: string | null)` callback
-- [ ] T112 [US17] Integrate `ToolSelector` into `frontend/components/MessageInput.tsx`: add `ToolSelector` to the left of the send button, pass selected tool into the chat request payload as `tool_hint`, clear selection after message is sent
-- [ ] T113 [P] [US17] Add tool hint display in `frontend/components/` chat message list — show a small badge on assistant messages indicating which tool was used (e.g. "via Search", "via Documents")
+- [x] T109 [P] [US17] Extend `POST /chat` request schema in `backend/src/app/schemas/chat.py`: add optional `tool_hint: Literal["search", "documents", "analytics", "tags", "recommendation"] | None = None`; **Note**: `tool_hint` is only honoured on the REST POST `/chat` endpoint — the WebSocket voice path (`/ws/voice`) MUST ignore it (no schema change needed on WS side; orchestrator checks transport and skips hint when `source == "voice"`)
+- [x] T110 [US17] Update chat service in `backend/src/app/services/chat_service.py` to pass `tool_hint` through to orchestrator; update orchestrator agent in `backend/src/app/agents/v1/orchestrator_agent.py` to bypass LLM routing when `tool_hint` is present and `source != "voice"` — direct dispatch to the specified agent; if `source == "voice"`, log a debug warning and fall back to normal LLM routing
+- [x] T111 [P] [US17] Create `ToolSelector` component in `frontend/components/ToolSelector.tsx`: renders a `+` icon button, on click shows a popover/dropdown with tool options (icon + label + description): Search (`MagnifyingGlassIcon`, "Search thenationalnews.com"), Documents (`DocumentTextIcon`, "Ask about uploaded documents"); selected tool shows as a badge pill on the input; `onSelect(tool: string | null)` callback
+- [x] T112 [US17] Integrate `ToolSelector` into `frontend/components/MessageInput.tsx`: add `ToolSelector` to the left of the send button, pass selected tool into the chat request payload as `tool_hint`, clear selection after message is sent
+- [x] T113 [P] [US17] Add tool hint display in `frontend/components/` chat message list — show a small badge on assistant messages indicating which tool was used (e.g. "via Search", "via Documents")
 
 **Checkpoint**: Tool selector functional — users can explicitly activate Search or Documents agent from the chat input
 
@@ -399,16 +399,16 @@
 
 **Purpose**: Cross-cutting improvements for Phase 2 features
 
-- [ ] T114 [P] Add webhook event monitoring endpoint `GET /admin/webhooks/events` (paginated, filterable by source/event_type/date) in `backend/src/app/api/webhooks.py` for ops visibility
-- [ ] T115 [P] Update Prometheus metrics in `backend/src/app/metrics.py` for Phase 2: search_requests_total, article_vectors_count gauge, tag_vectors_count gauge, webhook_events_total counter (by source + event_type), settings_cache_hit_ratio gauge
-- [ ] T116 [P] Add CSE quota guard in `backend/src/app/tools/search_tools.py`: track daily request count in Redis (`cse:daily:{date}` key with TTL = end of day); raise `QuotaExceededError` when within 10% of `GOOGLE_CSE_DAILY_LIMIT` (configurable, default 100)
-- [ ] T117 [P] Update `backend/.env.example` with all Phase 2 variables: `AWS_S3_BUCKET`, `AWS_S3_REGION`, `WEBHOOK_SECRET`, `GOOGLE_CSE_API_KEY`, `GOOGLE_CSE_ID`, `GOOGLE_CSE_SITE`, `GOOGLE_CSE_DAILY_LIMIT`
-- [ ] T118 Add Phase 2 quickstart validation script in `backend/scripts/validate_phase2.py` covering: settings endpoint, webhook HMAC, S3 upload round-trip, article_vectors row count, tags CRUD, search tool CSE call
-- [ ] T119 [P] [US11] Implement tag feedback endpoint `POST /api/tags/feedback` in `backend/src/app/api/tags.py` accepting `{article_id: str, suggested_tags: list[str], kept_tags: list[str]}` — persist each suggestion/kept pair to a new `tag_feedback` table (article_id, tag_slug, was_kept, recorded_at); add `tag_feedback` table to Alembic migration 002 or a new migration 004; this endpoint is called by the CMS after an editor saves their tag selections, enabling SC-003 acceptance rate measurement
-- [ ] T120 [P] Encrypt secret setting values before persisting to `app_settings` table: use Fernet symmetric encryption (`cryptography` library) with key from `SETTINGS_ENCRYPTION_KEY` environment variable; in `backend/src/app/services/settings_service.py` encrypt on `set_setting(is_secret=True)` and decrypt on `get_setting()` so callers always receive plaintext; add `cryptography` to `backend/pyproject.toml`; add `SETTINGS_ENCRYPTION_KEY` to `.env.example` with a note to generate via `Fernet.generate_key()` (OWASP A02 — protects API keys stored in DB)
-- [ ] T121 [P] [US9] Update frontend admin navigation in `frontend/app/admin/layout.tsx` (or equivalent sidebar component) to add links to `/admin/settings`, `/admin/datasets`, `/admin/tags` alongside any existing admin nav items; use icons consistent with the existing admin UI pattern (e.g., `Cog6ToothIcon` for Settings, `FolderIcon` for Datasets, `TagIcon` for Tags)
-- [ ] T122 [P] [US16] Create Google Custom Search Engine in Google Cloud Console scoped to `thenationalnews.com`: document all steps in `backend/docs/google-cse-setup.md` including CSE ID location, API key creation, site restriction configuration, and environment variable mapping (`GOOGLE_CSE_API_KEY`, `GOOGLE_CSE_ID`)
-- [ ] T123 [P] Add LocalStack service to `docker-compose.yml` for local S3 emulation: add `localstack` service with `SERVICES=s3`, expose port 4566; update `backend/src/app/services/s3_service.py` to accept `AWS_ENDPOINT_URL` override (when set, routes all S3 calls to LocalStack instead of AWS); update `backend/.env.example` with `AWS_ENDPOINT_URL=http://localhost:4566` for local dev; this preserves SC-009 (no real cloud deps required for local development)
+- [x] T114 [P] Add webhook event monitoring endpoint `GET /admin/webhooks/events` (paginated, filterable by source/event_type/date) in `backend/src/app/api/webhooks.py` for ops visibility
+- [x] T115 [P] Update Prometheus metrics in `backend/src/app/metrics.py` for Phase 2: search_requests_total, article_vectors_count gauge, tag_vectors_count gauge, webhook_events_total counter (by source + event_type), settings_cache_hit_ratio gauge
+- [x] T116 [P] Add CSE quota guard in `backend/src/app/tools/search_tools.py`: track daily request count in Redis (`cse:daily:{date}` key with TTL = end of day); raise `QuotaExceededError` when within 10% of `GOOGLE_CSE_DAILY_LIMIT` (configurable, default 100)
+- [x] T117 [P] Update `backend/.env.example` with all Phase 2 variables: `AWS_S3_BUCKET`, `AWS_REGION`, `WEBHOOK_SECRET`, `GOOGLE_CSE_API_KEY`, `GOOGLE_CSE_ID`, `GOOGLE_CSE_SITE`, `GOOGLE_CSE_DAILY_LIMIT`
+- [x] T118 Add Phase 2 quickstart validation script in `backend/scripts/validate_phase2.py` covering: settings endpoint, webhook HMAC, S3 upload round-trip, article_vectors row count, tags CRUD, search tool CSE call
+- [x] T119 [P] [US11] Implement tag feedback endpoint `POST /api/tags/feedback` in `backend/src/app/api/tags.py` accepting `{article_id: str, suggested_tags: list[str], kept_tags: list[str]}` — persist each suggestion/kept pair to a new `tag_feedback` table (article_id, tag_slug, was_kept, recorded_at); add `tag_feedback` table to Alembic migration 002 or a new migration 004; this endpoint is called by the CMS after an editor saves their tag selections, enabling SC-003 acceptance rate measurement
+- [x] T120 [P] Encrypt secret setting values before persisting to `app_settings` table: use Fernet symmetric encryption (`cryptography` library) with key from `SETTINGS_ENCRYPTION_KEY` environment variable; in `backend/src/app/services/settings_service.py` encrypt on `set_setting(is_secret=True)` and decrypt on `get_setting()` so callers always receive plaintext; add `cryptography` to `backend/pyproject.toml`; add `SETTINGS_ENCRYPTION_KEY` to `.env.example` with a note to generate via `Fernet.generate_key()` (OWASP A02 — protects API keys stored in DB)
+- [x] T121 [P] [US9] Update frontend admin navigation in `frontend/app/admin/layout.tsx` (or equivalent sidebar component) to add links to `/admin/settings`, `/admin/datasets`, `/admin/tags` alongside any existing admin nav items; use icons consistent with the existing admin UI pattern (e.g., `Cog6ToothIcon` for Settings, `FolderIcon` for Datasets, `TagIcon` for Tags)
+- [x] T122 [P] [US16] Create Google Custom Search Engine in Google Cloud Console scoped to `thenationalnews.com`: document all steps in `backend/docs/google-cse-setup.md` including CSE ID location, API key creation, site restriction configuration, and environment variable mapping (`GOOGLE_CSE_API_KEY`, `GOOGLE_CSE_ID`)
+- [x] T123 [P] Add LocalStack service to `docker-compose.yml` for local S3 emulation: add `localstack` service with `SERVICES=s3`, expose port 4566; update `backend/src/app/services/s3_service.py` to accept `AWS_ENDPOINT_URL` override (when set, routes all S3 calls to LocalStack instead of AWS); update `backend/.env.example` with `AWS_ENDPOINT_URL=http://localhost:4566` for local dev; this preserves SC-009 (no real cloud deps required for local development)
 
 ---
 

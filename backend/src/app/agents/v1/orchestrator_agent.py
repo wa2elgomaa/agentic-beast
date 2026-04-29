@@ -127,6 +127,7 @@ class OrchestratorAgent:
         from app.agents.tagging_agent import build_tagging_agent
         from app.agents.recommendation_agent import build_recommendation_agent
         from app.agents.document_agent import build_document_agent
+        from app.agents.search_agent import build_search_agent
 
         model = self._factory.get_model(settings=self._settings)
 
@@ -175,6 +176,15 @@ class OrchestratorAgent:
                 "Pass the user's exact question as input."
             ),
         )
+        search_tool = build_search_agent(model).as_tool(
+            name="search_agent",
+            description=(
+                "Use when the user wants to search thenationalnews.com for articles, topics, or authors. "
+                "Examples: 'search for Formula 1 articles', 'find articles about climate change', "
+                "'search TNN for technology news'. "
+                "Pass the user's search query as input."
+            ),
+        )
         return Agent(
             model=model,
             system_prompt=settings.orchestrator_system_prompt,
@@ -184,6 +194,7 @@ class OrchestratorAgent:
                 tagging_tool,
                 recommendation_tool,
                 document_tool,
+                search_tool,
             ],
             # Suppress default stdout printing — responses come via AgentResult.
             callback_handler=None,
@@ -194,12 +205,47 @@ class OrchestratorAgent:
     # ------------------------------------------------------------------ #
 
     async def execute(self, context: Optional[Dict[str, Any]] = None) -> OrchestratorAgentSchema:
-        """Route a user request through the orchestrator and return a structured response."""
+        """Route a user request through the orchestrator and return a structured response.
+        
+        Reads provider configuration at runtime from settings_service to support
+        dynamic model changes without application restart (Phase 2, SC-002).
+        
+        Supports tool_hint for explicit agent selection on REST endpoints (Phase 2, T110).
+        """
         if context is None:
             context = {}
         message: str = context.get("message") or ""
         history: List[Dict[str, Any]] = context.get("conversation_history") or []
-        augmented_message = self._format_history_for_prompt(history, message)
+        tool_hint: Optional[str] = context.get("tool_hint")  # Phase 2: explicit agent selection
+        source: str = context.get("source", "rest")  # "rest" or "voice"
+        
+        # Phase 2: Tool hint handling — only for REST (not voice/WebSocket)
+        if tool_hint and source != "voice":
+            logger.info(f"Tool hint received: {tool_hint} (source: {source})")
+            # Append a directive to the message to force the LLM to use only the specified tool
+            augmented_message = f"[TOOL HINT: Use the {tool_hint}_agent ONLY for this request]\n\n{self._format_history_for_prompt(history, message)}"
+        else:
+            if tool_hint and source == "voice":
+                logger.warning("Tool hint ignored for voice source; using normal LLM routing")
+            augmented_message = self._format_history_for_prompt(history, message)
+
+        # Phase 2: Load runtime settings (model provider, API key) from DB/cache
+        # This allows admins to change ORCHESTRATOR_MODEL via PUT /admin/settings
+        # without requiring an app restart
+        from app.services.settings_service import SettingsService
+        
+        settings_service = SettingsService()
+        runtime_settings = await settings_service.get_effective_provider_config()
+        
+        # If runtime settings differ from startup config, log the change (for observability)
+        if runtime_settings and runtime_settings.get("model_id") != self._settings.get("model_id"):
+            logger.info(
+                "Orchestrator using runtime model configuration",
+                configured_model=self._settings.get("model_id"),
+                runtime_model=runtime_settings.get("model_id"),
+            )
+            # Update factory to use runtime settings
+            self._factory = ProviderFactory(runtime_settings)
 
         agent = self._build_agent()
 
@@ -249,7 +295,17 @@ class OrchestratorAgent:
             context = {}
         message: str = context.get("message") or ""
         history: List[Dict[str, Any]] = context.get("conversation_history") or []
-        augmented_message = self._format_history_for_prompt(history, message)
+        tool_hint: Optional[str] = context.get("tool_hint")  # Phase 2: explicit agent selection
+        source: str = context.get("source", "rest")  # "rest" or "voice"
+        
+        # Phase 2: Tool hint handling — only for REST (not voice/WebSocket)
+        if tool_hint and source != "voice":
+            logger.info(f"Tool hint received in stream: {tool_hint}")
+            augmented_message = f"[TOOL HINT: Use the {tool_hint}_agent ONLY for this request]\n\n{self._format_history_for_prompt(history, message)}"
+        else:
+            if tool_hint and source == "voice":
+                logger.warning("Tool hint ignored for voice source in stream; using normal LLM routing")
+            augmented_message = self._format_history_for_prompt(history, message)
 
         yield {"type": "thinking"}
 

@@ -159,6 +159,77 @@ async def create_admin_user(session: AsyncSession):
         # Don't raise - this is not critical for tag loading
 
 
+async def seed_app_settings(session: AsyncSession) -> None:
+    """Seed default application settings for Phase 2 admin dashboard (SC-002).
+    
+    Creates app_settings rows for:
+    - Model provider configuration (orchestrator, agents)
+    - API keys (OpenAI, etc.) — marked as_secret
+    - Monitoring intervals
+    
+    These can be updated at runtime via PUT /admin/settings without restart.
+    """
+    from app.models.phase2 import AppSettingModel
+    from app.config import settings
+    
+    # Default settings to seed
+    default_settings = [
+        # Model configuration
+        ("ORCHESTRATOR_MODEL", settings.main_agent.get("model_id", "gpt-4"), False),
+        ("ANALYTICS_AGENT_MODEL", settings.analytics_agent.get("model_id", "gpt-4"), False),
+        ("CHAT_AGENT_MODEL", settings.chat_agent.get("model_id", "gpt-4"), False),
+        ("TAGGING_AGENT_MODEL", settings.tagging_agent.get("model_id", "gpt-4"), False),
+        ("RECOMMENDATION_AGENT_MODEL", settings.recommendation_agent.get("model_id", "gpt-4"), False),
+        ("DOCUMENT_AGENT_MODEL", settings.document_agent.get("model_id", "gpt-4"), False),
+        ("SEARCH_AGENT_MODEL", settings.search_agent.get("model_id", "gpt-4") if hasattr(settings, "search_agent") else "gpt-4", False),
+        
+        # API keys (secrets)
+        ("OPENAI_API_KEY", settings.openai_api_key or "sk-placeholder", True),
+        ("GMAIL_API_KEY", getattr(settings, "gmail_api_key", ""), True),
+        ("GOOGLE_CSE_API_KEY", settings.google_cse_api_key or "cse-api-key-placeholder", True),
+        
+        # Google Custom Search configuration
+        ("GOOGLE_CSE_ID", settings.google_cse_id or "cse-id-placeholder", False),
+        ("GOOGLE_CSE_SITE", settings.google_cse_site or "thenationalnews.com", False),
+        
+        # Monitoring & intervals
+        ("GMAIL_MONITOR_INTERVAL_SECONDS", str(settings.gmail_monitor_interval_seconds or 300), False),
+        ("CMS_WEBHOOK_RETRY_INTERVAL_SECONDS", "60", False),
+        
+        # Phase 2 defaults
+        ("GOOGLE_CSE_DAILY_LIMIT", str(settings.google_cse_daily_limit or 100), False),
+        ("CMS_SCRAPE_BATCH_SIZE", str(settings.cms_scrape_batch_size or 50), False),
+    ]
+    
+    try:
+        for key, value, is_secret in default_settings:
+            # Skip if setting already exists
+            stmt = select(AppSettingModel).where(AppSettingModel.key == key)
+            result = await session.execute(stmt)
+            existing = result.scalar_one_or_none()
+            
+            if existing:
+                logger.info(f"Settings key already exists, skipping: {key}")
+                continue
+            
+            # Create new setting (will be encrypted if is_secret)
+            setting = AppSettingModel(
+                key=key,
+                value=value,
+                is_secret=is_secret,
+            )
+            session.add(setting)
+            logger.info(f"Seeded setting: {key} (is_secret={is_secret})")
+        
+        await session.commit()
+        logger.info("App settings seeding completed successfully")
+        
+    except Exception as exc:
+        await session.rollback()
+        logger.error(f"Error seeding app settings: {str(exc)}")
+        # Don't raise - continue with other seeding
+
+
 async def main():
     """Main seed data function."""
     logger.info("Starting seed data population")
@@ -179,6 +250,7 @@ async def main():
             # Create sample data
             await create_sample_tags(session, embedding_service)
             await create_admin_user(session)
+            await seed_app_settings(session)  # Phase 2: Seed admin settings
         
         await engine.dispose()
         logger.info("Seed data population completed successfully")

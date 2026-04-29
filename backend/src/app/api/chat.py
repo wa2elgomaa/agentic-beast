@@ -104,6 +104,7 @@ async def chat(
                 message_content=(request.message or ""),
                 conversation_id=request.conversation_id,
                 user_id=current_user.id,
+                tool_hint=request.tool_hint,
             )
 
         # Format response

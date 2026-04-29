@@ -256,6 +256,29 @@ class Settings(BaseSettings):
     aws_access_key_id: str = Field(default="")
     aws_secret_access_key: str = Field(default="")
 
+    # AWS S3 Configuration (Phase 2)
+    aws_s3_bucket: str = Field(default="agentic-beast-documents")
+    aws_s3_region: str = Field(default="us-east-1")
+    aws_endpoint_url: str = Field(default="")  # Override for LocalStack or other S3-compatible services
+    
+    # Webhook Configuration (Phase 2)
+    webhook_secret: str = Field(default="change-me-in-production")  # HMAC secret for webhook signature verification
+
+    # Google Custom Search Configuration (Phase 2)
+    google_cse_api_key: str = Field(default="")
+    google_cse_id: str = Field(default="")
+    google_cse_site: str = Field(default="thenationalnews.com")
+    google_cse_daily_limit: int = Field(default=100)
+
+    # CMS Article Scraper Configuration (Phase 2)
+    cms_scrape_batch_size: int = Field(default=50)
+    cms_scrape_concurrency: int = Field(default=5)
+    cms_articles_endpoint: str = Field(default="/articles?page={page}&per_page={per_page}")
+
+    # Settings Encryption (Phase 2)
+    settings_encryption_key: str = Field(default="")  # Fernet key for encrypting secret settings; generate via Fernet.generate_key()
+    settings_cache_ttl_seconds: int = Field(default=60)
+
     # Embedding Service Configuration
     embedding_model: str = Field(default="all-MiniLM-L6-v2")
     embedding_batch_size: int = Field(default=32)

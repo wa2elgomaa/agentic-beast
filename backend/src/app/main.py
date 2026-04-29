@@ -349,7 +349,7 @@ def create_app() -> FastAPI:
         return get_metrics()
 
     # Register API routers
-    from app.api import admin_ingestion, auth, chat, chat_stream, documents, ingestion, users, webhooks
+    from app.api import admin_ingestion, articles_scraper, auth, chat, chat_stream, datasets, documents, documents_s3, ingestion, settings as settings_api, tags, users, webhooks, webhooks_phase2
     app.include_router(auth.router, prefix="/api/v1", tags=["auth"])
     app.include_router(chat.router, prefix="/api/v1", tags=["chat"])
     app.include_router(chat_stream.router, prefix="/api/v1", tags=["chat-stream"])
@@ -357,7 +357,13 @@ def create_app() -> FastAPI:
     app.include_router(users.router, prefix="/api/v1", tags=["auth"])
     app.include_router(admin_ingestion.router, prefix="/api/v1", tags=["admin-ingestion"])
     app.include_router(webhooks.router, tags=["webhooks"])
+    app.include_router(webhooks_phase2.router, tags=["webhooks-phase2"])  # Phase 2 CMS webhooks
     app.include_router(documents.router, prefix="/api/v1", tags=["documents"])
+    app.include_router(documents_s3.router, prefix="/api/v1/documents", tags=["documents-s3"])  # Phase 2 S3 upload pipeline
+    app.include_router(settings_api.router, prefix="/api/v1", tags=["settings"])  # Phase 2 admin settings
+    app.include_router(tags.router, prefix="/api/v1", tags=["tags"])  # Phase 2 tags CRUD
+    app.include_router(articles_scraper.router, prefix="/api/v1", tags=["articles-scraper"])  # Phase 2 article scraper
+    app.include_router(datasets.router, prefix="/api/v1", tags=["datasets"])  # Dataset management
 
     logger.info("FastAPI application created successfully")
     return app

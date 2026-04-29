@@ -6,11 +6,12 @@ import AudioCanvas from './AudioCanvas'
 import AudioPlaybackBar from './AudioPlaybackBar'
 import ChatMessage from './ChatMessage'
 import MessageInput, { AudioModeState, VoiceCapturePayload } from './MessageInput'
-import WelcomeScreen from './WelcomeScreen'
+import ToolSelector, { ToolType } from './ToolSelector'
 import { getAccessToken } from '@/lib/api'
 import useAudioPlayer from '@/hooks/useAudioPlayer'
 import { useChatStream } from '@/hooks/useChatStream'
 import clsx from 'clsx'
+import WelcomeScreen from './WelcomeScreen'
 
 type VoiceState = 'loading' | 'listening' | 'processing' | 'speaking'
 
@@ -354,7 +355,7 @@ export default function ChatArea({
     chatStream.sendAudio(audioBase64, currentConversationId)
   }, [currentConversationId, isLoading, pauseListening, onAddMessage, chatStream])
 
-  const handleSendMessage = async (content: string) => {
+  const handleSendMessage = async (content: string, toolHint?: ToolType) => {
     if (!content.trim() || isLoading) return
 
     // Add user message and get the conversation ID
@@ -390,7 +391,8 @@ export default function ChatArea({
     lastUserInputRef.current = content
 
     // Send via WebSocket streaming — chatStream callbacks handle all updates
-    chatStream.sendMessage(content, resolvedConversationId)
+    // Phase 2: Pass tool_hint for explicit agent selection
+    chatStream.sendMessage(content, resolvedConversationId, toolHint)
   }
 
   const handleSuggestionClick = async (suggestion: QuerySuggestion) => {

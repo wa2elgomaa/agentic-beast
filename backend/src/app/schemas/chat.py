@@ -28,6 +28,13 @@ class ChatRequest(BaseModel):
     )
     media_duration_ms: Optional[int] = Field(None, ge=0)
     conversation_id: Optional[UUID] = Field(None, description="Existing conversation ID")
+    # Phase 2: Tool hint for explicit agent selection (ignored for voice/WebSocket)
+    tool_hint: Optional[Literal["search", "documents", "analytics", "tags", "recommendation"]] = Field(
+        None,
+        description="Optional tool hint to explicitly route to a specific agent. "
+        "Only honoured on REST /chat endpoint; ignored for WebSocket voice (/ws/voice). "
+        "Valid values: search, documents, analytics, tags, recommendation",
+    )
 
     @model_validator(mode="after")
     def validate_payload(self) -> "ChatRequest":

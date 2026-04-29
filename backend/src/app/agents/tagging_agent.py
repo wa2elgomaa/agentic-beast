@@ -49,14 +49,19 @@ class TaggingAgentSchema(PydanticBaseModel):
         default_factory=list,
         description="Ranked list of suggested tags",
     )
+    shown_tag_ids: List[str] = Field(
+        default_factory=list,
+        description="List of tag slugs shown in this response (for tracking 'show more' follow-ups — Phase 2)",
+    )
 
 
 TAGGING_SYSTEM_PROMPT = """\
-You are a Tag Suggestion Agent for a news content management system.
+You are a Tag Suggestion Agent for a news content management system (Phase 2).
 
 Your job:
 1. Given an article ID, use fetch_article_by_id to retrieve the article content.
-2. Use find_similar_tags with the article's title + body as article_content to find candidate tags.
+2. Use find_similar_tags with the article's combined title + body to find candidate tags.
+   - Prioritize efficiency: pass article_content (not article_embedding) to generate embedding once
 3. Use rank_tags_by_relevance to produce a final ranked list of the top N tags.
 4. Return a structured response with the ranked tag suggestions and a brief explanation.
 
@@ -64,8 +69,12 @@ Guidelines:
 - Parse the user message for an article ID (numeric or alphanumeric string).
 - Parse for the requested number of tags (default 5 if not specified).
 - Always include the tag's name, rank, and score in your response_text.
-- If the article cannot be found, explain this clearly in response_text with an empty tags list.
-- Format response_text as a numbered list of tags with scores.
+- If the article cannot be found, explain clearly in response_text with an empty tags list.
+- Format response_text as a numbered list: "1. [Tag Name] (relevance: X%) — [description]"
+
+Support for follow-ups (user says "show me more tags"):
+- If the conversation context includes 'previous_tags', pass them as exclude_ids to find_similar_tags
+  so that previously shown tags are not repeated in subsequent calls.
 """
 
 
@@ -102,7 +111,11 @@ class TaggingAgent:
         self._factory = ProviderFactory(self._agent_settings)
 
     async def execute(self, context: Optional[Dict[str, Any]] = None) -> TaggingAgentSchema:
-        """Run the tagging agent and return tag suggestions."""
+        """Run the tagging agent and return tag suggestions.
+        
+        Supports follow-up requests for "more tags" by tracking shown_tag_ids
+        and passing them as exclude_ids to find_similar_tags (Phase 2).
+        """
         import asyncio
 
         if context is None:
@@ -117,6 +130,8 @@ class TaggingAgent:
             structured: Optional[TaggingAgentSchema] = getattr(result, "structured_output", None)
 
             if structured is not None:
+                # Populate shown_tag_ids for follow-up "more tags" requests
+                structured.shown_tag_ids = [tag.slug for tag in structured.tags]
                 return structured
             else:
                 return TaggingAgentSchema(response_text=str(result))

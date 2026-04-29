@@ -50,6 +50,40 @@ CHAT_MESSAGES = Counter(
     ["agent_type"]
 )
 
+# ── Phase 2 metrics (T115) ──────────────────────────────────────────────────
+
+SEARCH_REQUESTS_TOTAL = Counter(
+    "search_requests_total",
+    "Total Google CSE search requests",
+    ["status"],  # success | quota_exceeded | error
+)
+
+ARTICLE_VECTORS_COUNT = Counter(
+    "article_vectors_count",
+    "Total article_vectors rows written (cumulative ingestion count)",
+)
+
+TAG_VECTORS_COUNT = Counter(
+    "tag_vectors_count",
+    "Total tag embedding operations performed",
+)
+
+WEBHOOK_EVENTS_TOTAL = Counter(
+    "webhook_events_total",
+    "Total webhook events received",
+    ["source", "event_type"],
+)
+
+SETTINGS_CACHE_HIT_RATIO = Counter(
+    "settings_cache_hits_total",
+    "Total settings lookups served from Redis cache (use with settings_cache_misses_total for ratio)",
+)
+
+SETTINGS_CACHE_MISS_TOTAL = Counter(
+    "settings_cache_misses_total",
+    "Total settings lookups that missed Redis cache and hit the database",
+)
+
 
 class PrometheusMiddleware(BaseHTTPMiddleware):
     """Middleware to collect Prometheus metrics."""

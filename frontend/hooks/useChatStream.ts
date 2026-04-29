@@ -19,7 +19,7 @@ interface UseChatStreamOptions {
 
 interface UseChatStreamResult {
   state: ChatStreamState
-  sendMessage: (message: string, conversationId?: string | null) => boolean
+  sendMessage: (message: string, conversationId?: string | null, toolHint?: string | null) => boolean
   sendAudio: (audioBase64: string, conversationId?: string | null) => boolean
   disconnect: () => void
 }
@@ -175,7 +175,7 @@ export function useChatStream({
   )
 
   const sendMessage = useCallback(
-    (message: string, targetConversationId?: string | null): boolean => {
+    (message: string, targetConversationId?: string | null, toolHint?: string | null): boolean => {
       const resolvedId = targetConversationId ?? conversationId
 
       ensureConnected(resolvedId)
@@ -185,6 +185,7 @@ export function useChatStream({
               type: 'text',
               message,
               conversation_id: resolvedId ?? undefined,
+              tool_hint: toolHint ?? undefined,
             })
           )
         })
