@@ -128,25 +128,25 @@ services:
   #   depends_on:
   #     - prometheus
 
-  ollama:
-    image: ollama/ollama:latest
-    container_name: beast-ollama
-    environment:
-      OLLAMA_NUM_CTX: "4096"
-      OLLAMA_MAX_LOADED_MODELS: "2"
-      OLLAMA_NUM_PARALLEL: "2"
-      OLLAMA_KEEP_ALIVE: "-1"
-    ports:
-      - "${OLLAMA_PORT:-11434}:11434"
-    volumes:
-      - ollama_data:/root/.ollama
-    entrypoint: /bin/sh
-    command:
-      - "-c"
-      - "/bin/ollama serve & sleep 10 && ollama pull $$OLLAMA_MODEL && ollama pull $$OLLAMA_EMBEDDING_MODEL && wait"
-    networks:
-      - beast-network
-    restart: unless-stopped
+  # ollama:
+  #   image: ollama/ollama:latest
+  #   container_name: beast-ollama
+  #   environment:
+  #     OLLAMA_NUM_CTX: "4096"
+  #     OLLAMA_MAX_LOADED_MODELS: "2"
+  #     OLLAMA_NUM_PARALLEL: "2"
+  #     OLLAMA_KEEP_ALIVE: "-1"
+  #   ports:
+  #     - "${OLLAMA_PORT:-11434}:11434"
+  #   volumes:
+  #     - ollama_data:/root/.ollama
+  #   entrypoint: /bin/sh
+  #   command:
+  #     - "-c"
+  #     - "/bin/ollama serve & sleep 10 && ollama pull $$OLLAMA_MODEL && ollama pull $$OLLAMA_EMBEDDING_MODEL && wait"
+  #   networks:
+  #     - beast-network
+  #   restart: unless-stopped
 
   model-downloader:
     build:
@@ -159,7 +159,7 @@ services:
     volumes:
       - models_data:/models
     command: >-
-      huggingface-cli download
+      hf download
       litert-community/gemma-4-E2B-it-litert-lm
       gemma-4-E2B-it.litertlm
       --local-dir /models
@@ -198,8 +198,8 @@ services:
         condition: service_started
       mongodb:
         condition: service_started
-      ollama:
-        condition: service_started
+      # ollama:
+      #   condition: service_started
       model-downloader:
         condition: service_completed_successfully
     networks:
@@ -234,8 +234,8 @@ services:
         condition: service_started
       mongodb:
         condition: service_started
-      ollama:
-        condition: service_started
+      # ollama:
+      #   condition: service_started
       model-downloader:
         condition: service_completed_successfully
     networks:
@@ -273,8 +273,8 @@ services:
         condition: service_started
       mongodb:
         condition: service_started
-      ollama:
-        condition: service_started
+      # ollama:
+      #   condition: service_started
       model-downloader:
         condition: service_completed_successfully
     networks:
