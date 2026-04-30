@@ -1,13 +1,13 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Message, OrchestratorResponse, QuerySuggestion } from '@/types'
+import { AnalyticsResultDataItem, Message, OrchestratorResponse, QuerySuggestion } from '@/types'
 import AudioCanvas from './AudioCanvas'
 import AudioPlaybackBar from './AudioPlaybackBar'
 import ChatMessage from './ChatMessage'
 import MessageInput, { AudioModeState, VoiceCapturePayload } from './MessageInput'
 import WelcomeScreen from './WelcomeScreen'
-import { getAccessToken } from '@/lib/api'
+import { chat, getAccessToken } from '@/lib/api'
 import useAudioPlayer from '@/hooks/useAudioPlayer'
 import { useChatStream } from '@/hooks/useChatStream'
 import clsx from 'clsx'
@@ -91,7 +91,7 @@ export default function ChatArea({
       const id = streamingAssistantIdRef.current
       if (!id) return
       // For audio turns don't clear refs yet — wait for audio_end
-      const results = data?.results ?? []
+      const results : AnalyticsResultDataItem[] = data?.results ?? []
       const operation = results.length > 0 ? 'query_documents' : undefined
       const operationData = { answer: data?.response_text, results, conversation_id: data?.conversation_id }
       onUpdateMessage(id, {

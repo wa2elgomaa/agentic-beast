@@ -35,7 +35,7 @@ export interface ChatStreamEvent {
     text?: string
     index?: number
     response_text?: string
-    results?: Record<string, any>[]
+    results?: AnalyticsResultDataItem[]
     operation?: string
     conversation_id?: string
     sample_rate?: number
