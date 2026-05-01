@@ -1,0 +1,29 @@
+name: Clone Staging Branch on Push
+
+on:
+  push:
+    branches:
+      - staging
+
+jobs:
+  clone-staging:
+    name: Clone staging on beast-vm
+    runs-on:
+      - self-hosted
+      - Linux
+      - X64
+      - beast-vm
+
+    steps:
+      - name: Checkout staging branch
+        uses: actions/checkout@v4
+        with:
+          ref: staging
+          fetch-depth: 0
+
+      - name: Verify clone
+        run: |
+          echo "✅ Runner:        $RUNNER_NAME"
+          echo "✅ Branch:        $(git branch --show-current)"
+          echo "✅ Latest commit: $(git log -1 --oneline)"
+          echo "✅ Triggered by:  ${{ github.actor }}"
