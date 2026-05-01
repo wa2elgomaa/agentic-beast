@@ -15,11 +15,11 @@ jobs:
       - beast-vm
 
     steps:
-      - name: Checkout staging branch
+      - name: Checkout devops branch
         uses: actions/checkout@v4
         with:
           ref: devops
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Verify clone
         run: |
@@ -27,3 +27,14 @@ jobs:
           echo "✅ Branch:        $(git branch --show-current)"
           echo "✅ Latest commit: $(git log -1 --oneline)"
           echo "✅ Triggered by:  ${{ github.actor }}"
+
+      - name: Deploy with Docker Compose
+        run: |
+          echo "==> Tearing down existing containers..."
+          docker compose down --remove-orphans || true
+          echo "==> Building images..."
+          docker compose build --no-cache
+          echo "==> Starting containers in background..."
+          docker compose up -d
+          echo "==> Active containers:"
+          docker compose ps
