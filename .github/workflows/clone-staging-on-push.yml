@@ -32,9 +32,19 @@ jobs:
         run: |
           echo "==> Tearing down existing containers..."
           docker compose down --remove-orphans || true
+
+          echo "==> Copying .env files..."
+          cp -apf /home/broadcast/beast/agentic-beast/backend/.env backend/.env
+          cp -apf /home/broadcast/beast/agentic-beast/backend/.env ./.env
+
+          echo "==> Verifying key vars are loaded:"
+          grep -E "POSTGRES_DB|ENVIRONMENT" .env || echo "⚠️  vars not found in .env — check source file"
+
           echo "==> Building images..."
-          docker compose build --no-cache
+          docker compose --env-file .env build --no-cache
+
           echo "==> Starting containers in background..."
-          docker compose up -d
+          docker compose --env-file .env up -d
+
           echo "==> Active containers:"
           docker compose ps
