@@ -149,21 +149,16 @@ services:
   #   restart: unless-stopped
 
   model-downloader:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    image: python:3.11-slim
     container_name: beast-model-downloader
     environment:
       HF_TOKEN: ${HF_TOKEN}
       HUGGING_FACE_HUB_TOKEN: ${HF_TOKEN}
     volumes:
       - models_data:/models
+      - ./backend/scripts/download_model.py:/app/download_model.py
     command: >-
-      hf download
-      litert-community/gemma-4-E2B-it-litert-lm
-      gemma-4-E2B-it.litertlm
-      --local-dir /models
-      --token ${HF_TOKEN}
+      /bin/sh -c "pip install --no-cache-dir huggingface-hub && python /app/download_model.py"
     networks:
       - beast-network
     restart: "no"
