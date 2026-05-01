@@ -3,7 +3,7 @@ name: Clone Staging Branch on Push
 on:
   push:
     branches:
-      - devops
+      - staging
 
 jobs:
   clone-staging:
@@ -18,7 +18,7 @@ jobs:
       - name: Checkout devops branch
         uses: actions/checkout@v4
         with:
-          ref: devops
+          ref: staging
           fetch-depth: 1
 
       - name: Verify clone
