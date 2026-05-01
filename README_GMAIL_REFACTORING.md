@@ -1,4 +1,4 @@
-# Gmail Ingestion Refactoring - Complete Documentation Package
+## Gmail Ingestion Refactoring - Complete Documentation Package
 
 ## What You Have
 
