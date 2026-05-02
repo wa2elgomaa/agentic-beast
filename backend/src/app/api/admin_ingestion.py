@@ -659,13 +659,31 @@ async def get_schema_mapping(
     _admin: Annotated[User, Depends(get_current_admin)] = None,
     db: Annotated[AsyncSession, Depends(get_db_session)] = None,
 ) -> Optional[TaskSchemaMappingResponse]:
-    """Get task's schema mapping. Returns null if none configured yet."""
+    """Get task's schema mapping. Returns null if none configured yet.
+    
+    Excludes internal fields from field_mappings: sheet_name, row_number, received_at.
+    """
     try:
         schema_service = get_schema_mapping_service(db)
         mapping = await schema_service.get_task_mapping(task_id)
         if not mapping:
             return None
-        return TaskSchemaMappingResponse.model_validate(mapping)
+        
+        # Convert to dict, filter excluded fields, then convert back
+        response = TaskSchemaMappingResponse.model_validate(mapping)
+        
+        # Fields to exclude from UI schema mapping
+        excluded_fields = {"sheet_name", "row_number", "received_at"}
+        
+        # Filter field_mappings to exclude internal fields
+        filtered_mappings = {
+            source: target
+            for source, target in response.field_mappings.items()
+            if target not in excluded_fields
+        }
+        response.field_mappings = filtered_mappings
+        
+        return response
     except HTTPException:
         raise
     except Exception as e:
@@ -680,13 +698,27 @@ async def save_schema_mapping(
     _admin: Annotated[User, Depends(get_current_admin)] = None,
     db: Annotated[AsyncSession, Depends(get_db_session)] = None,
 ) -> TaskSchemaMappingResponse:
-    """Save/update task schema mapping."""
+    """Save/update task schema mapping.
+    
+    Automatically filters out internal fields: sheet_name, row_number, received_at.
+    """
     try:
         schema_service = get_schema_mapping_service(db)
+        
+        # Fields to exclude from UI schema mapping
+        excluded_fields = {"sheet_name", "row_number", "received_at"}
+        
+        # Filter field_mappings to exclude internal fields
+        filtered_mappings = {
+            source: target
+            for source, target in req.field_mappings.items()
+            if target not in excluded_fields
+        }
+        
         mapping = await schema_service.save_task_mapping(
             task_id,
             req.source_columns,
-            req.field_mappings,
+            filtered_mappings,
             req.template_id,
             req.identifier_column,
             req.connection_strategy_identifier_column,
@@ -694,8 +726,13 @@ async def save_schema_mapping(
         )
         await db.commit()
         await db.refresh(mapping)
-        return TaskSchemaMappingResponse.model_validate(mapping)
+        
+        # Return filtered response
+        response = TaskSchemaMappingResponse.model_validate(mapping)
+        response.field_mappings = filtered_mappings
+        return response
     except Exception as e:
+        await db.rollback()
         logger.error("Failed to save schema mapping", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -707,14 +744,31 @@ async def save_as_template(
     _admin: Annotated[User, Depends(get_current_admin)] = None,
     db: Annotated[AsyncSession, Depends(get_db_session)] = None,
 ) -> SchemaMappingTemplateResponse:
-    """Promote task mapping to a reusable template."""
+    """Promote task mapping to a reusable template.
+    
+    Automatically filters out internal fields: sheet_name, row_number, received_at.
+    """
     try:
         schema_service = get_schema_mapping_service(db)
         template = await schema_service.save_as_template(task_id, req.name, req.description, _admin.id)
         await db.commit()
         await db.refresh(template)
-        return SchemaMappingTemplateResponse.model_validate(template)
+        
+        response = SchemaMappingTemplateResponse.model_validate(template)
+        
+        # Fields to exclude from UI schema mapping
+        excluded_fields = {"sheet_name", "row_number", "received_at"}
+        
+        # Filter field_mappings to exclude internal fields
+        response.field_mappings = {
+            source: target
+            for source, target in response.field_mappings.items()
+            if target not in excluded_fields
+        }
+        
+        return response
     except Exception as e:
+        await db.rollback()
         logger.error("Failed to save as template", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -726,11 +780,28 @@ async def list_templates(
     _admin: Annotated[User, Depends(get_current_admin)] = None,
     db: Annotated[AsyncSession, Depends(get_db_session)] = None,
 ) -> list[SchemaMappingTemplateResponse]:
-    """List schema mapping templates."""
+    """List schema mapping templates.
+    
+    Excludes internal fields from field_mappings: sheet_name, row_number, received_at.
+    """
     try:
         schema_service = get_schema_mapping_service(db)
         templates, _total = await schema_service.list_templates(limit, offset)
-        return [SchemaMappingTemplateResponse.model_validate(t) for t in templates]
+        
+        # Fields to exclude from UI schema mapping
+        excluded_fields = {"sheet_name", "row_number", "received_at"}
+        
+        responses = []
+        for t in templates:
+            response = SchemaMappingTemplateResponse.model_validate(t)
+            # Filter field_mappings to exclude internal fields
+            response.field_mappings = {
+                source: target
+                for source, target in response.field_mappings.items()
+                if target not in excluded_fields
+            }
+            responses.append(response)
+        return responses
     except Exception as e:
         logger.error("Failed to list templates", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
@@ -742,19 +813,38 @@ async def create_template(
     _admin: Annotated[User, Depends(get_current_admin)] = None,
     db: Annotated[AsyncSession, Depends(get_db_session)] = None,
 ) -> SchemaMappingTemplateResponse:
-    """Create a new schema mapping template."""
+    """Create a new schema mapping template.
+    
+    Automatically filters out internal fields: sheet_name, row_number, received_at.
+    """
     try:
         schema_service = get_schema_mapping_service(db)
+        
+        # Fields to exclude from UI schema mapping
+        excluded_fields = {"sheet_name", "row_number", "received_at"}
+        
+        # Filter field_mappings to exclude internal fields
+        filtered_mappings = {
+            source: target
+            for source, target in req.field_mappings.items()
+            if target not in excluded_fields
+        }
+        
         template = await schema_service.create_template(
             req.name,
             req.description,
             req.source_columns,
-            req.field_mappings,
+            filtered_mappings,
             _admin.id,
         )
         await db.commit()
-        return SchemaMappingTemplateResponse.model_validate(template)
+        
+        # Return filtered response
+        response = SchemaMappingTemplateResponse.model_validate(template)
+        response.field_mappings = filtered_mappings
+        return response
     except Exception as e:
+        await db.rollback()
         logger.error("Failed to create template", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -765,13 +855,29 @@ async def get_template(
     _admin: Annotated[User, Depends(get_current_admin)] = None,
     db: Annotated[AsyncSession, Depends(get_db_session)] = None,
 ) -> SchemaMappingTemplateResponse:
-    """Get a schema template."""
+    """Get a schema template.
+    
+    Excludes internal fields from field_mappings: sheet_name, row_number, received_at.
+    """
     try:
         schema_service = get_schema_mapping_service(db)
         template = await schema_service.get_template(template_id)
         if not template:
             raise HTTPException(status_code=404, detail="Template not found")
-        return SchemaMappingTemplateResponse.model_validate(template)
+        
+        response = SchemaMappingTemplateResponse.model_validate(template)
+        
+        # Fields to exclude from UI schema mapping
+        excluded_fields = {"sheet_name", "row_number", "received_at"}
+        
+        # Filter field_mappings to exclude internal fields
+        response.field_mappings = {
+            source: target
+            for source, target in response.field_mappings.items()
+            if target not in excluded_fields
+        }
+        
+        return response
     except HTTPException:
         raise
     except Exception as e:
@@ -786,19 +892,38 @@ async def update_template(
     _admin: Annotated[User, Depends(get_current_admin)] = None,
     db: Annotated[AsyncSession, Depends(get_db_session)] = None,
 ) -> SchemaMappingTemplateResponse:
-    """Update a schema template."""
+    """Update a schema template.
+    
+    Automatically filters out internal fields: sheet_name, row_number, received_at.
+    """
     try:
         schema_service = get_schema_mapping_service(db)
+        
+        # Fields to exclude from UI schema mapping
+        excluded_fields = {"sheet_name", "row_number", "received_at"}
+        
+        # Filter field_mappings to exclude internal fields
+        filtered_mappings = {
+            source: target
+            for source, target in req.field_mappings.items()
+            if target not in excluded_fields
+        }
+        
         template = await schema_service.update_template(
             template_id,
             req.name,
             req.description,
             req.source_columns,
-            req.field_mappings,
+            filtered_mappings,
         )
         await db.commit()
-        return SchemaMappingTemplateResponse.model_validate(template)
+        
+        # Return filtered response
+        response = SchemaMappingTemplateResponse.model_validate(template)
+        response.field_mappings = filtered_mappings
+        return response
     except Exception as e:
+        await db.rollback()
         logger.error("Failed to update template", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
 

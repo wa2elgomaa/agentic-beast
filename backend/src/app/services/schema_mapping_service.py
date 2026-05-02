@@ -115,16 +115,21 @@ class SchemaMappingService:
     @staticmethod
     def auto_map_columns(source_columns: List[str]) -> Tuple[Dict[str, str], List[str]]:
         """Auto-map source columns to Document fields using alias table.
+        
+        Excludes internal fields from mapping: sheet_name, row_number, received_at.
 
         Args:
             source_columns: List of source column names.
 
         Returns:
             Tuple of (mapped_dict, unmatched_columns)
-            - mapped_dict: {source: target_field}
+            - mapped_dict: {source: target_field} (excluding internal fields)
             - unmatched_columns: list of columns that couldn't be auto-mapped
         """
         logger.info("Auto-mapping columns", count=len(source_columns))
+        
+        # Internal fields excluded from UI schema mapping
+        excluded_fields = {"sheet_name", "row_number", "received_at"}
 
         mapped = {}
         unmatched = []
@@ -135,8 +140,12 @@ class SchemaMappingService:
             # Try direct match in alias table
             if source_normalized in ALIAS_TABLE:
                 target = ALIAS_TABLE[source_normalized]
-                mapped[source_col] = target
-                logger.info(f"Column auto-mapped", source=source_col, target=target)
+                # Skip internal fields
+                if target not in excluded_fields:
+                    mapped[source_col] = target
+                    logger.info(f"Column auto-mapped", source=source_col, target=target)
+                else:
+                    logger.debug(f"Column skipped (internal field)", source=source_col, target=target)
             else:
                 # Try substring matching
                 best_match = None
@@ -146,8 +155,12 @@ class SchemaMappingService:
                         break
 
                 if best_match:
-                    mapped[source_col] = best_match
-                    logger.info(f"Column fuzzy-mapped", source=source_col, target=best_match)
+                    # Skip internal fields
+                    if best_match not in excluded_fields:
+                        mapped[source_col] = best_match
+                        logger.info(f"Column fuzzy-mapped", source=source_col, target=best_match)
+                    else:
+                        logger.debug(f"Column skipped (internal field)", source=source_col, target=best_match)
                 else:
                     unmatched.append(source_col)
                     logger.info(f"Column unmatched", source=source_col)
@@ -426,10 +439,10 @@ class SchemaMappingService:
             result = await self.db.execute(stmt)
             mapping = result.scalar_one_or_none()
 
-            if mapping:
-                logger.info("Task mapping retrieved", task_id=task_id)
-            else:
-                logger.warning("Task mapping not found", task_id=task_id)
+            # if mapping:
+            #     logger.info("Task mapping retrieved", task_id=task_id)
+            # else:
+            #     logger.warning("Task mapping not found", task_id=task_id)
 
             return mapping
 

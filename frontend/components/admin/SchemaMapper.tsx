@@ -14,12 +14,12 @@ interface SchemaMappperProps {
 }
 
 const DB_TARGET_FIELDS = [
-  'sheet_name',
-  'row_number',
+  // 'sheet_name',
+  // 'row_number',
   'platform',
   'published_date',
   'published_time',
-  'received_at',
+  // 'received_at',
   'reported_time',
   'profile_name',
   'profile_url',

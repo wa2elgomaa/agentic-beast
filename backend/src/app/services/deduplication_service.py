@@ -20,7 +20,14 @@ logger = logging.getLogger(__name__)
 
 
 class DeduplicationService:
-    """Service for managing deduplication tracking and delta calculations."""
+    """Service for managing deduplication tracking and delta calculations.
+    
+    Deduplication works by:
+    1. Generating a beast_uuid hash from the row's identifier (content_id, profile_id, etc.)
+    2. Tracking first occurrence of each uuid in ingestion_deduplication table
+    3. For subsequent imports, detecting duplicates and applying dedup strategy
+    4. Recording dedup actions (first_occurrence, inserted_delta, skipped) per row
+    """
     
     def __init__(self, db: AsyncSession, task_id: UUID):
         """Initialize deduplication service.

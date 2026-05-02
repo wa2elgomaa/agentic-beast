@@ -1,11 +1,13 @@
 """Service for orchestrating data ingestion pipeline."""
 
+from collections.abc import Sequence
 import hashlib
 import json
 import uuid
 from datetime import date, datetime, time, timezone
 from uuid import UUID
 
+from app.schemas.ingestion_task import TaskSchemaMapping
 import httpx
 from sqlalchemy import and_, insert, select, update
 from sqlalchemy.exc import IntegrityError
@@ -98,10 +100,39 @@ class IngestionService:
         return source_key.split("::dup::", 1)[0]
 
     @staticmethod
+    def _resolve_source_to_doc_field(source_col: str, field_mappings: dict) -> str | None:
+        """Resolve a source/spreadsheet column name to its mapped document ORM field name.
+
+        The UI stores identifier_column as a raw spreadsheet header (e.g. "Content Post Id").
+        _upsert_document receives a document_row built with ORM field names (e.g. "content_id").
+        This method translates between the two so the identifier lookup finds the right value.
+
+        Returns the ORM field name if found in field_mappings, otherwise None.
+        """
+        for source_key, target in (field_mappings or {}).items():
+            actual_source = source_key.split("::dup::", 1)[0]
+            if actual_source == source_col:
+                if isinstance(target, str):
+                    return target
+                if isinstance(target, dict):
+                    return target.get("target")
+        return None
+
+    @staticmethod
     def _coerce_document_value(field_name: str, value):
         """Normalize raw values before persisting to Document columns."""
         if isinstance(value, datetime) and field_name in {"published_date", "received_at"}:
             return value.date()
+        # Coerce CSV boolean strings (TRUE/FALSE/"") for Boolean columns.
+        # asyncpg rejects empty string '' for Boolean; convert to None.
+        _BOOL_COLS = {"unpublished", "is_current"}
+        if field_name in _BOOL_COLS and isinstance(value, str):
+            upper = value.strip().upper()
+            if upper in ("TRUE", "1", "YES"):
+                return True
+            if upper in ("FALSE", "0", "NO"):
+                return False
+            return None  # empty string → NULL (nullable Boolean)
         return value
 
     @staticmethod
@@ -149,6 +180,18 @@ class IngestionService:
 
         return None
 
+    async def _get_dedup_config(self, task_id: str | UUID | None) -> TaskSchemaMapping | None:
+        """Load dedup_config from the task schema mapping for the given task_id."""
+        if not task_id:
+            return None
+        try:
+            schema_service = SchemaMappingService(self.db)
+            task_mapping = await schema_service.get_task_mapping(str(task_id))
+            return task_mapping
+        except Exception as e:
+            logger.warning("Could not load dedup_config for task", task_id=str(task_id), error=str(e))
+            return None
+
     @staticmethod
     def _configured_metric_columns(dedup_config: dict | None) -> list[str]:
         """Return metric columns configured by schema mapping (is_metric=true)."""
@@ -178,11 +221,27 @@ class IngestionService:
         }
 
     def _normalize_numeric_nulls(self, data: dict, target_columns: list[str] | set[str] | None = None) -> None:
-        """Convert null numeric values to zero for target columns present in data."""
+        """Coerce numeric columns to Python numbers.
+
+        Handles three cases that arise when CSV/spreadsheet data flows through
+        the pipeline without type conversion:
+        - None / empty string  → 0
+        - Numeric string '1008' / '13.06%' → float/int  (CSV rows arrive as str)
+        - Already a number    → left unchanged
+        """
         columns = set(target_columns) if target_columns is not None else self._document_numeric_column_names()
         for field in columns:
-            if field in data and data[field] is None:
+            if field not in data:
+                continue
+            val = data[field]
+            if val is None or val == "":
                 data[field] = 0
+            elif isinstance(val, str):
+                try:
+                    cleaned = val.strip().rstrip("%")
+                    data[field] = float(cleaned) if cleaned else 0
+                except (ValueError, TypeError):
+                    data[field] = 0
 
     @staticmethod
     def _metric_fingerprint(row_data: dict, metric_columns: list[str] | set[str] | None = None) -> str:
@@ -392,6 +451,8 @@ class IngestionService:
                 "rows_failed": insert_stmt.excluded.rows_failed,
                 "is_success": insert_stmt.excluded.is_success,
                 "is_retryable": insert_stmt.excluded.is_retryable,
+                # Preserve sent_at from the email headers when retrying.
+                "sent_at": insert_stmt.excluded.sent_at,
                 "processed_at": func.now(),
             },
         )
@@ -520,16 +581,45 @@ class IngestionService:
             )
             raise
 
-    async def ingest_from_gmail(self, identifier_column: str | None = None) -> IngestResult:
+    async def ingest_from_gmail(self, task_id: str | None = None, identifier_column: str | None = None) -> IngestResult:
         """Fetch and ingest data from Gmail attachments.
 
         Args:
-            identifier_column: Optional column name for cross-platform deduplication.
+            task_id: Optional task ID to load schema mapping (identifier_column) from DB.
+                     When provided, dedup_config is loaded automatically via _get_dedup_config(task_id).
+            identifier_column: Optional column name for cross-platform deduplication (overridden by task_id if provided).
 
         Returns:
             Ingestion result with counts and errors.
         """
         logger.info("Starting Gmail ingestion")
+
+        # Load schema config from task mapping when task_id provided
+        if task_id:
+            try:
+                schema_service = SchemaMappingService(self.db)
+                task_mapping = await schema_service.get_task_mapping(str(task_id))
+                if task_mapping:
+                    field_mappings = task_mapping.field_mappings or {}
+                    identifier_column = task_mapping.identifier_column
+                    if identifier_column:
+                        if field_mappings:
+                            resolved = self._resolve_source_to_doc_field(identifier_column, field_mappings)
+                            if resolved:
+                                identifier_column = resolved
+                        # Fallback: normalize spaces → underscores (e.g. "content id" → "content_id")
+                        doc_col_names = self._document_column_names()
+                        if identifier_column not in doc_col_names:
+                            normalized = identifier_column.replace(" ", "_").lower()
+                            if normalized in doc_col_names:
+                                identifier_column = normalized
+                    logger.info(
+                        "Loaded schema config from task mapping",
+                        task_id=task_id,
+                        identifier_column=identifier_column,
+                    )
+            except Exception as e:
+                logger.warning("Could not load task schema mapping; proceeding without identifier config", task_id=task_id, error=str(e))
 
         rows_inserted = 0
         rows_updated = 0
@@ -596,7 +686,7 @@ class IngestionService:
                     # Insert/upsert rows
                     for row_data in excel_rows:
                         try:
-                            result = await self._upsert_document(row_data, identifier_column=identifier_column)
+                            result = await self._upsert_document(row_data, identifier_column=identifier_column, task_id=task_id)
                             if result == "inserted":
                                 rows_inserted += 1
                                 email_inserted += 1
@@ -767,338 +857,315 @@ class IngestionService:
             errors=errors,
         )
 
-    async def _upsert_document(self, row_data: dict, identifier_column: str | None = None, connection_strategy_column: str | None = None, dedup_config: dict | None = None) -> str:
-        """Insert or append document record with full history tracking.
+    # -------------------------------------------------------------------------
+    # Private helpers for _upsert_document steps
+    # -------------------------------------------------------------------------
 
-        Implements append-only history: instead of updating, creates new row
-        if metrics have changed. Marks old record as stale (is_current=FALSE).
+    def _prepare_row_data(self, row_data: dict) -> None:
+        """Normalize row_data in-place: set is_current default, fix missing text, zero numeric nulls."""
+        row_data.setdefault("is_current", True)
+        if not row_data.get("text") or row_data["text"] == "None":
+            row_data["text"] = " ".join(
+                part for part in [
+                    str(row_data.get("title") or "").strip(),
+                    str(row_data.get("content") or "").strip(),
+                    str(row_data.get("description") or "").strip(),
+                ] if part
+            ) or f"Row {row_data.get('row_number', 0)}"
+        self._normalize_numeric_nulls(row_data)
 
-        Two-pass matching strategy:
-        - Pass 1: Exact match on identifier_column (apply dedup strategies, reuse beast_uuid)
-        - Pass 2: Content match on connection_strategy_column (group by beast_uuid, separate metrics)
-        - Fallback: Sheet + row_number match or new record
+    def _generate_row_embedding(self, row_data: dict) -> None:
+        """Generate and attach text embedding to row_data in-place."""
+        text_to_embed = f"{row_data.get('profile_name', '')} {row_data.get('platform', '')}".strip()
+        if text_to_embed:
+            try:
+                row_data["embedding"] = get_embedding_service().embed_text(text_to_embed)
+            except Exception as e:
+                logger.warning("Could not generate embedding", error=str(e))
+
+    async def _find_existing_by_identifier(self, row_data: dict, identifier_column: str) -> "Sequence[Document] | None":
+        """Find a current Document matching the identifier column value.
+
+        Sets row_data["identifier_cleaned"] and row_data["identifier_hash"] as a side-effect.
+        Returns the matching Document or None.
+        """
+        identifier_value = row_data.get(identifier_column)
+        if not identifier_value:
+            return None
+        try:
+            # Query by the actual column value directly — avoids hash mismatch when
+            # existing rows were stored before identifier_hash was being populated.
+            col_attr = getattr(Document, identifier_column, None)
+            if col_attr is None:
+                logger.warning(
+                    "identifier_column not found on Document model; skipping dedup match",
+                    identifier_column=identifier_column,
+                )
+                return None
+            stmt = select(Document).where(
+                and_(col_attr == identifier_value, Document.is_current == True)
+            )
+            result = await self.db.execute(stmt)
+            return result.scalars().all()
+        except Exception as e:
+            from sqlalchemy.exc import DBAPIError
+            if isinstance(e, DBAPIError):
+                raise
+            logger.warning(
+                "Error during identifier lookup; skipping dedup match",
+                identifier_column=identifier_column,
+                identifier_value=str(identifier_value)[:100],
+                error=str(e),
+                exc_info=True,
+            )
+            return None
+
+    async def _build_metric_baseline(
+        self, existing: "Document", identifier_hash: str, metric_columns: list[str]
+    ) -> dict:
+        """Build cumulative metric baseline by summing current + all stale records for identifier_hash.
+
+        Returns {metric: cumulative_total} used as the reference for dedup strategy calculations.
+        """
+        baseline = {metric: 0.0 for metric in metric_columns}
+        try:
+            for metric in baseline:
+                val = getattr(existing, metric, None)
+                if val and isinstance(val, (int, float)):
+                    baseline[metric] += float(val)
+
+            stmt = select(Document).where(
+                and_(Document.identifier_hash == identifier_hash, Document.is_current == False)
+            )
+            result = await self.db.execute(stmt)
+            for prior in result.scalars().all():
+                for metric in baseline:
+                    val = getattr(prior, metric, None)
+                    if val and isinstance(val, (int, float)):
+                        baseline[metric] += float(val)
+
+            logger.info(
+                "[DEDUP] Metric baseline built",
+                identifier_hash=identifier_hash,
+                sample_baseline={k: v for k, v in list(baseline.items())[:5]},
+            )
+        except Exception as e:
+            logger.warning("Error building metric baseline; falling back to current record only", error=str(e))
+            existing_data = {col.name: getattr(existing, col.name) for col in Document.__table__.columns}
+            return {m: float(existing_data.get(m) or 0) for m in metric_columns}
+        return baseline
+
+    def _apply_dedup_to_row(
+        self,
+        row_data: dict,
+        existing_data: dict,
+        baseline_data: dict,
+        dedup_config: dict | None,
+        metric_columns: list[str],
+    ) -> None:
+        """Compute metric_deltas and mutate metric fields in row_data per the configured strategy."""
+        default_strategy = dedup_config.get("default_strategy", "subtract") if dedup_config else "subtract"
+        logger.info(
+            "[DEDUP] Exact match — applying strategy",
+            identifier_value=row_data.get("identifier_cleaned"),
+            default_strategy=default_strategy,
+            metric_columns=metric_columns,
+        )
+        if not metric_columns:
+            row_data["metric_deltas"] = None
+            logger.info("[DEDUP] No metric columns configured — strategy bypassed")
+            return
+        pre_apply = {m: row_data.get(m) for m in metric_columns if m in row_data}
+        metric_deltas = self._calculate_metric_deltas(baseline_data, row_data, metric_columns=metric_columns)
+        if metric_deltas:
+            row_data["metric_deltas"] = metric_deltas
+        self._apply_dedup_strategies(row_data, baseline_data, dedup_config)
+        post_apply = {m: row_data.get(m) for m in metric_columns if m in row_data}
+        logger.info("[DEDUP] Strategy applied", strategy=default_strategy, before=pre_apply, after=post_apply)
+
+    async def _resolve_connection_match(
+        self, row_data: dict, connection_strategy_column: str
+    ) -> "Sequence[Document] | None":
+        """Find a current Document matching the connection strategy column (cross-platform grouping).
+
+        Sets row_data["connection_identifier_hash"] as a side-effect.
+        Returns the matching Document or None.
+        """
+        connection_value = row_data.get(connection_strategy_column)
+        if not connection_value:
+            return None
+        try:
+            _cleaned, connection_hash = ContentNormalizer.normalize(str(connection_value))
+            row_data["connection_identifier_hash"] = connection_hash
+            stmt = select(Document).where(
+                and_(Document.connection_identifier_hash == connection_hash, Document.is_current)
+            )
+            result = await self.db.execute(stmt)
+            existing = result.scalars().all()
+            if existing:
+                logger.debug(
+                    "Found existing document via connection strategy match",
+                    connection_column=connection_strategy_column,
+                    connection_hash=connection_hash,
+                )
+            return existing
+        except Exception as e:
+            from sqlalchemy.exc import DBAPIError
+            if isinstance(e, DBAPIError):
+                raise
+            logger.warning("Error during connection strategy normalization", error=str(e))
+            return None
+
+    async def _persist_document_row(self, row_data: dict, *, label: str) -> str:
+        """Insert row_data as a Document row. Returns label on success, 'updated' on conflict fallback."""
+        insert_data = {k: v for k, v in row_data.items() if k != "_is_connection_match"}
+        stmt = insert(Document).values(**insert_data)
+        try:
+            await self._safe_execute(stmt)
+            return label
+        except IntegrityError as e:
+            logger.warning(
+                "Insert conflict; falling back to update in-place",
+                sheet_name=row_data.get("sheet_name"),
+                row_number=row_data.get("row_number"),
+                error=str(e),
+            )
+            upd_stmt = (
+                update(Document)
+                .where(
+                    and_(
+                        Document.sheet_name == row_data.get("sheet_name"),
+                        Document.row_number == row_data.get("row_number"),
+                    )
+                )
+                .values(**{k: v for k, v in row_data.items() if k not in ("id", "_is_connection_match")})
+            )
+            await self._safe_execute(upd_stmt)
+            return "updated"
+
+    # -------------------------------------------------------------------------
+    # Main upsert orchestrator
+    # -------------------------------------------------------------------------
+
+    async def _upsert_document(
+        self,
+        row_data: dict,
+        identifier_column: str | None = None,
+        connection_strategy_column: str | None = None,
+        task_id: str | UUID | None = None,
+    ) -> str:
+        """Insert or append a Document record with full append-only history tracking.
 
         Args:
             row_data: Row data dict.
             identifier_column: Column name for exact-match deduplication.
             connection_strategy_column: Column name for cross-platform content grouping.
-            dedup_config: Deduplication configuration with strategies for each metric.
+            task_id: Ingestion task ID — dedup_config loaded via _get_dedup_config(task_id).
 
         Returns:
-            'inserted' (new record), 'appended' (metrics changed), or 'skipped' (no change).
+            'inserted' (new record), 'appended' (duplicate found), or 'updated' (conflict fallback).
         """
-        # Keep each row write isolated so one bad row does not abort the full run transaction.
+        # Step 1: Load dedup config and derive configured metric columns.
+        task_mapping = await self._get_dedup_config(task_id)
+        dedup_config = task_mapping.dedup_config if task_mapping else None
+        metric_columns = self._configured_metric_columns(dedup_config)
+
+        # # --- TEST FILTER: only process the two probe content_ids ---
+        # _TEST_IDS = {'18115070101667706'}
+        # if str(row_data.get('content_id', '')) not in _TEST_IDS:
+        #     return 'skipped'
+
+
+        # Resolve source column names (e.g. "content id") to ORM field names (e.g. "content_id").
+        # field_mappings keys may carry a "::dup::N" suffix; _resolve_source_to_doc_field strips it.
+        field_mappings = task_mapping.field_mappings if task_mapping else {}
+        doc_col_names = self._document_column_names()
+
+        def _resolve_col(col: str | None) -> str | None:
+            if not col:
+                return None
+            resolved = self._resolve_source_to_doc_field(col, field_mappings)
+            if resolved:
+                return resolved
+            # Fallback: spaces → underscores (e.g. "content id" → "content_id")
+            normalized = col.replace(" ", "_").lower()
+            return normalized if normalized in doc_col_names else col
+
+        identifier_column = _resolve_col(identifier_column)
+        connection_strategy_column = _resolve_col(connection_strategy_column)
+
         async with self.db.begin_nested():
-            # Ensure is_current defaults to TRUE if not set
-            if "is_current" not in row_data:
-                row_data["is_current"] = True
+            # Normalize row: is_current default, text fallback, zero numeric nulls.
+            self._prepare_row_data(row_data)
 
-            # Protect required NOT NULL fields from being set to None
-            if not row_data.get("text") or row_data.get("text") == "None":
-                # Generate fallback text from available fields
-                fallback_text = " ".join(
-                    part for part in [
-                        str(row_data.get("title") or "").strip(),
-                        str(row_data.get("content") or "").strip(),
-                        str(row_data.get("description") or "").strip(),
-                    ] if part
-                )
-                row_data["text"] = fallback_text or f"Row {row_data.get('row_number', 0)}"
+            # Step 2: Find existing records by identifier and sum metrics into baseline.
+            existing_list: list[Document] = []
+            baseline_data: dict = {}
 
-            # Convert NULL numeric values to 0 for accurate metric calculations.
-            self._normalize_numeric_nulls(row_data)
-
-            metric_columns = self._configured_metric_columns(dedup_config)
-
-            # Attempt cross-platform matching if identifier_column is configured
-            existing = None
             if identifier_column:
-                identifier_value = row_data.get(identifier_column)
+                found = await self._find_existing_by_identifier(row_data, identifier_column)
+                existing_list = list(found) if found else []
+                if existing_list and metric_columns:
+                    # Baseline must sum ALL historical records (current + stale) so that subtract
+                    # computes the correct delta: new_value - cumulative_total.
+                    # e.g. sequence 28689 → 0 → 28689: baseline = 28689+0 = 28689 → delta = 28689-28689 = 0
+                    col_attr = getattr(Document, identifier_column, None)
+                    identifier_value = row_data.get(identifier_column)
+                    if col_attr is not None and identifier_value is not None:
+                        all_stmt = select(Document).where(col_attr == identifier_value)
+                        all_result = await self.db.execute(all_stmt)
+                        all_docs = list(all_result.scalars().all())
+                    else:
+                        all_docs = existing_list
+                    baseline_data = {
+                        metric: sum(float(getattr(doc, metric) or 0) for doc in all_docs)
+                        for metric in metric_columns
+                    }
 
-                if identifier_value:
-                    # Normalize and hash the identifier for cross-platform matching
-                    try:
-                        identifier_cleaned, identifier_hash = ContentNormalizer.normalize(str(identifier_value))
-                        row_data["identifier_cleaned"] = identifier_cleaned
-                        row_data["identifier_hash"] = identifier_hash
-
-                        # Query for match across any sheet/platform using identifier hash
-                        stmt = select(Document).where(
-                            and_(
-                                Document.identifier_hash == identifier_hash,
-                                Document.is_current,
-                            )
-                        )
-                        result = await self.db.execute(stmt)
-                        existing = result.scalars().first()
-
-                        if existing:
-                            logger.debug(
-                                "Found existing document via cross-platform identifier match",
-                                identifier_column=identifier_column,
-                                identifier_hash=identifier_hash,
-                                existing_id=existing.id,
-                            )
-                    except Exception as e:
-                        from sqlalchemy.exc import DBAPIError
-                        if isinstance(e, DBAPIError):
-                            raise  # DB errors must propagate out of begin_nested() cleanly
-                        logger.warning(
-                            "Error during identifier normalization; falling back to legacy matching",
-                            error=str(e),
-                        )
-
-            # PASS 2: Attempt connection-strategy matching if configured and no exact match found
+            # Step 4: When no identifier match, check connection strategy for cross-platform grouping.
             connection_match_found = False
-            if not existing and connection_strategy_column:
-                connection_value = row_data.get(connection_strategy_column)
+            if not existing_list and connection_strategy_column:
+                found = await self._resolve_connection_match(row_data, connection_strategy_column)
+                existing_list = list(found) if found else []
+                if existing_list:
+                    connection_match_found = True
+                    row_data["beast_uuid"] = existing_list[0].beast_uuid
 
-                if connection_value:
-                    # Normalize and hash the connection value for cross-platform matching
-                    try:
-                        connection_cleaned, connection_hash = ContentNormalizer.normalize(str(connection_value))
-                        row_data["connection_identifier_hash"] = connection_hash
-
-                        # Query for match across any platform using connection hash
-                        stmt = select(Document).where(
-                            and_(
-                                Document.connection_identifier_hash == connection_hash,
-                                Document.is_current,
-                            )
-                        )
-                        result = await self.db.execute(stmt)
-                        existing = result.scalars().first()
-
-                        if existing:
-                            connection_match_found = True
-                            logger.debug(
-                                "Found existing document via connection_strategy match (cross-platform grouping)",
-                                connection_column=connection_strategy_column,
-                                connection_hash=connection_hash,
-                                existing_id=existing.id,
-                            )
-                    except Exception as e:
-                        from sqlalchemy.exc import DBAPIError
-                        if isinstance(e, DBAPIError):
-                            raise  # DB errors must propagate out of begin_nested() cleanly
-                        logger.warning(
-                            "Error during connection strategy normalization",
-                            error=str(e),
-                        )
-
-            # Store connection_match_found in row_data for dedup tracking
             row_data["_is_connection_match"] = connection_match_found
+            self._generate_row_embedding(row_data)
 
-            # Fallback: legacy sheet_name + row_number matching if neither pass found match
-            if not existing:
-                stmt = select(Document).where(
-                    and_(
-                        Document.sheet_name == row_data.get("sheet_name"),
-                        Document.row_number == row_data.get("row_number"),
-                        Document.is_current,
-                    )
-                )
-                result = await self.db.execute(stmt)
-                existing = result.scalars().first()
-
-            # Generate embedding if needed
-            embedding_service = get_embedding_service()
-            profile_name = row_data.get("profile_name", "")
-            text_to_embed = f"{profile_name} {row_data.get('platform', '')}"
-
-            if text_to_embed.strip():
-                try:
-                    row_data["embedding"] = embedding_service.embed_text(text_to_embed)
-                except Exception as e:
-                    logger.warning("Could not generate embedding", error=str(e))
-
-            # Compute metric fingerprint from schema-configured metrics only.
-            new_fingerprint = self._metric_fingerprint(row_data, metric_columns=metric_columns)
-
-            if existing:
-                # Extract metrics from existing record to compute its fingerprint
-                existing_data = {
-                    column.name: getattr(existing, column.name)
-                    for column in Document.__table__.columns
-                }
-                old_fingerprint = self._metric_fingerprint(existing_data, metric_columns=metric_columns)
-
-                # # Check if metrics have changed
-                # if new_fingerprint == old_fingerprint:
-                #     # No change detected; skip insert to avoid spurious duplicates
-                #     logger.debug(
-                #         "Document metrics unchanged, skipping new version",
-                #         row_number=row_data.get("row_number"),
-                #         fingerprint=new_fingerprint,
-                #     )
-                #     return "skipped"
-
-                # EXACT MATCH (Pass 1): Calculate metric deltas and mark old as stale
+            if existing_list:
                 if not connection_match_found:
-                    metric_deltas = None
-                    default_strategy = dedup_config.get("default_strategy", "subtract") if dedup_config else "subtract"
+                    # Step 3: Exact identifier match — apply dedup strategies, reuse beast_uuid, mark all stale.
+                    existing_data = {
+                        col.name: getattr(existing_list[0], col.name) for col in Document.__table__.columns
+                    }
 
-                    if metric_columns:
-                        # Determine baseline for delta calculation based on dedup strategy.
-                        # For "subtract" strategy: reconstruct baseline from all prior records (deltas sum).
-                        # For "add"/"keep"/other: use existing record value as baseline.
-                        baseline_data = existing_data.copy() if existing_data else {}
-
-                        # Only reconstruct baseline from prior records if using subtract strategy.
-                        if default_strategy == "subtract":
-                            # For subtract strategy, we store delta values, so we need to reconstruct
-                            # the actual accumulated baseline from all prior records.
-                            baseline_data = {metric: 0.0 for metric in metric_columns}
-
-                            identifier_hash = row_data.get("identifier_hash")
-                            if identifier_hash and existing:
-                                try:
-                                    # Sum the current record.
-                                    for metric in baseline_data:
-                                        metric_val = getattr(existing, metric, None)
-                                        if metric_val and isinstance(metric_val, (int, float)):
-                                            baseline_data[metric] += float(metric_val)
-
-                                    # Sum all stale (is_current=False) records with same identifier_hash.
-                                    stmt = select(Document).where(
-                                        and_(
-                                            Document.identifier_hash == identifier_hash,
-                                            Document.is_current == False,
-                                        )
-                                    )
-                                    result = await self.db.execute(stmt)
-                                    stale_records = result.scalars().all()
-
-                                    for prior in stale_records:
-                                        for metric in baseline_data:
-                                            metric_val = getattr(prior, metric, None)
-                                            if metric_val and isinstance(metric_val, (int, float)):
-                                                baseline_data[metric] += float(metric_val)
-
-                                    if stale_records:
-                                        logger.debug(
-                                            "Reconstructed baseline from current + stale records (subtract strategy)",
-                                            identifier_hash=identifier_hash,
-                                            num_stale_records=len(stale_records),
-                                            baseline=baseline_data,
-                                        )
-                                except Exception as e:
-                                    logger.warning(
-                                        "Error reconstructing baseline from prior records; using current record only",
-                                        error=str(e),
-                                    )
-                                    # Fallback: use existing data only.
-                                    baseline_data = existing_data
-
-                        # Calculate metric deltas from baseline.
-                        metric_deltas = self._calculate_metric_deltas(
-                            baseline_data,
-                            row_data,
-                            metric_columns=metric_columns,
+                    self._apply_dedup_to_row(row_data, existing_data, baseline_data, dedup_config, metric_columns)
+                    row_data["beast_uuid"] = existing_list[0].beast_uuid or uuid.uuid4()
+                    for stale_doc in existing_list:
+                        await self._safe_execute(
+                            update(Document).where(Document.id == stale_doc.id).values(is_current=False)
                         )
-                        if metric_deltas:
-                            row_data["metric_deltas"] = metric_deltas
-                    else:
-                        # No metric columns configured in schema mapping: bypass dedup strategies/deltas.
-                        row_data["metric_deltas"] = None
-
-                    # Reuse existing beast_uuid if available, otherwise generate new
-                    if existing.beast_uuid:
-                        row_data["beast_uuid"] = existing.beast_uuid
-                    else:
-                        row_data["beast_uuid"] = uuid.uuid4()
-
-                    # Mark old record stale only when strategy-based metric processing is enabled.
-                    logger.debug(
-                        "Exact match found, appending new version with metric deltas",
-                        row_number=row_data.get("row_number"),
-                        old_fingerprint=old_fingerprint,
-                        new_fingerprint=new_fingerprint,
-                        beast_uuid=row_data.get("beast_uuid"),
-                        metric_deltas=metric_deltas,
-                        dedup_strategy=default_strategy,
-                    )
-                    if metric_columns:
-                        stmt = (
-                            update(Document)
-                            .where(Document.id == existing.id)
-                            .values(is_current=False)
-                        )
-                        await self._safe_execute(stmt)
-
-                # CONNECTION MATCH (Pass 2): Reuse beast_uuid but insert separately (no marking old as stale)
+                        logger.info("[DEDUP] Old record marked stale", old_id=str(stale_doc.id))
+                    # Step 5: Insert new appended record.
+                    return await self._persist_document_row(row_data, label="appended")
                 else:
-                    # No delta calculation - keep metrics separate per content_id
+                    # Connection match — raw metrics preserved per content_id, beast_uuid already linked.
                     row_data["metric_deltas"] = None
-
-                    # Reuse existing beast_uuid for cross-platform grouping
-                    if existing.beast_uuid:
-                        row_data["beast_uuid"] = existing.beast_uuid
-                    else:
-                        row_data["beast_uuid"] = uuid.uuid4()
-
+                    row_data.setdefault("beast_uuid", uuid.uuid4())
                     logger.debug(
-                        "Connection match found, linking by beast_uuid (cross-platform grouping, separate metrics)",
+                        "Connection match: sharing beast_uuid, raw metrics preserved",
                         row_number=row_data.get("row_number"),
-                        connection_column=connection_strategy_column,
                         beast_uuid=row_data.get("beast_uuid"),
                     )
-                    # NOTE: Do NOT mark old as is_current=False for connection matches
-                    # Both records remain is_current=True as they represent different content_ids
-
-                # Insert new version with is_current=TRUE (for both exact and connection matches)
-                # Filter out metadata fields that aren't database columns
-                insert_data = {k: v for k, v in row_data.items() if k != "_is_connection_match"}
-                stmt = insert(Document).values(**insert_data)
-                try:
-                    await self._safe_execute(stmt)
-                    return "appended"
-                except IntegrityError as e:
-                    # Fallback for race conditions where unique index prevents insert
-                    logger.warning(
-                        "Insert conflict on append; falling back to updating existing row",
-                        sheet_name=row_data.get("sheet_name"),
-                        row_number=row_data.get("row_number"),
-                        error=str(e),
-                    )
-                    # Update the current record in-place instead
-                    upd_stmt = (
-                        update(Document)
-                        .where(
-                            and_(Document.sheet_name == row_data.get("sheet_name"), Document.row_number == row_data.get("row_number"))
-                        )
-                        .values(**{k: v for k, v in row_data.items() if k not in ("id", "_is_connection_match")})
-                    )
-                    await self._safe_execute(upd_stmt)
-                    return "updated"
+                    return await self._persist_document_row(row_data, label="inserted")
             else:
-                # New record: assign fresh beast_uuid and insert with is_current=TRUE
+                # Brand new record — assign fresh uuid and insert.
                 row_data["beast_uuid"] = uuid.uuid4()
-                row_data["metric_deltas"] = None  # First ingestion has no deltas
-
-                # Filter out metadata fields that aren't database columns
-                insert_data = {k: v for k, v in row_data.items() if k != "_is_connection_match"}
-                stmt = insert(Document).values(**insert_data)
-                try:
-                    await self._safe_execute(stmt)
-                    logger.debug("Document inserted", row_number=row_data.get("row_number"), beast_uuid=row_data.get("beast_uuid"))
-                    return "inserted"
-                except IntegrityError as e:
-                    logger.warning(
-                        "Insert conflict on insert; falling back to updating existing row",
-                        sheet_name=row_data.get("sheet_name"),
-                        row_number=row_data.get("row_number"),
-                        error=str(e),
-                    )
-                    upd_stmt = (
-                        update(Document)
-                        .where(
-                            and_(Document.sheet_name == row_data.get("sheet_name"), Document.row_number == row_data.get("row_number"))
-                        )
-                        .values(**{k: v for k, v in row_data.items() if k not in ("id", "_is_connection_match")})
-                    )
-                    await self._safe_execute(upd_stmt)
-                    return "updated"
+                row_data["metric_deltas"] = None
+                logger.debug("New document", row_number=row_data.get("row_number"))
+                return await self._persist_document_row(row_data, label="inserted")
 
     def _calculate_metric_deltas(
         self,
@@ -1213,7 +1280,7 @@ class IngestionService:
         connection_strategy_identifier_column: str | None,
         dedup_service: DeduplicationService,
         run_id: UUID,
-        dedup_config: dict | None = None,
+        task_id: str | UUID | None = None,
     ) -> str:
         """Upsert document and record deduplication tracking.
 
@@ -1223,13 +1290,13 @@ class IngestionService:
             connection_strategy_identifier_column: Column name for cross-platform matching
             dedup_service: Deduplication service for tracking
             run_id: Current run ID
-            dedup_config: Deduplication configuration with strategies
+            task_id: Ingestion task ID — used to load dedup_config from the task schema mapping.
 
         Returns:
             Result string: 'inserted', 'appended', or 'skipped'
         """
         # Call the standard upsert method
-        result = await self._upsert_document(row_data, identifier_column, connection_strategy_identifier_column, dedup_config)
+        result = await self._upsert_document(row_data, identifier_column, connection_strategy_identifier_column, task_id)
 
         # Record deduplication event if we have the necessary metadata
         row_number = row_data.get("row_number", 0)
@@ -1369,8 +1436,57 @@ class IngestionService:
             identifier_column = task_mapping.identifier_column if task_mapping else None
             # Capture connection_strategy_identifier_column for cross-platform matching
             connection_strategy_column = task_mapping.connection_strategy_identifier_column if task_mapping else None
-            # Capture dedup_config for strategy-aware delta calculation
-            dedup_config = task_mapping.dedup_config if task_mapping else None
+            # Note: dedup_config is no longer passed as a parameter — _upsert_document
+            # loads it on demand via _get_dedup_config(task_id).
+
+            # Resolve identifier columns from spreadsheet source names to ORM field names.
+            # The UI stores identifier_column as the raw spreadsheet header (e.g. "Content Post Id"),
+            # but _upsert_document receives document_row built with ORM field names (e.g. "content_id").
+            # Without this resolution, row_data.get(identifier_column) always returns None and
+            # deduplication Pass 1 (exact match) is silently skipped for every row.
+            doc_column_names = self._document_column_names()
+            if identifier_column:
+                if field_mappings:
+                    resolved = self._resolve_source_to_doc_field(identifier_column, field_mappings)
+                    if resolved:
+                        logger.info(
+                            "[DEDUP] Resolved identifier_column to ORM field",
+                            source=identifier_column,
+                            resolved=resolved,
+                        )
+                        identifier_column = resolved
+                # Fallback: if still not an ORM column name, normalize spaces → underscores.
+                # e.g. "content id" → "content_id". Handles tasks where field_mappings is empty
+                # or the identifier_column was saved as a raw CSV header instead of an ORM name.
+                if identifier_column not in doc_column_names:
+                    normalized = identifier_column.replace(" ", "_").lower()
+                    if normalized in doc_column_names:
+                        logger.info(
+                            "[DEDUP] Normalized identifier_column via space→underscore fallback",
+                            original=identifier_column,
+                            normalized=normalized,
+                        )
+                        identifier_column = normalized
+            if connection_strategy_column:
+                if field_mappings:
+                    resolved = self._resolve_source_to_doc_field(connection_strategy_column, field_mappings)
+                    if resolved:
+                        logger.info(
+                            "[DEDUP] Resolved connection_strategy_column to ORM field",
+                            source=connection_strategy_column,
+                            resolved=resolved,
+                        )
+                        connection_strategy_column = resolved
+                # Fallback: normalize spaces → underscores.
+                if connection_strategy_column not in doc_column_names:
+                    normalized = connection_strategy_column.replace(" ", "_").lower()
+                    if normalized in doc_column_names:
+                        logger.info(
+                            "[DEDUP] Normalized connection_strategy_column via space→underscore fallback",
+                            original=connection_strategy_column,
+                            normalized=normalized,
+                        )
+                        connection_strategy_column = normalized
 
             # Initialize deduplication service if deduplication is enabled
             dedup_service = None
@@ -1388,7 +1504,7 @@ class IngestionService:
             if task_adaptor_type == "gmail":
                 # Gmail adaptor: fetch from Gmail
                 rows_inserted, rows_updated, rows_failed, errors = await self._ingest_from_gmail_task(
-                    task, run_id, field_mappings, identifier_column, connection_strategy_column, dedup_service, dedup_config
+                    task, run_id, field_mappings, identifier_column, connection_strategy_column, dedup_service
                 )
 
             elif task_adaptor_type == "webhook":
@@ -1396,7 +1512,7 @@ class IngestionService:
                 if not webhook_payload:
                     raise ValueError("webhook_payload required for webhook adaptor")
                 rows_inserted, rows_updated, rows_failed, errors = await self._ingest_from_webhook(
-                    task, run_id, webhook_payload, field_mappings, identifier_column, connection_strategy_column, dedup_service, dedup_config
+                    task, run_id, webhook_payload, field_mappings, identifier_column, connection_strategy_column, dedup_service
                 )
 
             elif task_adaptor_type == "manual":
@@ -1404,7 +1520,7 @@ class IngestionService:
                 if not file_bytes:
                     raise ValueError("file_bytes required for manual adaptor")
                 rows_inserted, rows_updated, rows_failed, errors = await self._ingest_from_file_task(
-                    task, run_id, file_bytes, field_mappings, identifier_column, connection_strategy_column, dedup_service, dedup_config
+                    task, run_id, file_bytes, field_mappings, identifier_column, connection_strategy_column, dedup_service
                 )
 
             else:
@@ -1471,7 +1587,6 @@ class IngestionService:
         gmail_adapter: GmailAdapter,
         sheet_name: str = "Sheet1",
         gmail_source_type: str = "attachment",
-        dedup_config: dict | None = None,
     ) -> EmailProcessingResult:
         """Process a single email with per-email error handling.
 
@@ -1601,18 +1716,26 @@ class IngestionService:
                         email_date_str = email.get("date")
                         if email_date_str:
                             try:
-                                document_row["received_at"] = datetime.fromisoformat(email_date_str).date()
-                            except (ValueError, AttributeError):
+                                # Parse ISO format datetime (from Gmail internalDate)
+                                if "T" in email_date_str:
+                                    document_row["received_at"] = datetime.fromisoformat(email_date_str.replace("Z", "+00:00")).date()
+                                else:
+                                    # Fallback: parse RFC 2822 format (from email Date header)
+                                    from email.utils import parsedate_to_datetime
+                                    parsed_dt = parsedate_to_datetime(email_date_str)
+                                    document_row["received_at"] = parsed_dt.date()
+                            except (ValueError, AttributeError, TypeError):
+                                logger.debug(f"Failed to parse email date: {email_date_str}")
                                 pass
 
                         # Upsert with dedup tracking if available
                         if dedup_service:
                             upsert_result = await self._upsert_document_with_dedup_tracking(
-                                document_row, identifier_column, connection_strategy_column, dedup_service, run_id, dedup_config
+                                document_row, identifier_column, connection_strategy_column, dedup_service, run_id, task_id
                             )
                         else:
                             upsert_result = await self._upsert_document(
-                                document_row, identifier_column, connection_strategy_column, dedup_config
+                                document_row, identifier_column, connection_strategy_column, task_id
                             )
 
                         if upsert_result == "inserted":
@@ -1688,7 +1811,6 @@ class IngestionService:
         identifier_column: str | None = None,
         connection_strategy_column: str | None = None,
         dedup_service: DeduplicationService | None = None,
-        dedup_config: dict | None = None,
     ) -> tuple:
         """Ingest from Gmail using task configuration.
 
@@ -1878,6 +2000,10 @@ class IngestionService:
 
                 logger.info("Parent run fetched emails (paged)", run_id=run_id, query=gmail_query, fetched=len(emails))
 
+            # Sort emails oldest-first so incremental dedup strategies always
+            # see history in chronological order (e.g. subtract uses the correct baseline).
+            emails = self._sort_emails_by_date(emails)
+
             # Process each email
             for email in emails:
                 if await self._is_run_stop_requested(run_id):
@@ -1902,7 +2028,6 @@ class IngestionService:
                             gmail_adapter=gmail_adapter,
                             sheet_name=sheet_name,
                             gmail_source_type=gmail_source_type,
-                            dedup_config=dedup_config,
                         )
 
                         # Accumulate results
@@ -1986,6 +2111,34 @@ class IngestionService:
                     logger.warning("Failed to disconnect Gmail adapter", error=str(disconnect_error))
 
         return rows_inserted, rows_updated, rows_failed, errors
+
+    @staticmethod
+    def _sort_emails_by_date(emails: list[dict]) -> list[dict]:
+        """Sort emails by sent date ascending (oldest first).
+
+        Emails are processed oldest-first so incremental dedup strategies
+        (e.g. 'subtract') always see history in chronological order.
+        Emails whose date cannot be parsed are placed last.
+        """
+        from email.utils import parsedate_to_datetime as _rfc2822_parse
+
+        def _sent_timestamp(email: dict) -> float:
+            date_str = email.get("date", "")
+            if not date_str:
+                return float("inf")
+            try:
+                dt = datetime.fromisoformat(date_str)
+                return dt.timestamp() if dt.tzinfo else dt.replace(tzinfo=timezone.utc).timestamp()
+            except (ValueError, AttributeError):
+                pass
+            try:
+                dt = _rfc2822_parse(date_str)
+                return dt.timestamp()
+            except Exception:
+                pass
+            return float("inf")
+
+        return sorted(emails, key=_sent_timestamp)
 
     @staticmethod
     def _is_supported_report_file(filename: str, content_type: str) -> bool:
@@ -2072,7 +2225,6 @@ class IngestionService:
         identifier_column: str | None = None,
         connection_strategy_column: str | None = None,
         dedup_service: DeduplicationService | None = None,
-        dedup_config: dict | None = None,
     ) -> tuple:
         """Ingest from webhook payload.
 
@@ -2110,7 +2262,7 @@ class IngestionService:
                                 mapped_data[target] = row_data[source_column]
                         row_data = {**row_data, **mapped_data}
 
-                    result = await self._upsert_document(row_data, identifier_column, connection_strategy_column, dedup_config) if not dedup_service else await self._upsert_document_with_dedup_tracking(row_data, identifier_column, connection_strategy_column, dedup_service, run_id, dedup_config)
+                    result = await self._upsert_document(row_data, identifier_column, connection_strategy_column, task.id) if not dedup_service else await self._upsert_document_with_dedup_tracking(row_data, identifier_column, connection_strategy_column, dedup_service, run_id, task.id)
                     if result == "inserted":
                         rows_inserted += 1
                     elif result == "updated":
@@ -2139,7 +2291,6 @@ class IngestionService:
         identifier_column: str | None = None,
         connection_strategy_column: str | None = None,
         dedup_service: DeduplicationService | None = None,
-        dedup_config: dict | None = None,
     ) -> tuple:
         """Ingest from uploaded file using task configuration.
 
@@ -2177,10 +2328,10 @@ class IngestionService:
                     document_row = self._build_document_payload(row_data, field_mappings)
                     if dedup_service:
                         result = await self._upsert_document_with_dedup_tracking(
-                            document_row, identifier_column, connection_strategy_column, dedup_service, run_id, dedup_config
+                            document_row, identifier_column, connection_strategy_column, dedup_service, run_id, task_id
                         )
                     else:
-                        result = await self._upsert_document(document_row, identifier_column, connection_strategy_column, dedup_config)
+                        result = await self._upsert_document(document_row, identifier_column, connection_strategy_column, task_id)
                     if result == "inserted":
                         rows_inserted += 1
                     elif result == "updated":
