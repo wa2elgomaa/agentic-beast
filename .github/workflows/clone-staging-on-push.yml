@@ -1,0 +1,50 @@
+name: Clone Staging Branch on Push
+
+on:
+  push:
+    branches:
+      - staging
+
+jobs:
+  clone-staging:
+    name: Clone staging on beast-vm
+    runs-on:
+      - self-hosted
+      - Linux
+      - X64
+      - beast-vm
+
+    steps:
+      - name: Checkout devops branch
+        uses: actions/checkout@v4
+        with:
+          ref: staging
+          fetch-depth: 1
+
+      - name: Verify clone
+        run: |
+          echo "✅ Runner:        $RUNNER_NAME"
+          echo "✅ Branch:        $(git branch --show-current)"
+          echo "✅ Latest commit: $(git log -1 --oneline)"
+          echo "✅ Triggered by:  ${{ github.actor }}"
+
+      - name: Deploy with Docker Compose
+        run: |
+          echo "==> Tearing down existing containers..."
+          docker compose down --remove-orphans || true
+
+          echo "==> Copying .env files..."
+          cp -apf /home/broadcast/beast/agentic-beast/backend/.env backend/.env
+          cp -apf /home/broadcast/beast/agentic-beast/backend/.env ./.env
+
+          echo "==> Verifying key vars are loaded:"
+          grep -E "POSTGRES_DB|ENVIRONMENT" .env || echo "⚠️  vars not found in .env — check source file"
+
+          echo "==> Building images..."
+          docker compose --env-file .env build --no-cache
+
+          echo "==> Starting containers in background..."
+          docker compose --env-file .env up -d
+
+          echo "==> Active containers:"
+          docker compose ps

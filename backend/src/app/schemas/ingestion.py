@@ -219,7 +219,13 @@ class SchemaMappingTemplateResponse(BaseModel):
 
 
 class TaskSchemaMappingResponse(BaseModel):
-    """Response with task schema mapping details."""
+    """Response with task schema mapping details.
+    
+    The field_mappings dict returned to the UI excludes internal fields:
+    - sheet_name: internal tracking (not user-configurable)
+    - row_number: internal tracking (not user-configurable)
+    - received_at: automatically populated from email date (user cannot override)
+    """
 
     id: UUID
     task_id: UUID

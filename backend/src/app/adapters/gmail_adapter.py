@@ -670,7 +670,20 @@ class GmailAdapter(DataAdapter):
             headers = msg_data["payload"].get("headers", [])
             subject = next((h["value"] for h in headers if h["name"] == "Subject"), "")
             from_addr = next((h["value"] for h in headers if h["name"] == "From"), "")
-            date = next((h["value"] for h in headers if h["name"] == "Date"), "")
+
+            # Prefer internalDate (ms since epoch) for a reliable UTC ISO timestamp,
+            # falling back to the RFC 2822 Date header.
+            date = ""
+            internal_ms = msg_data.get("internalDate")
+            if internal_ms:
+                try:
+                    from datetime import timezone as _tz
+                    ms = int(internal_ms)
+                    date = datetime.fromtimestamp(ms / 1000.0, tz=_tz.utc).isoformat()
+                except Exception:
+                    date = ""
+            if not date:
+                date = next((h["value"] for h in headers if h["name"] == "Date"), "")
 
             if source_type == "download_link":
                 html_body, text_body = self._get_raw_body(msg_data.get("payload", {}))
