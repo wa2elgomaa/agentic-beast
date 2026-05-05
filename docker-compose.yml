@@ -148,20 +148,20 @@ services:
   #     - beast-network
   #   restart: unless-stopped
 
-  model-downloader:
-    image: python:3.11-slim
-    container_name: beast-model-downloader
-    environment:
-      HF_TOKEN: ${HF_TOKEN}
-      HUGGING_FACE_HUB_TOKEN: ${HF_TOKEN}
-    volumes:
-      - models_data:/models
-      - ./backend/scripts/download_model.py:/app/download_model.py
-    command: >-
-      /bin/sh -c "pip install --no-cache-dir huggingface-hub && python /app/download_model.py"
-    networks:
-      - beast-network
-    restart: "no"
+  # model-downloader:
+  #   image: python:3.11-slim
+  #   container_name: beast-model-downloader
+  #   environment:
+  #     HF_TOKEN: ${HF_TOKEN}
+  #     HUGGING_FACE_HUB_TOKEN: ${HF_TOKEN}
+  #   volumes:
+  #     - models_data:/models
+  #     - ./backend/scripts/download_model.py:/app/download_model.py
+  #   command: >-
+  #     /bin/sh -c "pip install --no-cache-dir huggingface-hub && python /app/download_model.py"
+  #   networks:
+  #     - beast-network
+  #   restart: "no"
 
   app:
     build:
@@ -195,8 +195,8 @@ services:
         condition: service_started
       # ollama:
       #   condition: service_started
-      model-downloader:
-        condition: service_completed_successfully
+      # model-downloader:
+      #   condition: service_completed_successfully
     networks:
       - beast-network
     command: uvicorn src.app.main:app --host ${API_HOST:-0.0.0.0} --port ${API_PORT:-8000} --reload
@@ -231,8 +231,8 @@ services:
         condition: service_started
       # ollama:
       #   condition: service_started
-      model-downloader:
-        condition: service_completed_successfully
+      # model-downloader:
+      #   condition: service_completed_successfully
     networks:
       - beast-network
     healthcheck:
@@ -270,8 +270,8 @@ services:
         condition: service_started
       # ollama:
       #   condition: service_started
-      model-downloader:
-        condition: service_completed_successfully
+      # model-downloader:
+      #   condition: service_completed_successfully
     networks:
       - beast-network
     healthcheck:
