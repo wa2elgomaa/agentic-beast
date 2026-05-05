@@ -92,20 +92,6 @@ def upgrade() -> None:
         sa.UniqueConstraint("sheet_name", "row_number", name="uq_documents_sheet_row"),
     )
 
-    # Convert documents to partitioned table by report_date (monthly)
-    op.execute("""
-        ALTER TABLE documents
-        PARTITION BY RANGE (report_date);
-    """)
-
-    # Create partitions for current and next few months
-    # This would be managed by a separate partition management script in production
-    # For now, create a default partition
-    op.execute("""
-        ALTER TABLE documents
-        ADD PARTITION documents_default VALUES LESS THAN (MAXVALUE);
-    """)
-
     # Create conversations table
     op.create_table(
         "conversations",
