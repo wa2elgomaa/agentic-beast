@@ -167,24 +167,24 @@ class Settings(BaseSettings):
                 return "development"
         return v
 
-    @field_validator("database_url", mode="before")
-    @classmethod
-    def load_database_url(cls, v: str, info) -> str:
-        """Load database URL from AWS Secrets Manager if in production."""
-        environment = info.data.get("environment", "development")
+    # @field_validator("database_url", mode="before")
+    # @classmethod
+    # def load_database_url(cls, v: str, info) -> str:
+    #     """Load database URL from AWS Secrets Manager if in production."""
+    #     environment = info.data.get("environment", "development")
 
-        # Only try to load from Secrets Manager if:
-        # 1. In production/staging
-        # 2. boto3 is available
-        # 3. Using default/empty database URL
-        if environment in ("production", "staging") and HAS_BOTO3:
-            aws_region = info.data.get("aws_region", "us-east-1")
-            db_url = load_database_url_from_secrets(environment, aws_region)
-            if db_url:
-                logger.info(f"Loaded database URL from AWS Secrets Manager for {environment}")
-                return db_url
+    #     # Only try to load from Secrets Manager if:
+    #     # 1. In production/staging
+    #     # 2. boto3 is available
+    #     # 3. Using default/empty database URL
+    #     if environment in ("production", "staging") and HAS_BOTO3:
+    #         aws_region = info.data.get("aws_region", "us-east-1")
+    #         db_url = load_database_url_from_secrets(environment, aws_region)
+    #         if db_url:
+    #             logger.info(f"Loaded database URL from AWS Secrets Manager for {environment}")
+    #             return db_url
 
-        return v
+    #     return v
 
     # Database Configuration
     database_url: str = Field(default="postgresql+asyncpg://beast:beast@localhost:5432/beast")
