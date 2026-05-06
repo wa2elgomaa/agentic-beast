@@ -7,6 +7,15 @@ from uuid import UUID
 from pydantic import BaseModel, Field, model_validator
 
 
+class MessageAsset(BaseModel):
+    """A media asset attached to a chat message."""
+
+    source: str = Field(description="Full data URI, e.g. 'data:image/png;base64,...'")
+    caption: str = Field(default="", description="Human-readable caption")
+    mime: str = Field(default="image/png", description="MIME type")
+    asset_type: str = Field(default="chart", description="Asset kind, e.g. 'chart', 'table'")
+
+
 class ChatRequest(BaseModel):
     """Unified chat request supporting text and media.
 
@@ -73,8 +82,9 @@ class ChatMessageMetadata(BaseModel):
     operation: Optional[str] = None
     citations: Optional[List[dict]] = None
     agents_involved: Optional[List[str]] = None
-    assets: Optional[str] = None  # legacy URL-based chart field
-    chart_b64: Optional[str] = None  # inline base64-encoded PNG chart
+    assets: List[MessageAsset] = Field(default_factory=list, description="Typed media assets")
+    # Legacy fields — kept for reading old Postgres rows; new rows use assets[]
+    chart_b64: Optional[str] = None
     visualization_caption: Optional[str] = None
     code_output: Optional[str] = None
     generated_sql: Optional[str] = None

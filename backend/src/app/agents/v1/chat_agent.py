@@ -13,7 +13,7 @@ Exported
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, cast
 
 from pydantic import BaseModel as PydanticBaseModel, Field
 from strands import Agent
@@ -30,7 +30,7 @@ class ChatAgentSchema(PydanticBaseModel):
     response_text: str = Field(description="Conversational response to the user")
 
 
-def build_chat_agent() -> Agent:
+def build_chat_agent(messages: Optional[List[Dict[str, Any]]] = None) -> Agent:
     """Return a Strands Agent configured for general chat."""
     _agent_settings = settings.chat_agent or settings.main_agent
     _factory = ProviderFactory(_agent_settings)
@@ -39,6 +39,7 @@ def build_chat_agent() -> Agent:
         model=model,
         system_prompt=settings.chat_system_prompt,
         tools=[],
+        messages=cast(Any, messages or []),
         callback_handler=None,
     )
 

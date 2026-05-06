@@ -14,6 +14,7 @@ from app.config import settings
 from app.config.prompts import CLASSIFY_SYSTEM_PROMPT_TPL
 from app.logging import get_logger
 from app.providers.factory import ProviderFactory
+from app.utils.conversation_utils import format_history_snippet
 
 logger = get_logger(__name__)
 
@@ -93,16 +94,11 @@ class ClassifyAgent:
 
         # Append a compact history summary so the LLM can judge follow-up intent.
         if history:
-            recent = history[-4:]  # last 4 turns is enough context
-            lines = []
-            for turn in recent:
-                role = turn.get("role", "user")
-                content = str(turn.get("content", "")).strip()[:200]
-                lines.append(f"{role.capitalize()}: {content}")
+            history_text = format_history_snippet(history, max_turns=4)
             prompt = (
                 f"{prompt}\n\n"
                 "[CONVERSATION HISTORY (last turns)]\n"
-                + "\n".join(lines)
+                + history_text
                 + "\n\n[END HISTORY]"
             )
 

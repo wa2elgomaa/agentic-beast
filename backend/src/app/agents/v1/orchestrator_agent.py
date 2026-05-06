@@ -14,8 +14,9 @@ Entry points
 
 from __future__ import annotations
 
+import asyncio
 import json
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Optional
 
 from pydantic import BaseModel as PydanticBaseModel, Field
 from strands import Agent
@@ -24,6 +25,9 @@ from strands.agent import ModelRetryStrategy
 from app.config import settings
 from app.logging import get_logger
 from app.providers.factory import ProviderFactory
+
+if TYPE_CHECKING:
+    from app.schemas.chat import MessageAsset
 
 logger = get_logger(__name__)
 
@@ -55,8 +59,7 @@ class OrchestratorOutputSchema(PydanticBaseModel):
 class OrchestratorAgentSchema(PydanticBaseModel):
     """Unified response returned to ChatService / API layer."""
     response_text: str = Field(description="Human-readable response to the user")
-    chart_b64: str = Field(default="", description="Base64-encoded PNG chart (empty if no chart)")
-    visualization_caption: str = Field(default="", description="Caption for the chart")
+    assets: List["MessageAsset"] = Field(default_factory=list, description="Typed media assets")
 
 
 # ---------------------------------------------------------------------------
@@ -74,38 +77,6 @@ class OrchestratorAgent:
     # Internal helpers                                                     #
     # ------------------------------------------------------------------ #
 
-    @staticmethod
-    def _format_history_for_prompt(
-        history: List[Dict[str, Any]],
-        current_message: str,
-    ) -> str:
-        """Augment the current message with conversation history so the LLM has context.
-
-        Each assistant turn also injects ``prior_sql`` and ``prior_rows`` when
-        present, allowing analytics follow-ups like "sum the results" to work
-        without hitting the database again.
-        """
-        if not history:
-            return current_message
-
-        parts: List[str] = ["[CONVERSATION HISTORY]"]
-        for turn in history:
-            role = turn.get("role", "user")
-            content = str(turn.get("content", "")).strip()
-            prefix = "User" if role == "user" else "Assistant"
-            parts.append(f"{prefix}: {content}")
-            if role == "assistant":
-                if prior_sql := turn.get("prior_sql"):
-                    parts.append(f"[Prior SQL]: {prior_sql}")
-                if prior_rows := turn.get("prior_rows"):
-                    rows_preview = json.dumps(prior_rows[:5], default=str)
-                    parts.append(
-                        f"[Prior Data ({len(prior_rows)} rows, showing first 5)]: {rows_preview}"
-                    )
-        parts.append("[END CONVERSATION HISTORY]")
-        parts.append(f"\nUser (current): {current_message}")
-        return "\n".join(parts)
-
     def _build_agent(
         self,
         initial_messages: Optional[List[Dict[str, Any]]] = None,
@@ -116,14 +87,16 @@ class OrchestratorAgent:
         a reference to analytics_agent so they can read its invocation_state
         sandbox to retrieve chart data after the agent run completes.
         """
+        from typing import cast as _cast
+
         from app.agents.v1.analytics_agent import build_analytics_agent
         from app.agents.v1.chat_agent import build_chat_agent
 
         orchestrator_model = self._factory.get_model(settings=self._settings)
 
-        analytics_agent = build_analytics_agent(
-            messages=initial_messages or []
-        )
+        seeded = initial_messages or []
+
+        analytics_agent = build_analytics_agent(messages=seeded)
 
         analytics_tool = analytics_agent.as_tool(
             name="analytics_agent",
@@ -133,7 +106,7 @@ class OrchestratorAgent:
                 "Pass the user's exact question as input."
             ),
         )
-        chat_tool = build_chat_agent().as_tool(
+        chat_tool = build_chat_agent(messages=seeded).as_tool(
             name="chat_agent",
             description=(
                 "Use for general conversation, questions, explanations, summaries, "
@@ -146,6 +119,7 @@ class OrchestratorAgent:
             model=orchestrator_model,
             system_prompt=settings.orchestrator_system_prompt,
             tools=[analytics_tool, chat_tool],
+            messages=_cast(Any, seeded),
             # Suppress default stdout printing — responses come via AgentResult.
             callback_handler=None,
             # No retries — prevents extra API calls on transient errors.
@@ -158,60 +132,62 @@ class OrchestratorAgent:
 
     async def execute(self, context: Optional[Dict[str, Any]] = None) -> OrchestratorAgentSchema:
         """Route a user request through the orchestrator and return a structured response."""
-        from app.agents.v1.analytics_agent import _history_to_messages
         from app.agents.v1.classify_agent import ClassifyAgent
+        from app.utils.conversation_utils import history_to_strands_messages
 
         if context is None:
             context = {}
         message: str = context.get("message") or ""
         history: List[Dict[str, Any]] = context.get("conversation_history") or []
-        augmented_message = self._format_history_for_prompt(history, message)
 
-        # Classify intent + follow-up before building agent so we can seed
-        # the analytics sub-agent with the right history up front.
         initial_messages: List[Dict[str, Any]] = []
         try:
             classify_result = await ClassifyAgent().execute(context)
             context["is_followup"] = classify_result.followup
             if classify_result.followup and history:
-                initial_messages = _history_to_messages(history)
+                initial_messages = history_to_strands_messages(history)
                 logger.info(
-                    "Orchestrator: follow-up detected — seeding analytics with %d prior turns",
+                    "Orchestrator: follow-up detected — seeding with %d prior turns",
                     len(initial_messages),
                 )
         except Exception as exc:
             logger.warning("ClassifyAgent failed in orchestrator: %s", exc)
 
-        # _build_agent() returns (orchestrator_agent, analytics_agent)
         agent = self._build_agent(initial_messages=initial_messages)
-
         conversation_id: str = context.get("conversation_id") or ""
 
         try:
+            from app.schemas.chat import MessageAsset
             from app.tools.python_executor_tool import (
                 clear_chart_state,
                 pop_latest_chart,
                 set_conversation_id,
             )
-            if conversation_id:
-                set_conversation_id(conversation_id)
-            clear_chart_state(conversation_id)
-            result = agent(augmented_message)
-            response_text = str(result)
-            chart_b64, chart_caption = pop_latest_chart(conversation_id)
+
+            def _run_sync() -> tuple:
+                if conversation_id:
+                    set_conversation_id(conversation_id)
+                clear_chart_state(conversation_id)
+                result = agent(message)
+                _chart_b64, _caption = pop_latest_chart(conversation_id)
+                return str(result), _chart_b64, _caption
+
+            response_text, chart_b64, chart_caption = await asyncio.to_thread(_run_sync)
 
         except Exception as exc:
             logger.error("Orchestrator agent error: %s", exc, exc_info=True)
             response_text = "I encountered an error processing your request. Please try again."
             chart_b64 = ""
             chart_caption = ""
-  
 
-        return OrchestratorAgentSchema(
-            response_text=response_text,
-            chart_b64=chart_b64,
-            visualization_caption=chart_caption,
-        )
+        from app.schemas.chat import MessageAsset  # noqa: F811
+        assets: List[MessageAsset] = []
+        if chart_b64:
+            assets.append(MessageAsset(
+                source=f"data:image/png;base64,{chart_b64}",
+                caption=chart_caption,
+            ))
+        return OrchestratorAgentSchema(response_text=response_text, assets=assets)
 
     async def execute_stream(
         self,
@@ -225,42 +201,36 @@ class OrchestratorAgent:
         - ``{"type": "complete", "data": {...}}`` — final structured payload
         - ``{"type": "error", "message": "..."}`` — on failure
         """
-        import asyncio
-
         if context is None:
             context = {}
         message: str = context.get("message") or ""
         history: List[Dict[str, Any]] = context.get("conversation_history") or []
-        augmented_message = self._format_history_for_prompt(history, message)
 
         yield {"type": "thinking"}
 
-        # Classify intent + follow-up before building agent.
-        from app.agents.v1.analytics_agent import _history_to_messages
         from app.agents.v1.classify_agent import ClassifyAgent
+        from app.utils.conversation_utils import history_to_strands_messages
 
         initial_messages: List[Dict[str, Any]] = []
         try:
             classify_result = await ClassifyAgent().execute(context)
             context["is_followup"] = classify_result.followup
             if classify_result.followup and history:
-                initial_messages = _history_to_messages(history)
+                initial_messages = history_to_strands_messages(history)
                 logger.info(
-                    "Orchestrator stream: follow-up detected — seeding analytics with %d prior turns",
+                    "Orchestrator stream: follow-up detected — seeding with %d prior turns",
                     len(initial_messages),
                 )
         except Exception as exc:
             logger.warning("ClassifyAgent failed in orchestrator stream: %s", exc)
 
-        # _build_agent() calls clear_chart_state() internally before wiring tools
         agent = self._build_agent(initial_messages=initial_messages)
-
         conversation_id: str = context.get("conversation_id") or ""
 
         try:
 
             def _run_agent():
-                """Execute the agent synchronously; return (response_text, chart_b64, chart_caption)."""
+                """Execute the agent synchronously in a background thread."""
                 from app.tools.python_executor_tool import (
                     clear_chart_state,
                     pop_latest_chart,
@@ -269,9 +239,9 @@ class OrchestratorAgent:
                 if conversation_id:
                     set_conversation_id(conversation_id)
                 clear_chart_state(conversation_id)
-                result = agent(augmented_message)
-                chart_b64, chart_caption = pop_latest_chart(conversation_id)
-                return str(result), chart_b64, chart_caption
+                result = agent(message)
+                _chart_b64, _caption = pop_latest_chart(conversation_id)
+                return str(result), _chart_b64, _caption
 
             # Run the agent in a background thread to avoid blocking the event loop.
             result_tuple = await asyncio.to_thread(_run_agent)
@@ -299,8 +269,12 @@ class OrchestratorAgent:
                 "type": "complete",
                 "data": {
                     "response_text": response_text,
+                    # Legacy fields kept for backward compat; new consumers use assets[].
                     "chart_b64": chart_b64,
                     "visualization_caption": chart_caption,
+                    "assets": [
+                        {"source": f"data:image/png;base64,{chart_b64}", "caption": chart_caption, "mime": "image/png", "asset_type": "chart"}
+                    ] if chart_b64 else [],
                 },
             }
 

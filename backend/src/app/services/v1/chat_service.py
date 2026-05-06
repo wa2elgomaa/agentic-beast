@@ -571,9 +571,21 @@ class ChatService:
                 if event.get("type") == "complete":
                     data = event.get("data", {})
                     response_text = data.get("response_text", "")
+                    # Prefer the new assets[] list; fall back to legacy chart_b64 for
+                    # older orchestrator builds or non-streaming paths.
+                    raw_assets = data.get("assets") or []
                     chart_b64 = data.get("chart_b64") or ""
                     visualization_caption = data.get("visualization_caption") or ""
-                    if chart_b64:
+
+                    if raw_assets:
+                        op_type = "analytics"
+                        op_data = {
+                            "assets": raw_assets,
+                            # Keep legacy fields for backward compat with old message readers
+                            "chart_b64": raw_assets[0].get("source", "").split(",", 1)[-1] if raw_assets else "",
+                            "visualization_caption": raw_assets[0].get("caption", "") if raw_assets else "",
+                        }
+                    elif chart_b64:
                         op_type = "analytics"
                         op_data = {
                             "chart_b64": chart_b64,
@@ -596,6 +608,8 @@ class ChatService:
                         "type": "complete",
                         "data": {
                             "response_text": response_text,
+                            "assets": raw_assets,
+                            # Legacy fields kept for older frontend builds
                             "chart_b64": chart_b64,
                             "visualization_caption": visualization_caption,
                             "operation": op_type,
@@ -629,9 +643,24 @@ class ChatService:
         if message.operation or message.operation_data or message.operation_metadata:
             op = message.operation_data or {}
             extra = message.operation_metadata or {}
+
+            # Build assets list — prefer new assets[] key, synthesise from legacy chart_b64
+            from app.schemas.chat import MessageAsset
+            raw_assets = op.get("assets") or []
+            if raw_assets:
+                assets_list = [MessageAsset(**a) if isinstance(a, dict) else a for a in raw_assets]
+            elif chart_b64 := op.get("chart_b64"):
+                assets_list = [MessageAsset(
+                    source=f"data:image/png;base64,{chart_b64}",
+                    caption=op.get("visualization_caption", ""),
+                )]
+            else:
+                assets_list = []
+
             metadata = ChatMessageMetadata(
                 operation=message.operation,
                 citations=op.get("citations"),
+                assets=assets_list,
                 chart_b64=op.get("chart_b64"),
                 visualization_caption=op.get("visualization_caption"),
                 code_output=op.get("code_output"),

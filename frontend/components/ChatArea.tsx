@@ -78,11 +78,12 @@ export default function ChatArea({
     onThinking: () => {
       // Loading skeleton already shown via isLoading state
     },
-    onImage: (b64, _mime, caption) => {
+    onImage: (b64, mime, caption) => {
       const id = streamingAssistantIdRef.current
       if (!id) return
+      const asset = { source: `data:${mime};base64,${b64}`, caption, mime, asset_type: 'chart' }
       onUpdateMessage(id, {
-        metadata: { chart_b64: b64, visualization_caption: caption },
+        metadata: { assets: [asset], chart_b64: b64, visualization_caption: caption },
       })
     },
     onChunk: (text) => {
@@ -101,14 +102,20 @@ export default function ChatArea({
       // otherwise fall back to whatever was streamed.
       const finalText = data?.response_text || streamingContentRef.current
       // Chart data is delivered via the `image` event before `complete`.
-      // chart_b64 in the complete payload is a fallback for non-streaming paths.
+      // assets[] in the complete payload is a fallback for non-streaming paths
+      // where no image event was fired.
+      const rawAssets = data?.assets || []
       const chart_b64 = data?.chart_b64 || ''
       const visualization_caption = data?.visualization_caption || ''
+      // Merge assets: prefer assets[] from complete if the image event didn't fire yet
+      const mergedAssets = rawAssets.length > 0 ? rawAssets : (
+        chart_b64 ? [{ source: `data:image/png;base64,${chart_b64}`, caption: visualization_caption, mime: 'image/png', asset_type: 'chart' }] : []
+      )
 
       onUpdateMessage(id, {
         content: finalText,
         conversation_id: data?.conversation_id,
-        metadata: chart_b64 ? { chart_b64, visualization_caption } : undefined,
+        metadata: mergedAssets.length > 0 ? { assets: mergedAssets, chart_b64, visualization_caption } : undefined,
         isLoading: false,
       })
       if (!currentConversationIdRef.current) {

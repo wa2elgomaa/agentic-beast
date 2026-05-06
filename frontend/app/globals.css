@@ -35,7 +35,7 @@ a {
 ol,
 ul,
 menu {
-  list-style: auto;
+  list-style: revert-layer;
 }
 
 /* Scrollbar styling */

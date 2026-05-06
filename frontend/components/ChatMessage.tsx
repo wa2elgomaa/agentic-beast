@@ -55,24 +55,30 @@ export default function ChatMessage({ message }: ChatMessageProps) {
                 </ReactMarkdown>
               </div>
 
-              {!isUser && message.metadata?.chart_b64 && (
+              {/* Render assets[] (new path) ---------------------------------------- */}
+              {!isUser && (message.metadata?.assets ?? []).length > 0 && (
+                <>
+                  {(message.metadata!.assets!).map((asset, i) => (
+                    <figure key={i} className="mt-4">
+                      <img
+                        src={asset.source}
+                        alt={asset.caption || 'Analysis chart'}
+                        className="rounded-lg border border-gray-200 max-w-full shadow-sm"
+                      />
+                      {asset.caption && (
+                        <figcaption className="mt-1 text-xs text-gray-500 text-center">
+                          {asset.caption}
+                        </figcaption>
+                      )}
+                    </figure>
+                  ))}
+                </>
+              )}
+              {/* Legacy fallback: old messages stored chart_b64 directly ----------- */}
+              {!isUser && !((message.metadata?.assets ?? []).length > 0) && message.metadata?.chart_b64 && (
                 <figure className="mt-4">
                   <img
                     src={`data:image/png;base64,${message.metadata.chart_b64}`}
-                    alt={message.metadata.visualization_caption || 'Analysis chart'}
-                    className="rounded-lg border border-gray-200 max-w-full shadow-sm"
-                  />
-                  {message.metadata.visualization_caption && (
-                    <figcaption className="mt-1 text-xs text-gray-500 text-center">
-                      {message.metadata.visualization_caption}
-                    </figcaption>
-                  )}
-                </figure>
-              )}
-              {!isUser && !message.metadata?.chart_b64 && message.metadata?.assets && (
-                <figure className="mt-4">
-                  <img
-                    src={`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}${message.metadata.assets}`}
                     alt={message.metadata.visualization_caption || 'Analysis chart'}
                     className="rounded-lg border border-gray-200 max-w-full shadow-sm"
                   />

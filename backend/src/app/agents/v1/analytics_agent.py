@@ -16,7 +16,6 @@ Exported
 * ``build_analytics_agent``  — returns Agent (orchestrator calls .as_tool() on it)
 * ``AnalyticsAgent``         — direct-call entry-point (used by ChatService)
 * ``get_agent``              — factory helper
-* ``_history_to_messages``   — used by orchestrator for follow-up seeding
 
 Tools (in app.tools):
 * ``app.tools.python_repl.python_repl``  — standalone @tool, uses invocation_state
@@ -39,22 +38,6 @@ from app.tools.python_repl import python_repl
 from app.utils.analytics_utils import build_schema_context
 
 logger = get_logger(__name__)
-
-# ---------------------------------------------------------------------------
-# Conversation history helpers
-# ---------------------------------------------------------------------------
-
-def _history_to_messages(history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Convert conversation_history dicts to Strands message format."""
-    messages: List[Dict[str, Any]] = []
-    for turn in history:
-        role = turn.get("role", "user")
-        content = str(turn.get("content", "")).strip()
-        if not content:
-            continue
-        messages.append({"role": role, "content": [{"text": content}]})
-    return messages
-
 
 # ---------------------------------------------------------------------------
 # Response schema
@@ -118,18 +101,11 @@ class AnalyticsAgent:
 
     async def execute(self, context: Dict[str, Any]) -> AnalyticsAgentSchema:
         message: str = context.get("message") or ""
-        history: List[Dict[str, Any]] = context.get("conversation_history") or []
-        is_followup: bool = bool(context.get("is_followup", False))
         conversation_id: str = context.get("conversation_id") or ""
-
-        initial_messages = _history_to_messages(history) if (is_followup and history) else []
-        if initial_messages:
-            logger.info("Analytics: follow-up — seeding with %d prior turns", len(initial_messages))
-        else:
-            logger.info("Analytics: fresh query")
-
-        #TODO: limit the initial_messages to the most recent N turns or M tokens to avoid context bloat in long conversations.
-        agent = build_analytics_agent(messages=initial_messages)
+        # History seeding is handled by the orchestrator via build_analytics_agent(messages=).
+        # For direct calls (e.g. tests), the caller may pass conversation_history but
+        # seeding is skipped here to keep this layer stateless.
+        agent = build_analytics_agent()
 
         response_text = ""
         chart_b64 = ""

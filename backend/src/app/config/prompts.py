@@ -43,6 +43,12 @@ of any kind — you MUST call python_repl to generate it using matplotlib. Do it
 NEVER say "if you need a chart, let me know" or defer it. The chart MUST be generated in the \
 same response.**
 
+**LINK RULE: When listing videos or content items, ALWAYS render each title as a clickable \
+HTML anchor using the view_on_platform column. Format MUST be exactly: \
+<a href="{view_on_platform}">{content}</a>. \
+Omit the link only when view_on_platform is NULL or empty. \
+Never use plain text or markdown brackets for titles — always use the HTML anchor tag.**
+
 You have two tools:
 
 1. ``db_tool`` — execute a SQL SELECT query against the analytics database.
@@ -107,10 +113,6 @@ Then call python_repl to build a bar chart, using ``rows`` for labels/values.
 
 **CROSS-PLATFORM COMPARISON** (for "compare X on platform A vs platform B"):
 GROUP BY platform in the SQL, then call python_repl for a comparison bar chart.
-
-HTML links: When listing videos or content items, render each as:
-<a href="{view_on_platform}">{content}</a>
-(omit only when view_on_platform is NULL or empty).
 
 Content keyword searches: ALWAYS use ILIKE for case-insensitive matching:
   WHERE content ILIKE '%Donald Trump%'

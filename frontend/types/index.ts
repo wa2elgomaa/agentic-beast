@@ -14,6 +14,17 @@ export type OperationType =
   | 'log_analytics'
 
 // ============================================================================
+// Asset Types
+// ============================================================================
+
+export interface MessageAsset {
+  source: string            // full data URI e.g. "data:image/png;base64,..."
+  caption: string
+  mime: string
+  asset_type: string
+}
+
+// ============================================================================
 // Chat Streaming Event Types
 // ============================================================================
 
@@ -42,7 +53,7 @@ export interface ChatStreamEvent {
     conversation_id?: string
     sample_rate?: number
     audio?: string
-    assets?: string
+    assets?: MessageAsset[]
     chart_b64?: string
     visualization_caption?: string
     b64?: string
@@ -108,7 +119,8 @@ export interface ChatMessageMetadata {
   operation?: string
   citations?: Record<string, any>[]
   agents_involved?: string[]
-  assets?: string
+  assets?: MessageAsset[]
+  // Legacy fields — kept for reading old messages that predate MessageAsset
   chart_b64?: string
   visualization_caption?: string
   code_output?: string
