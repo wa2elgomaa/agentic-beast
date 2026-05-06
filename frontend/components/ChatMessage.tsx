@@ -89,6 +89,21 @@ export default function ChatMessage({ message }: ChatMessageProps) {
                   )}
                 </figure>
               )}
+              {/* TTS generation indicator */}
+              {!isUser && message.isTtsGenerating && (
+                <div className="flex items-center gap-2 text-sm text-indigo-500 mt-2">
+                  <div className="flex gap-[3px] items-end h-4">
+                    {[0, 1, 2, 3].map((i) => (
+                      <span
+                        key={i}
+                        className="w-[3px] rounded-full bg-indigo-400 animate-bounce"
+                        style={{ height: '60%', animationDelay: `${i * 0.15}s` }}
+                      />
+                    ))}
+                  </div>
+                  <span>Generating voice…</span>
+                </div>
+              )}
             </>
           )}
         </div>

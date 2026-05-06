@@ -61,7 +61,22 @@ class AudioTranscriptTool:
                 f"Unsupported STT provider: '{self.provider}'. "
                 f"Supported values: {list(handlers)}"
             )
-        return await handler(audio_bytes, audio_format)
+        try:
+            return await handler(audio_bytes, audio_format)
+        except Exception as primary_err:
+            # If the primary provider (e.g. litert — model not yet downloaded) fails,
+            # attempt the openai fallback so audio chat works without the on-device model.
+            if self.provider != "openai":
+                import logging as _logging
+                _logging.getLogger(__name__).warning(
+                    "STT provider '%s' failed (%s); falling back to openai whisper.",
+                    self.provider, primary_err,
+                )
+                try:
+                    return await self._transcribe_openai(audio_bytes, audio_format)
+                except Exception:
+                    pass  # re-raise the original error for a cleaner message
+            raise
 
     # ------------------------------------------------------------------
     # Provider implementations

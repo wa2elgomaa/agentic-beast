@@ -40,6 +40,7 @@ export type ChatStreamEventType =
   | 'audio_start'
   | 'audio_chunk'
   | 'audio_end'
+  | 'tts_start'
 
 export interface ChatStreamEvent {
   type: ChatStreamEventType
@@ -258,6 +259,8 @@ export interface Message {
   results?: ContentResult[]
   
   isLoading?: boolean
+  isTtsGenerating?: boolean
+  isCancelled?: boolean
 }
 
 // ============================================================================

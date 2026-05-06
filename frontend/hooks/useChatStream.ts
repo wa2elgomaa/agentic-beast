@@ -15,6 +15,7 @@ interface UseChatStreamOptions {
   onAudioStart?: (sampleRate: number) => void
   onAudioChunk?: (audio: string) => void
   onAudioEnd?: () => void
+  onTtsStart?: () => void
   onImage?: (b64: string, mime: string, caption: string) => void
 }
 
@@ -36,6 +37,7 @@ export function useChatStream({
   onAudioStart,
   onAudioChunk,
   onAudioEnd,
+  onTtsStart,
   onImage,
 }: UseChatStreamOptions): UseChatStreamResult {
   const socketRef = useRef<WebSocket | null>(null)
@@ -50,6 +52,7 @@ export function useChatStream({
   const onAudioStartRef = useRef(onAudioStart)
   const onAudioChunkRef = useRef(onAudioChunk)
   const onAudioEndRef = useRef(onAudioEnd)
+  const onTtsStartRef = useRef(onTtsStart)
   const onImageRef = useRef(onImage)
   useEffect(() => { onChunkRef.current = onChunk }, [onChunk])
   useEffect(() => { onCompleteRef.current = onComplete }, [onComplete])
@@ -59,6 +62,7 @@ export function useChatStream({
   useEffect(() => { onAudioStartRef.current = onAudioStart }, [onAudioStart])
   useEffect(() => { onAudioChunkRef.current = onAudioChunk }, [onAudioChunk])
   useEffect(() => { onAudioEndRef.current = onAudioEnd }, [onAudioEnd])
+  useEffect(() => { onTtsStartRef.current = onTtsStart }, [onTtsStart])
   useEffect(() => { onImageRef.current = onImage }, [onImage])
 
   const disconnect = useCallback(() => {
@@ -141,6 +145,11 @@ export function useChatStream({
 
             if (event.type === 'transcript') {
               onTranscriptRef.current?.(event.data?.text ?? '')
+              return
+            }
+
+            if (event.type === 'tts_start') {
+              onTtsStartRef.current?.()
               return
             }
 

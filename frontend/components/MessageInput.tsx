@@ -28,6 +28,7 @@ interface MessageInputProps {
   // When true, the input should stop listening/transcribing; when false,
   // resume if it was previously paused by this external control.
   pauseListening?: boolean
+  onCancelVoice?: () => void
   children?: React.ReactNode
 }
 
@@ -78,6 +79,7 @@ export default function MessageInput({
   onCameraEnabledChange,
   onVoiceCaptured,
   pauseListening,
+  onCancelVoice,
   children,
 }: MessageInputProps) {
   const [message, setMessage] = useState('')
@@ -347,6 +349,7 @@ export default function MessageInput({
     await cleanupAudioMode()
     setAudioError('')
     setAudioState('idle')
+    onCancelVoice?.()
   }
 
   const handleSubmit = () => {

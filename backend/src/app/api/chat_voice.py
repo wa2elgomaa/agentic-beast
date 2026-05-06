@@ -78,7 +78,8 @@ async def voice_turn(
     transcript: Optional[str] = None
     try:
         audio_bytes = base64.b64decode(request.audio)
-        result = await stt_tool.transcribe_bytes(audio_bytes, audio_format="webm")
+        # Frontend encodes audio as WAV (float32ToWavBase64 @ 16 kHz).
+        result = await stt_tool.transcribe_bytes(audio_bytes, audio_format="wav")
         transcript = (result.get("transcript") or "").strip()
     except Exception as exc:
         logger.exception("STT transcription failed", error=str(exc))

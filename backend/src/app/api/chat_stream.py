@@ -145,7 +145,8 @@ async def _handle_audio_turn(websocket: WebSocket, user, event: dict) -> None:
 
     try:
         audio_bytes = base64.b64decode(event["audio"])
-        result = await stt_tool.transcribe_bytes(audio_bytes, audio_format="webm")
+        # Frontend encodes audio as WAV (float32ToWavBase64 @ 16 kHz).
+        result = await stt_tool.transcribe_bytes(audio_bytes, audio_format="wav")
         transcript = (result.get("transcript") or "").strip()
     except Exception:
         logger.exception("Audio STT failed")
@@ -187,6 +188,23 @@ async def _handle_audio_turn(websocket: WebSocket, user, event: dict) -> None:
 
     _SENTENCE_RE = re.compile(r"(?<=[.!?])\s+")
 
+    _ISO_DATE_RE = re.compile(r'\b(\d{4})-(\d{2})-(\d{2})\b')
+    _MONTHS = [
+        "January", "February", "March", "April", "May", "June",
+        "July", "August", "September", "October", "November", "December",
+    ]
+
+    def _expand_iso_dates(t: str) -> str:
+        def _repl(m: re.Match) -> str:
+            try:
+                y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+                if 1 <= mo <= 12 and 1 <= d <= 31:
+                    return f"{_MONTHS[mo - 1]} {d}, {y}"
+            except Exception:
+                pass
+            return m.group(0)
+        return _ISO_DATE_RE.sub(_repl, t)
+
     def _markdown_to_speech(text: str) -> str:
         """Strip markdown/HTML formatting so TTS reads clean prose."""
         text = re.sub(r"<[^>]+>", "", text)                           # HTML tags
@@ -204,11 +222,13 @@ async def _handle_audio_turn(websocket: WebSocket, user, event: dict) -> None:
         text = re.sub(r"[|~^\\]", " ", text)                          # stray special chars
         text = re.sub(r"\n{2,}", " ", text)
         text = re.sub(r"[ \t]+", " ", text)
+        text = _expand_iso_dates(text)                                 # 2026-03-27 → March 27, 2026
         return text.strip()
 
     try:
         tts = await _get_tts_backend()
         clean_text = (_markdown_to_speech(response_text) or response_text)[:2000]
+        await _safe_send(websocket, {"type": "tts_start"})
         tts_voice = settings.voice_tts_voice
         tts_speed = float(settings.voice_tts_speed)
 

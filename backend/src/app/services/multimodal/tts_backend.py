@@ -56,6 +56,20 @@ class ONNXBackend(TTSBackend):
         return pcm
 
 
+class NullTTSBackend(TTSBackend):
+    """No-op backend used when no TTS library is installed.
+
+    Returns a single silent PCM frame so the audio_start / audio_end
+    handshake still fires and the frontend does not hang waiting.
+    """
+
+    sample_rate: int = 24000
+
+    def generate(self, text: str, voice: str = "af_heart", speed: float = 1.1) -> np.ndarray:
+        # Return 0.1 s of silence rather than crashing
+        return np.zeros(int(self.sample_rate * 0.1), dtype=np.float32)
+
+
 def load_tts_backend(preferred_backend: str = "auto") -> TTSBackend:
     """Load the best available TTS backend for the current platform."""
     if preferred_backend in {"auto", "mlx"} and is_apple_silicon() and not os.environ.get("KOKORO_ONNX"):
@@ -65,4 +79,11 @@ def load_tts_backend(preferred_backend: str = "auto") -> TTSBackend:
             if preferred_backend == "mlx":
                 raise
 
-    return ONNXBackend()
+    try:
+        return ONNXBackend()
+    except (ImportError, Exception):
+        if preferred_backend in {"onnx"}:
+            raise
+
+    # Last resort — silent backend so the server stays running without TTS deps
+    return NullTTSBackend()

@@ -169,6 +169,7 @@ export default function ChatArea({
       const assistantId = streamingAssistantIdRef.current
       if (assistantId) {
         setPauseListening(true)
+        onUpdateMessage(assistantId, { isTtsGenerating: false })
         void audioPlayer.startStream(assistantId, sampleRate)
       }
     },
@@ -189,6 +190,12 @@ export default function ChatArea({
       // Do NOT resume mic here — audio is still playing in Web Audio API.
       // onStreamEnd fires after actual playback completes and resumes the mic.
       setIsLoading(false)
+    },
+    onTtsStart: () => {
+      const assistantId = streamingAssistantIdRef.current
+      if (assistantId) {
+        onUpdateMessage(assistantId, { isTtsGenerating: true })
+      }
     },
   })
   // const realtime = useRealtimeChat({
@@ -347,13 +354,26 @@ export default function ChatArea({
   const isAnyAudioPlaying = Object.values(playingStreams).some(Boolean)
 
   const handleStopAudio = useCallback(() => {
+    chatStream.disconnect()
     audioPlayer.stopAll()
     streamingAssistantIdRef.current = null
     streamingUserIdRef.current = null
     streamingContentRef.current = ''
     setPauseListening(false)
     setIsLoading(false)
-  }, [audioPlayer])
+  }, [audioPlayer, chatStream])
+
+  const handleCancelVoice = useCallback(() => {
+    chatStream.disconnect()
+    const userId = streamingUserIdRef.current
+    const assistantId = streamingAssistantIdRef.current
+    if (userId) onUpdateMessage(userId, { isCancelled: true })
+    if (assistantId) onUpdateMessage(assistantId, { isCancelled: true })
+    streamingAssistantIdRef.current = null
+    streamingUserIdRef.current = null
+    streamingContentRef.current = ''
+    setIsLoading(false)
+  }, [chatStream, onUpdateMessage])
 
   const handleVoiceCaptured = useCallback(({ audioBase64, durationMs }: VoiceCapturePayload) => {
     // Prevent capturing new voice inputs while already processing or
@@ -520,7 +540,7 @@ export default function ChatArea({
               </div>
             )}
 
-            {messages.map((message) => (
+            {messages.filter((m) => !m.isCancelled).map((message) => (
               <ChatMessage
                 key={message.id}
                 message={message}
@@ -575,6 +595,7 @@ export default function ChatArea({
           onCameraEnabledChange={setCameraEnabled}
           onVoiceCaptured={handleVoiceCaptured}
           pauseListening={pauseListening}
+          onCancelVoice={handleCancelVoice}
         >
           {voiceState === 'listening' ? <AudioCanvas state={voiceState} analyser={analyser} /> : null}
         </MessageInput>
