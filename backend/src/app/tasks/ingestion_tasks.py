@@ -13,6 +13,9 @@ from app.services.ingestion_task_service import get_ingestion_task_service
 from app.tasks.celery_app import celery_app, run_async_in_worker
 from app.utils import utc_now
 
+# Imported lazily inside functions to avoid circular imports; declared here for clarity.
+# from app.adapters.gmail_adapter import CredentialExpiredError
+
 logger = get_logger(__name__)
 
 
@@ -97,21 +100,25 @@ async def _run_gmail_with_subtasks(
             processed_result = await db.execute(processed_stmt)
             exclude_ids = {row[0] for row in processed_result.all() if row and row[0]}
 
-            # Fetch full email objects (with attachments/links)
-            # Use page+limit pagination for bulk fetch. Use task-configured
-            # max_results as the page size for this operation (default 25).
-            fetch_limit = int(task_config.get("max_results", 25))
+            # Fetch ALL unprocessed emails by paging through the full inbox.
+            # `max_results` in task_config is for UI previews only — scheduled
+            # ingestion must collect every message to avoid missing reports.
             emails = await gmail_adapter.fetch_data(
                 query=task_config.get("gmail_query", ""),
                 sender_filter=task_config.get("sender_filter"),
                 subject_pattern=task_config.get("subject_pattern"),
                 page_token=None,
-                limit=fetch_limit,
+                fetch_all=True,
                 source_type=task_config.get("gmail_source_type", "attachment"),
                 link_regex=task_config.get("download_link_regex") or r"https?://\S+",
                 allowed_extensions=task_config.get("allowed_extensions"),
                 exclude_message_ids=exclude_ids,
             )
+
+            # Sort oldest-first so Celery processes emails in chronological order.
+            # Gmail's API returns newest-first by default; reversing ensures earlier
+            # reports are ingested before later ones (important for dedup and ordering).
+            emails.sort(key=lambda e: e.get("date") or "", reverse=False)
 
             # Extract message IDs from full emails
             message_ids = [email.get("message_id") for email in emails if email.get("message_id")]
@@ -189,6 +196,41 @@ async def _run_gmail_with_subtasks(
             await gmail_adapter.disconnect()
 
     except Exception as e:
+        from app.adapters.gmail_adapter import CredentialExpiredError
+
+        if isinstance(e, CredentialExpiredError):
+            # The refresh token has been permanently revoked (invalid_grant).
+            # Deactivate the task so the scheduler stops retrying and mark the
+            # parent run as FAILED with a clear message.
+            logger.error(
+                "Gmail credential revoked (invalid_grant) — deactivating task. "
+                "Re-authorize via the OAuth flow to re-enable.",
+                task_id=task_id,
+                parent_run_id=parent_run_id,
+            )
+            try:
+                async with AsyncSessionLocal() as db2:
+                    stmt = select(IngestionTask).where(IngestionTask.id == task_id)
+                    result = await db2.execute(stmt)
+                    ingestion_task = result.scalar_one_or_none()
+                    if ingestion_task:
+                        ingestion_task.is_active = False
+
+                    task_service2 = get_ingestion_task_service(db2)
+                    await task_service2.update_run(
+                        parent_run_id,
+                        status=RunStatus.FAILED,
+                        completed_at=utc_now(),
+                        error_message=(
+                            "Gmail credential revoked (invalid_grant). "
+                            "Task deactivated — re-authorize via the OAuth flow."
+                        ),
+                    )
+                    await db2.commit()
+            except Exception as inner:
+                logger.error("Failed to deactivate task after invalid_grant", error=str(inner), task_id=task_id)
+            raise
+
         logger.error(
             "Failed to create Gmail sub-tasks",
             task_id=task_id,

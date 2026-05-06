@@ -241,7 +241,7 @@ export default function GmailCredentialStatus({ taskId }: GmailCredentialStatusP
           <div>
             <p className="text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Last Used</p>
             <p className="text-sm text-gray-900 dark:text-gray-100">
-              {status.last_used_at ? new Date(status.last_used_at).toLocaleString() : '-'}
+              {status.last_used_at ? status.last_used_at : '-'}
             </p>
           </div>
           <div>

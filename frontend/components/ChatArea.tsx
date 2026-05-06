@@ -1,13 +1,13 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AnalyticsResultDataItem, Message, OrchestratorResponse, QuerySuggestion } from '@/types'
+import { Message, OrchestratorResponse, QuerySuggestion } from '@/types'
 import AudioCanvas from './AudioCanvas'
 import AudioPlaybackBar from './AudioPlaybackBar'
 import ChatMessage from './ChatMessage'
 import MessageInput, { AudioModeState, VoiceCapturePayload } from './MessageInput'
 import WelcomeScreen from './WelcomeScreen'
-import { chat, getAccessToken } from '@/lib/api'
+import { chat, getAccessToken, createConversation } from '@/lib/api'
 import useAudioPlayer from '@/hooks/useAudioPlayer'
 import { useChatStream } from '@/hooks/useChatStream'
 import clsx from 'clsx'
@@ -78,6 +78,13 @@ export default function ChatArea({
     onThinking: () => {
       // Loading skeleton already shown via isLoading state
     },
+    onImage: (b64, _mime, caption) => {
+      const id = streamingAssistantIdRef.current
+      if (!id) return
+      onUpdateMessage(id, {
+        metadata: { chart_b64: b64, visualization_caption: caption },
+      })
+    },
     onChunk: (text) => {
       const id = streamingAssistantIdRef.current
       if (!id) return
@@ -90,21 +97,43 @@ export default function ChatArea({
     onComplete: (data) => {
       const id = streamingAssistantIdRef.current
       if (!id) return
-      // For audio turns don't clear refs yet — wait for audio_end
-      const results : AnalyticsResultDataItem[] = data?.results ?? []
-      const operation = results.length > 0 ? 'query_documents' : undefined
-      const operationData = { answer: data?.response_text, results, conversation_id: data?.conversation_id }
+      // Use response_text from the complete payload if richer than streamed chunks,
+      // otherwise fall back to whatever was streamed.
+      const finalText = data?.response_text || streamingContentRef.current
+      // Chart data is delivered via the `image` event before `complete`.
+      // chart_b64 in the complete payload is a fallback for non-streaming paths.
+      const chart_b64 = data?.chart_b64 || ''
+      const visualization_caption = data?.visualization_caption || ''
+
       onUpdateMessage(id, {
-        operation: operation as any,
-        operationData,
+        content: finalText,
         conversation_id: data?.conversation_id,
+        metadata: chart_b64 ? { chart_b64, visualization_caption } : undefined,
         isLoading: false,
       })
-      // If this was the first message in a new conversation, register it so the
-      // sidebar refreshes and currentConversationId is set in ChatContainer.
-      if (!currentConversationIdRef.current && data?.conversation_id) {
-        void onConversationReady?.(data.conversation_id, lastUserInputRef.current || 'Conversation')
-        lastUserInputRef.current = ''
+      if (!currentConversationIdRef.current) {
+        if (data?.conversation_id) {
+          void onConversationReady?.(data.conversation_id, lastUserInputRef.current || 'Conversation')
+          lastUserInputRef.current = ''
+        } else {
+          // Server did not create a conversation; create one client-side as a fallback
+          ;(async () => {
+            try {
+              const conv = await createConversation((lastUserInputRef.current || 'Conversation').slice(0, 50))
+              if (conv && conv.id) {
+                // Attach the new conversation id to the message and notify parent
+                onUpdateMessage(id, { conversation_id: conv.id })
+                void onConversationReady?.(conv.id, lastUserInputRef.current || 'Conversation')
+              }
+            } catch (err) {
+              // non-fatal: log and continue
+              // eslint-disable-next-line no-console
+              console.error('Failed to create conversation fallback:', err)
+            } finally {
+              lastUserInputRef.current = ''
+            }
+          })()
+        }
       }
       // Only set isLoading=false for text turns (audio turns handle this in onAudioEnd)
       if (!streamingUserIdRef.current) {
@@ -445,8 +474,9 @@ export default function ChatArea({
         operation: data.operation,
         operationData: data.data,
         operationMetadata: data.metadata,
-        metadata: data.metadata.chart_b64 || data.metadata.code_output ? {
-          chart_b64: data.metadata.chart_b64,
+        metadata: data.metadata.assets || data.metadata.code_output ? {
+          assets: data.metadata.assets,
+          visualization_caption: data.metadata.visualization_caption,
           code_output: data.metadata.code_output,
           generated_sql: data.metadata.generated_sql,
         } : undefined,

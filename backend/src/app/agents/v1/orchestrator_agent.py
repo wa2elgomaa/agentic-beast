@@ -19,6 +19,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from pydantic import BaseModel as PydanticBaseModel, Field
 from strands import Agent
+from strands.agent import ModelRetryStrategy
 
 from app.config import settings
 from app.logging import get_logger
@@ -45,13 +46,6 @@ class OrchestratorOutputSchema(PydanticBaseModel):
             "Relay the analytics answer verbatim (including any HTML anchor tags)."
         )
     )
-    results: List[Dict[str, Any]] = Field(
-        default_factory=list,
-        description=(
-            "If analytics_agent was called, copy the result rows from its structured "
-            "output here exactly as-is. For chat or non-data queries leave empty."
-        ),
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -61,9 +55,8 @@ class OrchestratorOutputSchema(PydanticBaseModel):
 class OrchestratorAgentSchema(PydanticBaseModel):
     """Unified response returned to ChatService / API layer."""
     response_text: str = Field(description="Human-readable response to the user")
-    response_json: str = Field(
-        default="", description="JSON-serialised structured payload (analytics results, etc.)"
-    )
+    chart_b64: str = Field(default="", description="Base64-encoded PNG chart (empty if no chart)")
+    visualization_caption: str = Field(default="", description="Caption for the chart")
 
 
 # ---------------------------------------------------------------------------
@@ -102,11 +95,9 @@ class OrchestratorAgent:
             prefix = "User" if role == "user" else "Assistant"
             parts.append(f"{prefix}: {content}")
             if role == "assistant":
-                prior_sql = turn.get("prior_sql")
-                if prior_sql:
+                if prior_sql := turn.get("prior_sql"):
                     parts.append(f"[Prior SQL]: {prior_sql}")
-                prior_rows = turn.get("prior_rows")
-                if prior_rows:
+                if prior_rows := turn.get("prior_rows"):
                     rows_preview = json.dumps(prior_rows[:5], default=str)
                     parts.append(
                         f"[Prior Data ({len(prior_rows)} rows, showing first 5)]: {rows_preview}"
@@ -115,19 +106,26 @@ class OrchestratorAgent:
         parts.append(f"\nUser (current): {current_message}")
         return "\n".join(parts)
 
-    def _build_agent(self) -> Agent:
+    def _build_agent(
+        self,
+        initial_messages: Optional[List[Dict[str, Any]]] = None,
+    ) -> Agent:
         """Construct a fresh Strands Agent per request.
 
-        A fresh agent guarantees clean conversation state for each request.
-        Sub-agents are wired in via ``.as_tool()`` so the orchestrator LLM
-        can call them as standard tool invocations.
+        Returns a tuple of (orchestrator_agent, analytics_agent). Callers keep
+        a reference to analytics_agent so they can read its invocation_state
+        sandbox to retrieve chart data after the agent run completes.
         """
         from app.agents.v1.analytics_agent import build_analytics_agent
         from app.agents.v1.chat_agent import build_chat_agent
 
-        model = self._factory.get_model(settings=self._settings)
+        orchestrator_model = self._factory.get_model(settings=self._settings)
 
-        analytics_tool = build_analytics_agent(model).as_tool(
+        analytics_agent = build_analytics_agent(
+            messages=initial_messages or []
+        )
+
+        analytics_tool = analytics_agent.as_tool(
             name="analytics_agent",
             description=(
                 "Use for any data, metrics, statistics, rankings, trends, or performance "
@@ -135,7 +133,7 @@ class OrchestratorAgent:
                 "Pass the user's exact question as input."
             ),
         )
-        chat_tool = build_chat_agent(model).as_tool(
+        chat_tool = build_chat_agent().as_tool(
             name="chat_agent",
             description=(
                 "Use for general conversation, questions, explanations, summaries, "
@@ -145,11 +143,13 @@ class OrchestratorAgent:
         )
 
         return Agent(
-            model=model,
+            model=orchestrator_model,
             system_prompt=settings.orchestrator_system_prompt,
             tools=[analytics_tool, chat_tool],
             # Suppress default stdout printing — responses come via AgentResult.
             callback_handler=None,
+            # No retries — prevents extra API calls on transient errors.
+            retry_strategy=ModelRetryStrategy(max_attempts=1),
         )
 
     # ------------------------------------------------------------------ #
@@ -158,40 +158,59 @@ class OrchestratorAgent:
 
     async def execute(self, context: Optional[Dict[str, Any]] = None) -> OrchestratorAgentSchema:
         """Route a user request through the orchestrator and return a structured response."""
+        from app.agents.v1.analytics_agent import _history_to_messages
+        from app.agents.v1.classify_agent import ClassifyAgent
+
         if context is None:
             context = {}
         message: str = context.get("message") or ""
         history: List[Dict[str, Any]] = context.get("conversation_history") or []
         augmented_message = self._format_history_for_prompt(history, message)
 
-        agent = self._build_agent()
+        # Classify intent + follow-up before building agent so we can seed
+        # the analytics sub-agent with the right history up front.
+        initial_messages: List[Dict[str, Any]] = []
+        try:
+            classify_result = await ClassifyAgent().execute(context)
+            context["is_followup"] = classify_result.followup
+            if classify_result.followup and history:
+                initial_messages = _history_to_messages(history)
+                logger.info(
+                    "Orchestrator: follow-up detected — seeding analytics with %d prior turns",
+                    len(initial_messages),
+                )
+        except Exception as exc:
+            logger.warning("ClassifyAgent failed in orchestrator: %s", exc)
+
+        # _build_agent() returns (orchestrator_agent, analytics_agent)
+        agent = self._build_agent(initial_messages=initial_messages)
+
+        conversation_id: str = context.get("conversation_id") or ""
 
         try:
-            # Structured output forces the LLM to produce OrchestratorOutputSchema
-            # with response_text (human answer) + results (relay from analytics sub-tool).
-            result = agent(augmented_message, structured_output_model=OrchestratorOutputSchema)
-            structured: Optional[OrchestratorOutputSchema] = getattr(result, "structured_output", None)
-
-            if structured is not None:
-                response_text = structured.response_text
-                response_json = (
-                    json.dumps({"results": structured.results}, default=str)
-                    if structured.results
-                    else ""
-                )
-            else:
-                # Fallback: structured output unavailable (model/provider doesn't support it)
-                response_text = str(result)
-                response_json = ""
+            from app.tools.python_executor_tool import (
+                clear_chart_state,
+                pop_latest_chart,
+                set_conversation_id,
+            )
+            if conversation_id:
+                set_conversation_id(conversation_id)
+            clear_chart_state(conversation_id)
+            result = agent(augmented_message)
+            response_text = str(result)
+            chart_b64, chart_caption = pop_latest_chart(conversation_id)
 
         except Exception as exc:
             logger.error("Orchestrator agent error: %s", exc, exc_info=True)
             response_text = "I encountered an error processing your request. Please try again."
-            response_json = ""
+            chart_b64 = ""
+            chart_caption = ""
+  
 
         return OrchestratorAgentSchema(
             response_text=response_text,
-            response_json=response_json,
+            chart_b64=chart_b64,
+            visualization_caption=chart_caption,
         )
 
     async def execute_stream(
@@ -216,22 +235,47 @@ class OrchestratorAgent:
 
         yield {"type": "thinking"}
 
-        agent = self._build_agent()
+        # Classify intent + follow-up before building agent.
+        from app.agents.v1.analytics_agent import _history_to_messages
+        from app.agents.v1.classify_agent import ClassifyAgent
+
+        initial_messages: List[Dict[str, Any]] = []
+        try:
+            classify_result = await ClassifyAgent().execute(context)
+            context["is_followup"] = classify_result.followup
+            if classify_result.followup and history:
+                initial_messages = _history_to_messages(history)
+                logger.info(
+                    "Orchestrator stream: follow-up detected — seeding analytics with %d prior turns",
+                    len(initial_messages),
+                )
+        except Exception as exc:
+            logger.warning("ClassifyAgent failed in orchestrator stream: %s", exc)
+
+        # _build_agent() calls clear_chart_state() internally before wiring tools
+        agent = self._build_agent(initial_messages=initial_messages)
+
+        conversation_id: str = context.get("conversation_id") or ""
 
         try:
-            # Run the synchronous Strands agent in a thread so we don't block
-            # the event loop while the LLM completes.
-            result = await asyncio.to_thread(
-                agent, augmented_message, structured_output_model=OrchestratorOutputSchema
-            )
-            structured: Optional[OrchestratorOutputSchema] = getattr(result, "structured_output", None)
 
-            if structured is not None:
-                response_text = structured.response_text
-                results = structured.results
-            else:
-                response_text = str(result)
-                results = []
+            def _run_agent():
+                """Execute the agent synchronously; return (response_text, chart_b64, chart_caption)."""
+                from app.tools.python_executor_tool import (
+                    clear_chart_state,
+                    pop_latest_chart,
+                    set_conversation_id,
+                )
+                if conversation_id:
+                    set_conversation_id(conversation_id)
+                clear_chart_state(conversation_id)
+                result = agent(augmented_message)
+                chart_b64, chart_caption = pop_latest_chart(conversation_id)
+                return str(result), chart_b64, chart_caption
+
+            # Run the agent in a background thread to avoid blocking the event loop.
+            result_tuple = await asyncio.to_thread(_run_agent)
+            response_text, chart_b64, chart_caption = result_tuple
 
             # Stream response_text word by word for a live-typing UX.
             words = response_text.split(" ")
@@ -240,12 +284,23 @@ class OrchestratorAgent:
                 yield {"type": "text_chunk", "data": {"text": chunk, "index": i}}
                 await asyncio.sleep(0)  # yield to the event loop between chunks
 
+            # Emit image event before complete if a chart was generated
+            if chart_b64:
+                yield {
+                    "type": "image",
+                    "data": {
+                        "b64": chart_b64,
+                        "mime": "image/png",
+                        "caption": chart_caption,
+                    },
+                }
+
             yield {
                 "type": "complete",
                 "data": {
                     "response_text": response_text,
-                    "results": results,
-                    "response_json": json.dumps({"results": results}, default=str) if results else "",
+                    "chart_b64": chart_b64,
+                    "visualization_caption": chart_caption,
                 },
             }
 

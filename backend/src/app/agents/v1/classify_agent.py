@@ -7,11 +7,11 @@ This class is retained for use in pipelines that require explicit intent labels.
 
 from typing import Any, Dict, List, Optional
 
-from jinja2 import Template
 from pydantic import BaseModel as PydanticBaseModel, Field
 from strands import Agent
 
 from app.config import settings
+from app.config.prompts import CLASSIFY_SYSTEM_PROMPT_TPL
 from app.logging import get_logger
 from app.providers.factory import ProviderFactory
 
@@ -19,17 +19,21 @@ logger = get_logger(__name__)
 
 
 class ClassifyAgentSchema(PydanticBaseModel):
-    """Response schema: intent string (validated at runtime against allowed intents)."""
+    """Response schema: intent string and follow-up flag."""
     intent: str = Field(description="One of the allowed intents")
+    followup: bool = Field(
+        default=False,
+        description=(
+            "True when the message references prior results "
+            "(pronouns, ordinal refs, refinement phrases). "
+            "False when the question is self-contained."
+        ),
+    )
 
 
 DEFAULT_INTENTS: List[str] = ["analytics", "general", "unknown"]
 
-SYSTEM_PROMPT_TPL = Template(
-    "You are an intent classifier. Read the user's message and choose exactly ONE of the"
-    " following intents: {% for i in intents %}`{{ i }}`{% if not loop.last %}, {% endif %}{% endfor %}."
-    " Respond only with JSON matching the schema `{\"intent\": <one_of_values>}` and do not include any additional text."
-)
+SYSTEM_PROMPT_TPL = CLASSIFY_SYSTEM_PROMPT_TPL
 
 class ClassifyAgent:
     """A callable agent that handles classification requests.
@@ -83,8 +87,25 @@ class ClassifyAgent:
         if context is None:
             context = {}
         message = context.get("message") or ""
+        history = context.get("conversation_history") or []
 
         prompt = self._prompt_template.render(intents=self.intents)
+
+        # Append a compact history summary so the LLM can judge follow-up intent.
+        if history:
+            recent = history[-4:]  # last 4 turns is enough context
+            lines = []
+            for turn in recent:
+                role = turn.get("role", "user")
+                content = str(turn.get("content", "")).strip()[:200]
+                lines.append(f"{role.capitalize()}: {content}")
+            prompt = (
+                f"{prompt}\n\n"
+                "[CONVERSATION HISTORY (last turns)]\n"
+                + "\n".join(lines)
+                + "\n\n[END HISTORY]"
+            )
+
         prompt = f"{prompt}\n\nUser message:\n{message}"
 
         # Construct Strands Agent per-request to avoid import-time side effects.
@@ -102,7 +123,12 @@ class ClassifyAgent:
             fallback = "unknown" if "unknown" in self.intents else (self.intents[0] if self.intents else "unknown")
             intent_value = fallback
 
-        return ClassifyAgentSchema(intent=intent_value)
+        followup_value = bool(getattr(result, "followup", False))
+        # followup only makes sense when there is prior history
+        if not history:
+            followup_value = False
+
+        return ClassifyAgentSchema(intent=intent_value, followup=followup_value)
 
     def get_agent(self,):
         return self.agent

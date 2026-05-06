@@ -364,6 +364,7 @@ class GmailAdapter(DataAdapter):
             # Cursor-based pagination
             current_token = kwargs.get("page_token")
             limit = int(kwargs.get("limit") or 10)
+            fetch_all = bool(kwargs.get("fetch_all", False))
             exclude_message_ids = set(kwargs.get("exclude_message_ids") or [])
 
             query_parts = [base_query]
@@ -376,13 +377,16 @@ class GmailAdapter(DataAdapter):
             messages = []
             first_response = True
 
-            # If current page is mostly/fully excluded, keep advancing until we collect
-            # up to `limit` non-processed messages or exhaust pagination.
+            # When fetch_all=True, page through ALL results ignoring the limit cap.
+            # Use page size 100 (efficient for Gmail API) and continue until exhausted.
+            # When fetch_all=False, stop once we have `limit` non-excluded messages.
+            page_size = 100 if fetch_all else limit
+
             while True:
                 response = self.service.users().messages().list(
                     userId="me",
                     q=query,
-                    maxResults=limit,
+                    maxResults=page_size,
                     pageToken=next_token,
                 ).execute()
 
@@ -400,7 +404,7 @@ class GmailAdapter(DataAdapter):
                 messages.extend(page_messages)
                 next_token = response.get("nextPageToken")
 
-                if len(messages) >= limit:
+                if not fetch_all and len(messages) >= limit:
                     messages = messages[:limit]
                     break
                 if not next_token:

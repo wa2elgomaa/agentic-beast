@@ -73,7 +73,9 @@ class ChatMessageMetadata(BaseModel):
     operation: Optional[str] = None
     citations: Optional[List[dict]] = None
     agents_involved: Optional[List[str]] = None
-    chart_b64: Optional[str] = None
+    assets: Optional[str] = None  # legacy URL-based chart field
+    chart_b64: Optional[str] = None  # inline base64-encoded PNG chart
+    visualization_caption: Optional[str] = None
     code_output: Optional[str] = None
     generated_sql: Optional[str] = None
     input_type: Optional[str] = None

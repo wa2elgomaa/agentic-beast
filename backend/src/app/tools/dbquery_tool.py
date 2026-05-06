@@ -511,3 +511,50 @@ def sql_database_tool(
         result = f"Unexpected error: {_sanitize_error(exc)}"
 
     return {"status": "success", "content": [{"text": result}]}
+
+
+# ---------------------------------------------------------------------------
+# Analytics db_tool — standalone @tool using SDK invocation state
+# ---------------------------------------------------------------------------
+
+from strands.types.tools import ToolContext  # noqa: E402 (after heavy imports above)
+
+
+@tool(context=True)
+def db_tool(sql: str, tool_context: ToolContext) -> str:
+    """Execute a SQL SELECT query against the analytics database.
+
+    Returns results as a JSON array. Results are also injected into the
+    python_repl sandbox (via SDK invocation state) as ``rows`` (list of dicts)
+    and ``df`` (DataFrame), ready for a follow-up python_repl call.
+
+    Args:
+        sql: SQL SELECT statement to execute.
+        tool_context: SDK-provided execution context (injected automatically).
+
+    Returns:
+        JSON array of result rows, or an error message.
+    """
+    import json as _json
+    import pandas as _pd
+
+    result = sql_database_tool(
+        action="query",
+        sql=sql,
+        connection_string=None,
+        read_only=True,
+        max_rows=500,
+        output_format="json",
+    )
+    if result.get("status") == "success":
+        try:
+            raw = result["content"][0]["text"].split("\n\n⚠️")[0].strip()
+            rows = _json.loads(raw)
+            if isinstance(rows, list):
+                sandbox = tool_context.invocation_state.setdefault("_sandbox", {})
+                sandbox["rows"] = rows
+                sandbox["df"] = _pd.DataFrame(rows)
+            return raw
+        except Exception as exc:
+            return f"Error parsing results: {exc}"
+    return result.get("content", [{}])[0].get("text", "Query failed.")

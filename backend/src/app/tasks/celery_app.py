@@ -58,7 +58,19 @@ celery_config = dict(
         "app.tasks.excel_ingest",
         "app.tasks.email_monitor",
         "app.tasks.summary_compute",
+        "app.tasks.gmail_token_refresh",
     ),
+    beat_schedule={
+        # Proactively refresh Gmail OAuth access tokens every 4 days.
+        # This prevents idle-timeout revocation (Google revokes after 6 months of disuse)
+        # and surfaces invalid_grant errors early.
+        # NOTE: The permanent fix for 7-day expiry is to publish your GCP OAuth app
+        # (change consent screen from "Testing" → "Production" in Google Cloud Console).
+        "refresh-gmail-credentials-every-4-days": {
+            "task": "app.tasks.gmail_token_refresh.refresh_gmail_credentials",
+            "schedule": crontab(hour=3, minute=0, day_of_week="*/4"),  # 03:00 UTC every 4 days
+        },
+    },
 )
 
 # Celery prefork is unstable on macOS/Python 3.13 in local development.

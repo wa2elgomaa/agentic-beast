@@ -5,6 +5,7 @@
 export type UUID = string
 
 export type OperationType =
+  | 'analytics'
   | 'query_documents'
   | 'suggest_tags_for_article_id'
   | 'suggest_tags_for_article_body'
@@ -22,6 +23,7 @@ export type ChatStreamEventType =
   | 'thinking'
   | 'text_chunk'
   | 'complete'
+  | 'image'
   | 'error'
   | 'transcript'
   | 'audio_start'
@@ -40,6 +42,12 @@ export interface ChatStreamEvent {
     conversation_id?: string
     sample_rate?: number
     audio?: string
+    assets?: string
+    chart_b64?: string
+    visualization_caption?: string
+    b64?: string
+    mime?: string
+    caption?: string
     [key: string]: any
   }
 }
@@ -87,7 +95,7 @@ export interface AnalyticsResponseContent {
   result_data: AnalyticsResultDataItem[]
   insight_summary: string
   verification: string
-  chart_b64?: string
+  assets?: string
   code_output?: string
   generated_sql?: string
 }
@@ -100,7 +108,9 @@ export interface ChatMessageMetadata {
   operation?: string
   citations?: Record<string, any>[]
   agents_involved?: string[]
+  assets?: string
   chart_b64?: string
+  visualization_caption?: string
   code_output?: string
   generated_sql?: string
   input_type?: string

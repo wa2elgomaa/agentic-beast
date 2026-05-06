@@ -454,11 +454,11 @@ export default function SchemaMapper({ task, initialMapping, onUpdated }: Schema
 
                 return (
                   <tr key={target} className="border-b border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50 align-top">
-                    <td className="px-6 py-4 text-sm text-gray-900 dark:text-white">
+                    <td className="px-4 py-4 text-sm text-gray-900 dark:text-white">
                       <p className="font-medium">{humanizeField(target)}</p>
                       <p className="font-mono text-xs text-gray-500 dark:text-gray-400 mt-1">{target}</p>
                     </td>
-                    <td className="px-6 py-4">
+                    <td className="px-4 py-4">
                       <select
                         value={selectedSource}
                         onChange={(e) => handleFieldMappingChange(target, e.target.value)}
@@ -470,7 +470,7 @@ export default function SchemaMapper({ task, initialMapping, onUpdated }: Schema
                         ))}
                       </select>
                     </td>
-                    <td className="px-6 py-4">
+                    <td className="px-4 py-4">
                       <label className="inline-flex items-center gap-2">
                         <input
                           type="checkbox"
@@ -481,7 +481,7 @@ export default function SchemaMapper({ task, initialMapping, onUpdated }: Schema
                         <span className="text-xs text-gray-600 dark:text-gray-400">{isMetric ? 'Yes' : 'No'}</span>
                       </label>
                     </td>
-                    <td className="px-6 py-4">
+                    <td className="px-4 py-4">
                       {isMetric ? (
                         <div className="min-w-[140px]">
                           <select
@@ -501,7 +501,7 @@ export default function SchemaMapper({ task, initialMapping, onUpdated }: Schema
                         <span className="text-xs text-gray-500 dark:text-gray-400">N/A</span>
                       )}
                     </td>
-                    <td className="px-6 py-4">
+                    <td className="px-4 py-4">
                       {isMatched ? (
                         <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200">
                           ✓ Mapped

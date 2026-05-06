@@ -1,5 +1,6 @@
 """FastAPI application factory and configuration."""
 
+import os
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 from fastapi import FastAPI
@@ -7,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.requests import Request
 from fastapi.responses import JSONResponse
 from fastapi import status
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 
 from app.config import settings
@@ -347,6 +349,11 @@ def create_app() -> FastAPI:
     async def metrics_endpoint():
         """Expose Prometheus metrics."""
         return get_metrics()
+
+    # Serve generated chart images from the charts directory
+    _chart_dir = os.environ.get("CHART_DIR", "data/charts")
+    os.makedirs(_chart_dir, exist_ok=True)
+    app.mount("/static/charts", StaticFiles(directory=_chart_dir), name="charts")
 
     # Register API routers
     from app.api import admin_ingestion, auth, chat, chat_stream, ingestion, users, webhooks

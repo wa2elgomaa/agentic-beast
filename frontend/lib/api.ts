@@ -352,7 +352,8 @@ function toOrchestratorResponse(payload: any): OrchestratorResponse {
         typeof payload?.user_message?.content === 'string'
           ? payload.user_message.content
           : undefined,
-      chart_b64: payload?.message?.metadata?.chart_b64 || parsedContent?.chart_b64 || undefined,
+      assets: payload?.message?.metadata?.assets || parsedContent?.assets || undefined,
+      visualization_caption: payload?.message?.metadata?.visualization_caption || parsedContent?.visualization_caption || undefined,
       code_output: payload?.message?.metadata?.code_output || parsedContent?.code_output || undefined,
       generated_sql: payload?.message?.metadata?.generated_sql || parsedContent?.generated_sql || undefined,
     },
@@ -361,7 +362,8 @@ function toOrchestratorResponse(payload: any): OrchestratorResponse {
       query_type: queryType,
       citations: payload?.message?.metadata?.citations,
       agents_involved: payload?.message?.metadata?.agents_involved,
-      chart_b64: payload?.message?.metadata?.chart_b64,
+      assets: payload?.message?.metadata?.assets,
+      visualization_caption: payload?.message?.metadata?.visualization_caption,
       code_output: payload?.message?.metadata?.code_output,
       generated_sql: payload?.message?.metadata?.generated_sql,
       input_type: payload?.user_message?.metadata?.input_type,

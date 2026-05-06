@@ -125,8 +125,12 @@ async def _handle_text_turn(websocket: WebSocket, user, message_text: str, conve
             ):
                 if not await _safe_send(websocket, chunk):
                     return
+            # Commit after the generator is exhausted — flushed data becomes
+            # visible to other DB connections (e.g. the conversations list API).
+            await db.commit()
         except Exception:
             logger.exception("Error during chat stream processing")
+            await db.rollback()
             await _safe_send(websocket, {"type": "error", "message": "Error processing your request."})
 
 
@@ -170,8 +174,10 @@ async def _handle_audio_turn(websocket: WebSocket, user, event: dict) -> None:
                     response_text = (chunk.get("data") or {}).get("response_text", "")
                 if not await _safe_send(websocket, chunk):
                     return
+            await db.commit()
         except Exception:
             logger.exception("Chat stream failed during audio turn")
+            await db.rollback()
             await _safe_send(websocket, {"type": "error", "message": "Chat processing failed."})
             return
 

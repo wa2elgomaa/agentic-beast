@@ -218,12 +218,21 @@ export default function ChatContainer() {
       msg.conversation_id ? msg : { ...msg, conversation_id: conversationId }
     )))
 
-    try {
-      await updateConversationTitle(conversationId, firstUserMessage.slice(0, 50))
-    } catch (error) {
-      console.error('Error setting first conversation title:', error)
-    }
+    // Optimistically add the new conversation to the sidebar so it appears
+    // immediately without waiting for the API refetch.
+    const title = firstUserMessage.slice(0, 50) || 'New conversation'
+    const now = new Date().toISOString()
+    setConversations(prev => {
+      if (prev.some(c => c.id === conversationId)) return prev
+      return [{ id: conversationId, title, created_at: now, updated_at: now, message_count: 1 }, ...prev]
+    })
 
+    // Persist the title on the server (non-blocking, best-effort)
+    updateConversationTitle(conversationId, title).catch(() => {
+      console.error('Could not set conversation title')
+    })
+
+    // Refresh from server to get the accurate list (e.g. after title update)
     await loadConversations(1)
   }
 

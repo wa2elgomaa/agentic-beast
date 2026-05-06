@@ -143,6 +143,12 @@ schema:
       aliases: ["date", "publish date", "posted date", "date posted", "publication date"]
       type: "date"
       description: "Date when content was published"
+
+    # Time dimension
+    published_time:
+      aliases: ["time", "publish time", "posted time", "time posted", "publication time", "hour posted"]
+      type: "time"
+      description: "Time of day when content was published (use EXTRACT(HOUR FROM published_time) for hour-of-day analysis)"
     
     # Content classification
     content_type:

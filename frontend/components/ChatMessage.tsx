@@ -7,16 +7,13 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeRaw from 'rehype-raw'
 import LoadingSkeleton from './LoadingSkeleton'
-import OperationRenderer from './OperationRenderer'
-import QuerySuggestions from './QuerySuggestions'
-import { exportToCSV } from '@/lib/api'
 
 interface ChatMessageProps {
   message: MessageType
   onSelectSuggestion?: (suggestion: QuerySuggestion) => void
 }
 
-export default function ChatMessage({ message, onSelectSuggestion }: ChatMessageProps) {
+export default function ChatMessage({ message }: ChatMessageProps) {
   const isUser = message.role === 'user'
 
   return (
@@ -46,54 +43,45 @@ export default function ChatMessage({ message, onSelectSuggestion }: ChatMessage
             <span className="text-xs text-gray-500 ml-2">
               {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
             </span>
-
           </div>
 
           {message.isLoading ? (
             <LoadingSkeleton />
           ) : (
             <>
-              {(message.content && typeof message.content === 'string') && (
-                <div className="text-gray-800 mb-4 prose prose-sm max-w-none">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>
-                    {message.content}
-                  </ReactMarkdown>
-                </div>
-              )}
+              <div className="text-gray-800 prose prose-sm max-w-none">
+                <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>
+                  {message.content || ''}
+                </ReactMarkdown>
+              </div>
 
-              {/* New: Operation-based rendering */}
-              {message.operation && message.operationData && (
-                <OperationRenderer
-                  operation={message.operation}
-                  data={message.operationData}
-                  metadata={message.operationMetadata || {}}
-                />
-              )}
-
-              {/* Code Interpreter: chart image */}
               {!isUser && message.metadata?.chart_b64 && (
-                <div className="mt-4">
+                <figure className="mt-4">
                   <img
                     src={`data:image/png;base64,${message.metadata.chart_b64}`}
-                    alt="Analysis chart"
+                    alt={message.metadata.visualization_caption || 'Analysis chart'}
                     className="rounded-lg border border-gray-200 max-w-full shadow-sm"
                   />
-                </div>
+                  {message.metadata.visualization_caption && (
+                    <figcaption className="mt-1 text-xs text-gray-500 text-center">
+                      {message.metadata.visualization_caption}
+                    </figcaption>
+                  )}
+                </figure>
               )}
-
-              {/* Code Interpreter: code output (non-chart text) */}
-              {!isUser && message.metadata?.code_output && !message.metadata?.chart_b64 && (
-                <div className="mt-3 bg-gray-900 text-green-300 rounded-lg p-4 text-sm font-mono whitespace-pre-wrap overflow-x-auto">
-                  {message.metadata.code_output}
-                </div>
-              )}
-
-              {/* Query Suggestions */}
-              {!isUser && message.operationData?.suggestions && onSelectSuggestion && (
-                <QuerySuggestions
-                  suggestions={message.operationData.suggestions}
-                  onSelectSuggestion={onSelectSuggestion}
-                />
+              {!isUser && !message.metadata?.chart_b64 && message.metadata?.assets && (
+                <figure className="mt-4">
+                  <img
+                    src={`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}${message.metadata.assets}`}
+                    alt={message.metadata.visualization_caption || 'Analysis chart'}
+                    className="rounded-lg border border-gray-200 max-w-full shadow-sm"
+                  />
+                  {message.metadata.visualization_caption && (
+                    <figcaption className="mt-1 text-xs text-gray-500 text-center">
+                      {message.metadata.visualization_caption}
+                    </figcaption>
+                  )}
+                </figure>
               )}
             </>
           )}

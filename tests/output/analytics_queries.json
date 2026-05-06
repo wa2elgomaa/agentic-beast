@@ -1,23 +1,48 @@
-[
-  {
-    "query": "What is the top 5 viewed videos on instagram",
-    "result": {
-      "response_text": "Processing the analytics request to find the top 5 viewed videos on Instagram using the existing data_analysis workflow.",
-      "response_json": "{\"workflow_id\":\"data_analysis\",\"request\":{\"platform\":\"instagram\",\"metric\":\"video_views\",\"operation\":\"sum\",\"query_category\":\"metrics\",\"params\":{\"max_rows\":5}}}"
+{
+  "standard": [
+    {
+      "query": "What is the top 5 viewed videos on instagram",
+      "result": {
+        "response_text": "Here are the top 5 viewed videos on Instagram:\n\n1. [Hollywood star Anne Hathaway has drawn attention online after using the phrase 'Inshallah' during a recent interview promoting her new movie The Devil Wears Prada 2.](https://www.instagram.com/reel/DXYshAgkRNT/)\n   - **Views:** 15,779,525\n   - **Published Date:** April 21, 2026\n\n2. [Reem Al Hashimy, the UAE's Minister of State for International Co-operation, spoke of the country\u2019s calm and measured response to Iranian attacks in an interview with CNN.](https://www.instagram.com/reel/DVVsc4EjChg/)\n   - **Views:** 3,095,658\n   - **Published Date:** March 1, 2026\n\n3. [UAE President Sheikh Mohamed and Sheikh Hamdan bin Mohammed, Crown Prince of Dubai, were seen having a meal at Dubai Mall.](https://www.instagram.com/reel/DVZNjvhAgbH/)\n   - **Views:** 1,513,907\n   - **Published Date:** March 2, 2026\n\n4. [This is the moment Anne Hathaway was given a Quran by a fan while attending the European premiere of The Devil Wears Prada 2 in London.](https://www.instagram.com/reel/DXdB2hwjPGP/)\n   - **Views:** 1,509,864\n   - **Published Date:** April 23, 2026\n\n5. [President Sheikh Mohamed visited survivors of the recent Iranian attacks in the hospital, wishing patients a speedy recovery.](https://www.instagram.com/reel/DVjzdBXlDOH/)\n   - **Views:** 1,234,556\n   - **Published Date:** March 7, 2026\n"
+      }
+    },
+    {
+      "query": "Which day of the week has the highest total video views for TikTok? Group TikTok videos by day of week (Monday-Sunday) using the published_date column, sum the video_views for each day, and show a bar chart.",
+      "result": {
+        "response_text": "The day of the week with the highest total video views for TikTok is **Friday**, with a total of **28,200,311** views.\n\nHere's the bar chart illustrating total TikTok video views by day of the week:\n\n![Total TikTok video views by day of the week](data:image/png;base64,<base64-image-data>)\n"
+      }
+    },
+    {
+      "query": "What are the top video featuring \"Donald Trump\"",
+      "result": {
+        "response_text": "The top videos featuring \"Donald Trump\" are as follows:\n\n1. **[US President Donald Trump sharply criticised New York mayor Mamdani\u2019s policies despite describing him as a 'nice guy'](https://www.youtube.com/watch?v=AJAadIah9oc)**\n   - **Platform:** YouTube\n   - **Published Date:** 2026-02-25\n   - **Total Views:** 3,384,153\n\n2. **[US President Donald Trump on Friday called the Strait of Hormuz the \"Strait of Trump\u201d, as he spoke at Saudi Arabia's Future Investment Initiative in Miami, Florida](https://www.tiktok.com/@thenationalnews/video/7622080601880874261?utm_campaign=tt4d_open_api&utm_source=6997404317372137474)**\n   - **Platform:** Twitter\n   - **Published Date:** 2026-03-28\n   - **Total Views:** 1,309,666\n\n3. **[US President Donald Trump urged Saudi Arabia to join the Abraham Accords on Friday after he claimed he \"saved\" the Middle East from Iran](https://www.tiktok.com/@thenationalnews/video/7622071471132757255?utm_campaign=tt4d_open_api&utm_source=6997404317372137474)**\n   - **Platform:** Twitter\n   - **Published Date:** 2026-03-28\n   - **Total Views:** 1,267,164\n\n4. **[President Donald Trump said in his State of the Union address that Iran could develop long-range missiles capable of reaching US territory. The National\u2019s Fadah Jassem looks into the claim](https://www.instagram.com/reel/DVLp9EZEoDj/)**\n   - **Platform:** Twitter\n   - **Published Date:** 2026-02-25\n   - **Total Views:** 1,152,008\n\n5. **[US President Donald Trump has announced the destruction of the 'biggest bridge in Iran', threatening there was 'much more to follow' in a post on Truth Social](https://www.youtube.com/watch?v=MhrglsX_tc4)**\n   - **Platform:** YouTube\n   - **Published Date:** 2026-04-03\n   - **Total Views:** 995,994\n\nThese videos showcase significant viewership and varied topics related to Donald Trump.\n"
+      }
+    },
+    {
+      "query": "Compare the total video_views for videos featuring 'Donald Trump' on TikTok vs Facebook. Sum video_views grouped by platform and show a bar chart comparing the two platforms.",
+      "result": {
+        "response_text": "The total video views for videos featuring 'Donald Trump' are as follows:\n\n- **Facebook**: 5,782,761 views\n- **TikTok**: 9,483,390 views\n\nHere's a bar chart comparing the total video views for Donald Trump content on Facebook and TikTok:\n\n![Comparison of video views for Donald Trump content on Facebook and TikTok](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABwAAAAcCAYAAAB9zhbRAAAACXBIWXMAAB7CAAAewgFu0HU+AAABFklEQVR42mJ0//8/A67EHOXcMmGcBdgAkYGgBgDgBwFRKAAPaMZw/+DCYYBEDVEATOfH84x0RAdQDw/QLiJV5AOKgHDecCwDMjDiAkGSgGsjAUBigZwKgQABChEC0nOgAVQwYAADLv1n6TTAOJQ75gwiDgOi4cB4IUAUktAcAIAKsQgA6gBJJAAOwFgQFUwIE2Ag0mEgQ//+ELKAQjzS5x7IEIhWRwAiBVA0gAAHRoBAWwFgEEMBgEALESBgAnjCP9GBgIAHhQbqEB/tgAAAABJRU5ErkJggg==)\n\nThis chart visually represents the comparison between the two platforms.\n"
+      }
+    },
+    {
+      "query": "Which hour of the day has the highest total video views for TikTok? Group TikTok videos by hour extracted from published_time, sum the video_views per hour, and show a bar chart. Also identify any patterns in the data.",
+      "result": {
+        "response_text": "The hour with the highest total video views for TikTok is 11 AM, with over 14.9 million views. Below is the bar chart that illustrates total video views for each hour of the day:\n\n![Total video views on TikTok by hour of day](data:image/png;base64,...)\n\n### Observations from the Data:\n- The peak viewing hours occur primarily between 11 AM and 1 PM, with a notable drop in views during the early morning and late night hours (particularly around midnight to 6 AM).\n- There is a second peak at 1 AM, indicating late-night engagement as well.\n- The hours of 10 AM, 9 AM, and the early afternoon (12 PM - 2 PM) also show significant engagement, suggesting that these are optimal times for posting content on TikTok.\n- Conversely, the late-night hours (particularly between 3 AM to 6 AM) see the lowest engagement, indicating lesser activity from users during these times.\n\nThese insights could help in strategizing content publication timings for maximum reach and engagement.\n"
+      }
     }
-  },
-  {
-    "query": "Which day is the best to publish on tiktok",
-    "result": {
-      "response_text": "Processing analytics query for \"Which day is the best to publish on TikTok\" using the data_analysis workflow.",
-      "response_json": "{\"action\":\"execute\",\"workflow_id\":\"data_analysis\",\"parameters\":{\"query\":\"SELECT published_date, AVG(engagements) AS metric_value FROM documents WHERE LOWER(platform) = LOWER('tiktok') GROUP BY published_date ORDER BY metric_value DESC LIMIT :max_rows\",\"params\":{\"max_rows\":20},\"metric\":\"engagements\",\"operation\":\"average\",\"query_category\":\"metrics\"}}"
+  ],
+  "followup": [
+    {
+      "message": "What is the top 5 viewed videos on instagram",
+      "result": {
+        "response_text": "The top 5 viewed videos on Instagram as of now are:\n\n1. **Hollywood star Anne Hathaway's use of the phrase 'Inshallah' during a recent interview promoting her new movie The Devil Wears Prada 2.**\n   - Views: 15,779,525\n   - Published Date: April 21, 2026\n\n2. **UAE's Minister of State for International Co-operation, Reem Al Hashimy, discussing the country\u2019s response to Iranian attacks.**\n   - Views: 3,095,658\n   - Published Date: March 01, 2026\n\n3. **UAE President Sheikh Mohamed and Sheikh Hamdan bin Mohammed, Crown Prince of Dubai, dining at Dubai Mall.**\n   - Views: 1,513,907\n   - Published Date: March 02, 2026\n\n4. **A fan giving Anne Hathaway a Quran at the European premiere of The Devil Wears Prada 2 in London.**\n   - Views: 1,509,864\n   - Published Date: April 23, 2026\n\n5. **President Sheikh Mohamed visiting survivors of the recent Iranian attacks in hospital.**\n   - Views: 1,234,556\n   - Published Date: March 07, 2026\n"
+      }
+    },
+    {
+      "message": "What about the same for YouTube?",
+      "result": {
+        "response_text": "The top 5 viewed videos on YouTube as of now are:\n\n1. [Foreign Minister Abbas Araghchi says that Iran is not asking for a ceasefire or negotiations with the US.](https://www.youtube.com/watch?v=SEXTBcjENYg) - **Views:** 3,809,379 - **Published Date:** March 6, 2026\n\n2. [Zsolt Hegedus celebrates party victory over Viktor Orban](https://www.youtube.com/watch?v=AJhFh7o5ur8) - **Views:** 310,811 - **Published Date:** April 14, 2026\n\n3. [US forces anticipated Iran\u2019s actions in the Strait of Hormuz, Former Centcom commander Gen. Joseph Votel told IMI's Hadley Gamble.](https://www.youtube.com/watch?v=ZTSRO983rrI) - **Views:** 306,857 - **Published Date:** March 26, 2026\n\n4. [Video without content](https://www.youtube.com/watch?v=xj--WRct5Ec) - **Views:** 114,714 - **Published Date:** February 28, 2026\n\n5. [Abu Dhabi Police have urged motorists to stay focused during traffic stops, sharing footage of crashes caused by distracted driving.](https://www.youtube.com/watch?v=YqhDW30PDUk) - **Views:** 89,132 - **Published Date:** April 3, 2026\n\nLet me know if you need more details!\n"
+      }
     }
-  },
-  {
-    "query": "What are the top video featuring \"Donald Trump\"",
-    "result": {
-      "response_text": "Processing analytics request for top video featuring \"Donald Trump\" using the `data_analysis` workflow.",
-      "response_json": "{\"task_id\":\"retrieve_top_video\",\"description\":\"Retrieve the top video details featuring 'Donald Trump' from the documents, including metrics like views and engagement metrics.\",\"dependencies\":[],\"user_query\":\"What are the top video featuring \\\"Donald Trump\\\"\"}"
-    }
-  }
-]
+  ]
+}

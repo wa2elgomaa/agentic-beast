@@ -49,7 +49,12 @@ def get_model(config: AISettings):
         },
         # **model_config
         model_id=model_id,
-        params=params or None,
+        params={
+            **(params or {}),
+            "num_retries": 3,
+            "retry_after": 2,
+        },
+       
     )
 
     logger.info("LiteLLMModel created", model_id=model_id)

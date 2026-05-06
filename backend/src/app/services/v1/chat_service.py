@@ -110,6 +110,8 @@ class ChatService:
                 # OrchestratorAgentSchema is a Pydantic model — extract text and JSON.
                 response_text: str = getattr(result, "response_text", None) or str(result)
                 response_json: str = getattr(result, "response_json", "") or ""
+                chart_b64: str = getattr(result, "chart_b64", "") or ""
+                visualization_caption: str = getattr(result, "visualization_caption", "") or ""
 
                 # Store response_text as the message content for display;
                 # store the full structured payload in operation_data.
@@ -117,7 +119,13 @@ class ChatService:
 
                 op_data: Optional[Dict] = None
                 op_type: Optional[str] = None
-                if response_json:
+                if chart_b64:
+                    op_type = "analytics"
+                    op_data = {
+                        "chart_b64": chart_b64,
+                        "visualization_caption": visualization_caption,
+                    }
+                elif response_json:
                     try:
                         payload = json.loads(response_json)
                         results = payload.get("results")
@@ -127,7 +135,7 @@ class ChatService:
                                 "raw_rows": results if isinstance(results, list) else [],
                                 "row_count": len(results) if isinstance(results, list) else 0,
                             }
-                    except Exception:
+                    except Exception:  # noqa: S110
                         pass
 
                 assistant_message = await self.add_message(
@@ -410,7 +418,14 @@ class ChatService:
                 if op.get("generated_sql"):
                     item["prior_sql"] = op["generated_sql"]
                 if op.get("raw_rows") is not None:
-                    item["prior_rows"] = op["raw_rows"][:20]  # cap to keep prompt small
+                    rows = op["raw_rows"][:20]  # cap to keep prompt small
+                    item["prior_rows"] = rows
+                    # Bake a compact JSON preview directly into content so any
+                    # downstream consumer (Strands agent, orchestrator prompt)
+                    # sees the actual data without needing separate enrichment.
+                    if rows:
+                        rows_preview = json.dumps(rows, default=str)
+                        item["content"] = f"{msg.content}\n\n[PRIOR QUERY DATA: {rows_preview}]"
                 if op.get("metric"):
                     item["prior_metric"] = op["metric"]
                 if op.get("query_category"):
@@ -556,36 +571,40 @@ class ChatService:
                 if event.get("type") == "complete":
                     data = event.get("data", {})
                     response_text = data.get("response_text", "")
-                    results = data.get("results") or []
-                    if results:
+                    chart_b64 = data.get("chart_b64") or ""
+                    visualization_caption = data.get("visualization_caption") or ""
+                    if chart_b64:
                         op_type = "analytics"
                         op_data = {
-                            "raw_rows": results,
-                            "row_count": len(results),
+                            "chart_b64": chart_b64,
+                            "visualization_caption": visualization_caption,
                         }
+                    # Persist assistant message and conversation timestamp BEFORE
+                    # yielding the complete event so the frontend can immediately
+                    # fetch the conversation list and find this conversation.
+                    await self.add_message(
+                        conversation.id,
+                        role="assistant",
+                        content=response_text,
+                        operation=op_type,
+                        operation_data=op_data,
+                    )
+                    conversation.updated_at = datetime.now()
+                    self.db_session.add(conversation)
+                    await self.db_session.flush()
                     yield {
                         "type": "complete",
                         "data": {
                             "response_text": response_text,
-                            "results": results,
+                            "chart_b64": chart_b64,
+                            "visualization_caption": visualization_caption,
                             "operation": op_type,
                             "conversation_id": str(conversation.id),
                         },
                     }
                 else:
+                    # Pass through all other events (thinking, text_chunk, image, error)
                     yield event
-
-            # Persist the final assistant message
-            await self.add_message(
-                conversation.id,
-                role="assistant",
-                content=response_text,
-                operation=op_type,
-                operation_data=op_data,
-            )
-            conversation.updated_at = datetime.now()
-            self.db_session.add(conversation)
-            await self.db_session.flush()
 
         except Exception as exc:
             logger.error(
@@ -614,6 +633,7 @@ class ChatService:
                 operation=message.operation,
                 citations=op.get("citations"),
                 chart_b64=op.get("chart_b64"),
+                visualization_caption=op.get("visualization_caption"),
                 code_output=op.get("code_output"),
                 generated_sql=op.get("generated_sql"),
                 input_type=extra.get("input_type"),

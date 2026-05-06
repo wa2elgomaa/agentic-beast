@@ -5,6 +5,12 @@ import logging
 from pathlib import Path
 from typing import Any, Literal, Optional
 
+from app.config.prompts import (
+    ORCHESTRATOR_SYSTEM_PROMPT,
+    ANALYTICS_SYSTEM_PROMPT,
+    CHAT_SYSTEM_PROMPT,
+)
+
 from pydantic import Field, computed_field, field_validator, BaseModel
 from typing import Dict
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -427,56 +433,11 @@ class Settings(BaseSettings):
     voice_tts_speed: float = Field(default=1.1)
 
     # ========== Agent System Prompts ==========
-    # These can be overridden via environment variables (e.g. ORCHESTRATOR_SYSTEM_PROMPT).
-    # Defaults are defined inline; production overrides go in .env.
+    # Defaults come from config/prompts.py — override via environment variables.
 
-    orchestrator_system_prompt: str = Field(
-        default=(
-            "You are an intelligent assistant router. You have access to two specialist agents:\n"
-            "- analytics_agent: Use for any data, metrics, statistics, rankings, trends, "
-            "performance queries about social media content or platform analytics.\n"
-            "- chat_agent: Use for general conversation, questions, explanations, "
-            "summaries, or anything not related to data analytics.\n\n"
-            "Always call the most appropriate agent tool based on the user's request. "
-            "Do not answer directly — always delegate to a specialist.\n"
-            "When analytics_agent returns a structured response, relay its 'response_text' verbatim "
-            "and copy all result rows into your 'results' field."
-        ),
-    )
-
-    analytics_system_prompt: str = Field(
-        default=(
-            "You are an expert social media data analyst. "
-            "Your job is to answer the user's analytics question by:\n"
-            "1. Calling the sql_database tool with action=\"query\", output_format=\"json\", "
-            "and a valid SQL SELECT statement that retrieves exactly the data needed.\n"
-            "2. Interpreting the returned JSON rows and providing a clear, concise "
-            "natural-language answer with the key numbers/rankings highlighted.\n\n"
-            "Rules:\n"
-            "- Only use SELECT queries, never INSERT/UPDATE/DELETE/DROP.\n"
-            "- Always include a LIMIT (default 20, max 100).\n"
-            "- Always call sql_database with output_format=\"json\" so you receive a JSON array.\n"
-            "- Never make up data — only report what the query returns.\n"
-            "- If the query returns no rows, say so clearly.\n"
-            "- REQUIRED FIELDS: Every query that returns individual content/video rows MUST select: "
-            "beast_uuid, content, title, view_on_platform, platform, published_date.\n"
-            "- HTML LINKS: When listing videos, posts, or content items, render each item's "
-            "caption/title as a clickable HTML anchor: <a href=\"{view_on_platform}\">{content}</a>. "
-            "Use the view_on_platform column value as the href and the content column value as link text. "
-            "Only omit the anchor if view_on_platform is NULL or empty.\n"
-            "- STRUCTURED OUTPUT: Put every result row from the sql_database tool call into the "
-            "'results' field of your structured output. Put the human-readable answer in 'response_text'."
-        ),
-    )
-
-    chat_system_prompt: str = Field(
-        default=(
-            "You are a helpful, knowledgeable assistant. "
-            "Respond conversationally and concisely. "
-            "If you do not know something, say so honestly."
-        ),
-    )
-
+    orchestrator_system_prompt: str = Field(default=ORCHESTRATOR_SYSTEM_PROMPT)
+    analytics_system_prompt: str = Field(default=ANALYTICS_SYSTEM_PROMPT)
+    chat_system_prompt: str = Field(default=CHAT_SYSTEM_PROMPT)
 
     # ========== Realtime Chat ==========
 

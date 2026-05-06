@@ -30,8 +30,11 @@ class ChatAgentSchema(PydanticBaseModel):
     response_text: str = Field(description="Conversational response to the user")
 
 
-def build_chat_agent(model: Any) -> Agent:
+def build_chat_agent() -> Agent:
     """Return a Strands Agent configured for general chat."""
+    _agent_settings = settings.chat_agent or settings.main_agent
+    _factory = ProviderFactory(_agent_settings)
+    model = _factory.get_model(settings=_agent_settings)
     return Agent(
         model=model,
         system_prompt=settings.chat_system_prompt,
@@ -44,15 +47,7 @@ class ChatAgent:
     """Handles general chat queries through the Strands agent loop."""
 
     def __init__(self) -> None:
-        try:
-            a = settings.chat_agent
-            if getattr(a, "provider", None) and getattr(a, "model_name", None):
-                self._agent_settings = a
-            else:
-                self._agent_settings = settings.main_agent
-        except Exception:
-            self._agent_settings = settings.main_agent
-        self._factory = ProviderFactory(self._agent_settings)
+        pass  # No state needed; build Strands Agent on each execute() call
 
     async def execute(self, context: Optional[Dict[str, Any]] = None) -> ChatAgentSchema:
         """Handle a user message and return a conversational response."""
@@ -60,8 +55,7 @@ class ChatAgent:
             context = {}
         message: str = context.get("message") or ""
 
-        model = self._factory.get_model(settings=self._agent_settings)
-        agent = build_chat_agent(model)
+        agent = build_chat_agent()
 
         try:
             result = agent(message)

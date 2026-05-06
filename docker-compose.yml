@@ -148,6 +148,46 @@ services:
   #     - beast-network
   #   restart: unless-stopped
 
+  # -----------------------------------------------------------------------
+  # llama-cpp — OpenAI-compatible local inference server
+  # macOS  : CPU (Metal GPU not available in Docker Linux VM)
+  # Ubuntu : CPU by default; swap image to server-cuda for NVIDIA GPU
+  # Model  : Qwen2.5-7B-Instruct Q4_K_M (~4.7 GB) — strong tool-calling
+  # API    : http://llama-cpp:8080/v1  (inside Docker network)
+  #          http://localhost:8080/v1  (from host for local dev/testing)
+  # -----------------------------------------------------------------------
+  llama-cpp:
+    # for MAC M4 (overridden by docker-compose.override.yml with light image)
+    # image: ghcr.io/ggml-org/llama.cpp:server
+    # For Ubuntu with NVIDIA GPU:
+    image: ghcr.io/ggml-org/llama.cpp:full-cuda
+    container_name: beast-llama-cpp
+    ports:
+      - "${LLM_PORT:-8080}:8080"
+    volumes:
+      - models_data:/models
+    environment:
+      LLAMA_ARG_MODEL: /models/Qwen2.5-7B-Instruct-Q4_K_M.gguf
+      LLAMA_ARG_HOST: 0.0.0.0
+      LLAMA_ARG_PORT: "8080"
+      LLAMA_ARG_CTX_SIZE: "8192"
+      LLAMA_ARG_N_PREDICT: "2048"
+      LLAMA_ARG_THREADS: "${LLM_THREADS:-8}"
+      LLAMA_ARG_N_GPU_LAYERS: "${LLM_N_GPU_LAYERS:-0}"
+      LLAMA_ARG_JINJA: "1"
+    depends_on:
+      model-downloader:
+        condition: service_completed_successfully
+    networks:
+      - beast-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
   model-downloader:
     image: python:3.11-slim
     container_name: beast-model-downloader
@@ -180,6 +220,13 @@ services:
       DOCKER_MODEL_RUNNER_ENABLED: ${DOCKER_MODEL_RUNNER_ENABLED:-false}
       DOCKER_MODEL_RUNNER_BASE_URL: ${DOCKER_MODEL_RUNNER_BASE_URL:-http://model-runner.docker.internal/engines/v1}
       AGENT_SESSION_ENCRYPTION_KEY: ${AGENT_SESSION_ENCRYPTION_KEY:-}
+      # Override .env localhost URL — containers reach llama-cpp via service name
+      LLM_BASE_URL: http://llama-cpp:8080/v1
+      ANALYTICS_MODEL_BASE_URL: http://llama-cpp:8080/v1
+      CHAT_MODEL_BASE_URL: http://llama-cpp:8080/v1
+      CLASSIFY_MODEL_BASE_URL: http://llama-cpp:8080/v1
+      MAIN_MODEL_BASE_URL: http://llama-cpp:8080/v1
+      SQL_MODEL_BASE_URL: http://llama-cpp:8080/v1
     ports:
       - "${API_PORT:-8000}:${API_PORT:-8000}"
     volumes:
@@ -197,6 +244,8 @@ services:
       #   condition: service_started
       model-downloader:
         condition: service_completed_successfully
+      llama-cpp:
+        condition: service_healthy
     networks:
       - beast-network
     command: uvicorn src.app.main:app --host ${API_HOST:-0.0.0.0} --port ${API_PORT:-8000} --reload
@@ -218,6 +267,12 @@ services:
       DOCKER_MODEL_RUNNER_ENABLED: ${DOCKER_MODEL_RUNNER_ENABLED:-false}
       DOCKER_MODEL_RUNNER_BASE_URL: ${DOCKER_MODEL_RUNNER_BASE_URL:-http://model-runner.docker.internal/engines/v1}
       AGENT_SESSION_ENCRYPTION_KEY: ${AGENT_SESSION_ENCRYPTION_KEY:-}
+      LLM_BASE_URL: http://llama-cpp:8080/v1
+      ANALYTICS_MODEL_BASE_URL: http://llama-cpp:8080/v1
+      CHAT_MODEL_BASE_URL: http://llama-cpp:8080/v1
+      CLASSIFY_MODEL_BASE_URL: http://llama-cpp:8080/v1
+      MAIN_MODEL_BASE_URL: http://llama-cpp:8080/v1
+      SQL_MODEL_BASE_URL: http://llama-cpp:8080/v1
     volumes:
       - ./backend:/app
       - ./backend/watched_documents:/app/watched_documents
@@ -233,6 +288,8 @@ services:
       #   condition: service_started
       model-downloader:
         condition: service_completed_successfully
+      llama-cpp:
+        condition: service_healthy
     networks:
       - beast-network
     healthcheck:

@@ -16,6 +16,7 @@ export default function OperationRenderer({ operation, data, metadata }: Operati
     case 'suggest_tags_for_article_body':
       return <TagSuggestionsView data={data} metadata={metadata} />
     
+    case 'analytics':
     case 'query_documents':
       return <QueryDocumentsView data={data} metadata={metadata} />
     

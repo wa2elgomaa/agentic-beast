@@ -237,7 +237,11 @@ function DetailModal({ run, childRuns, isOpen, onClose, onCancelRun, cancelingRu
                 </span>
               </h3>
               <div className="space-y-2">
-                {childRuns.map((subtask) => {
+                {[...childRuns].sort((a, b) => {
+                  const aDate = a.run_metadata?.email_sent_at ?? ''
+                  const bDate = b.run_metadata?.email_sent_at ?? ''
+                  return aDate < bDate ? -1 : aDate > bDate ? 1 : 0
+                }).map((subtask) => {
                   const successRate = getSubtaskSuccessRate(subtask)
                   const execTime = getSubtaskExecutionTime(subtask)
                   const isExpanded = expandedSubtasks[subtask.id]
