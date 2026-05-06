@@ -327,8 +327,8 @@ services:
         condition: service_started
       # ollama:
       #   condition: service_started
-      model-downloader:
-        condition: service_completed_successfully
+      # model-downloader:
+      #   condition: service_completed_successfully
     networks:
       - beast-network
     healthcheck:
