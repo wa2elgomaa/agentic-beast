@@ -1,0 +1,51 @@
+# =============================================================
+# docker-compose.staging.yml — Staging overrides
+# =============================================================
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.staging.yml \
+#     --env-file .env.staging build
+#
+#   docker compose -f docker-compose.yml -f docker-compose.staging.yml \
+#     --env-file .env.staging up -d
+#
+# This file is NOT automatically loaded (no "override" in the name).
+# The docker-compose.override.yml (dev hot-reload) is skipped by
+# explicitly passing -f docker-compose.yml.
+# =============================================================
+
+services:
+  # ── Backend app ─────────────────────────────────────────────
+  # Append .env.staging so staging values win over dev defaults,
+  # and drop --reload for production-grade uvicorn.
+  app:
+    env_file:
+      - ./.env.staging
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2
+
+  # ── Celery worker ────────────────────────────────────────────
+  celery-worker:
+    env_file:
+      - ./.env.staging
+
+  # ── Celery beat ──────────────────────────────────────────────
+  celery-beat:
+    env_file:
+      - ./.env.staging
+
+  # ── Frontend ─────────────────────────────────────────────────
+  # Pass NEXT_PUBLIC_* vars as build args so they are baked into
+  # the static Next.js bundle at build time (required by Next.js).
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+        NEXT_PUBLIC_API_PREFIX: ${NEXT_PUBLIC_API_PREFIX:-/api/v1}
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+      NEXT_PUBLIC_API_PREFIX: ${NEXT_PUBLIC_API_PREFIX:-/api/v1}
+    # Fix port mapping: container always listens on 3000;
+    # only the host-side port is configurable via FRONTEND_PORT.
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"

@@ -12,6 +12,13 @@ RUN npm ci || npm install
 # Copy application code
 COPY . .
 
+# Accept NEXT_PUBLIC_* vars as build args so they are baked into
+# the static bundle at build time (Next.js requires this for SSG pages).
+ARG NEXT_PUBLIC_API_URL
+ARG NEXT_PUBLIC_API_PREFIX
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+ENV NEXT_PUBLIC_API_PREFIX=$NEXT_PUBLIC_API_PREFIX
+
 # Build the Next.js app
 RUN npm run build
 
