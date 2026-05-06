@@ -3,6 +3,7 @@ cd backend
 docker-compose up -d  # PostgreSQL, Redis, MongoDB, Prometheus, Grafana
 
 # Run migrations
+alembic stamp head
 alembic upgrade head
 docker compose exec app alembic current
 

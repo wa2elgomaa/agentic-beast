@@ -63,7 +63,7 @@ async def run_agents():
 
 
 def main():
-    load_env("backend/.env")
+    load_env(".env")
     setup_path()
     asyncio.run(run_agents())
 
