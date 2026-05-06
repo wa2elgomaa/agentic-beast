@@ -344,7 +344,7 @@ services:
     ports:
       - "${FRONTEND_PORT:-3000}:${FRONTEND_PORT:-3000}"
     environment:
-      NEXT_PUBLIC_API_URL: http://localhost:${API_PORT:-8000}
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
     depends_on:
       - app
     networks:

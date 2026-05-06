@@ -4,7 +4,7 @@ const normalizePrefix = (value: string) => {
 }
 
 export const APIPrefix = normalizePrefix(process.env.NEXT_PUBLIC_API_PREFIX || '/api/v1')
-export const APIBaseURL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000').replace(/\/$/, '')
+export const APIBaseURL = process.env.NEXT_PUBLIC_API_URL
 
 export const LOGIN_URL = `${APIPrefix}/users/login`
 export const FORGET_PASSWORD_URL = `${APIPrefix}/auth/forgot-password`
