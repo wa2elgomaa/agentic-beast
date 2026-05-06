@@ -34,8 +34,8 @@ def load_env(path: str) -> None:
 
 
 def main():
-    # Load backend/.env into the environment (without overriding already set vars)
-    load_env("backend/.env")
+    # Load root .env into the environment (without overriding already set vars)
+    load_env(".env")
 
     # Ensure backend/src is on PYTHONPATH
     repo_root = Path(__file__).resolve().parents[2]

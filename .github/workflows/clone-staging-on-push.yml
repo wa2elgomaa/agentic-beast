@@ -34,8 +34,7 @@ jobs:
           docker compose down --remove-orphans || true
 
           echo "==> Copying .env files..."
-          cp -apf /home/broadcast/beast/agentic-beast/backend/.env backend/.env
-          cp -apf /home/broadcast/beast/agentic-beast/backend/.env ./.env
+          cp -apf /home/broadcast/beast/agentic-beast/.env ./.env
 
           echo "==> Verifying key vars are loaded:"
           grep -E "POSTGRES_DB|ENVIRONMENT" .env || echo "⚠️  vars not found in .env — check source file"

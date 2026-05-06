@@ -209,7 +209,7 @@ services:
       dockerfile: Dockerfile
     container_name: beast-app
     env_file:
-      - ./backend/.env
+      - ./.env
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       REDIS_URL: redis://:${REDIS_PASSWORD:-beastredis}@redis:6379/0
@@ -256,14 +256,14 @@ services:
       dockerfile: Dockerfile
     container_name: beast-celery-worker
     env_file:
-      - ./backend/.env
+      - ./.env
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-beast}:${POSTGRES_PASSWORD:-beast}@postgres:5432/${POSTGRES_DB:-beast}
       REDIS_URL: redis://:${REDIS_PASSWORD:-beastredis}@redis:6379/0
       CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-beastredis}@redis:6379/1
       CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-beastredis}@redis:6379/2
-      MONGODB_URI: mongodb://${MONGO_INITDB_ROOT_USERNAME}:${MONGO_INITDB_ROOT_PASSWORD}@mongodb:27017/articles_db
-      ENVIRONMENT: ${ENVIRONMENT}
+      MONGODB_URI: mongodb://${MONGO_INITDB_ROOT_USERNAME:-beast}:${MONGO_INITDB_ROOT_PASSWORD:-beast}@mongodb:27017/articles_db
+      ENVIRONMENT: ${ENVIRONMENT:-development}
       DOCKER_MODEL_RUNNER_ENABLED: ${DOCKER_MODEL_RUNNER_ENABLED:-false}
       DOCKER_MODEL_RUNNER_BASE_URL: ${DOCKER_MODEL_RUNNER_BASE_URL:-http://model-runner.docker.internal/engines/v1}
       AGENT_SESSION_ENCRYPTION_KEY: ${AGENT_SESSION_ENCRYPTION_KEY:-}
@@ -303,14 +303,14 @@ services:
       dockerfile: Dockerfile
     container_name: beast-celery-beat
     env_file:
-      - ./backend/.env
+      - ./.env
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-beast}:${POSTGRES_PASSWORD:-beast}@postgres:5432/${POSTGRES_DB:-beast}
       REDIS_URL: redis://:${REDIS_PASSWORD:-beastredis}@redis:6379/0
       CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-beastredis}@redis:6379/1
       CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-beastredis}@redis:6379/2
-      MONGODB_URI: mongodb://${MONGO_INITDB_ROOT_USERNAME}:${MONGO_INITDB_ROOT_PASSWORD}@mongodb:27017/articles_db
-      ENVIRONMENT: ${ENVIRONMENT}
+      MONGODB_URI: mongodb://${MONGO_INITDB_ROOT_USERNAME:-beast}:${MONGO_INITDB_ROOT_PASSWORD:-beast}@mongodb:27017/articles_db
+      ENVIRONMENT: ${ENVIRONMENT:-development}
       DOCKER_MODEL_RUNNER_ENABLED: ${DOCKER_MODEL_RUNNER_ENABLED:-false}
       DOCKER_MODEL_RUNNER_BASE_URL: ${DOCKER_MODEL_RUNNER_BASE_URL:-http://model-runner.docker.internal/engines/v1}
       AGENT_SESSION_ENCRYPTION_KEY: ${AGENT_SESSION_ENCRYPTION_KEY:-}

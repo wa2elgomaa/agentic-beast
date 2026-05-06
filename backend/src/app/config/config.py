@@ -28,7 +28,7 @@ except Exception:
     HAS_PYYAML = False
 
 
-BASE_DIR = Path(__file__).resolve().parents[3]
+BASE_DIR = Path(__file__).resolve().parents[4]
 ENV_FILE = BASE_DIR / ".env"
 
 # Setup logging
